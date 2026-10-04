@@ -5,6 +5,10 @@
 #
 # With publish_results the workflow may only use approved actions and must
 # not set top-level write permissions; keep it minimal.
+#
+# Scorecard cannot read a private repository with the workflow token, so
+# the job runs only when the repository variable SCORECARD is "true": set
+# it once the repository is public.
 name: scorecard
 
 on:
@@ -24,6 +28,7 @@ concurrency:
 jobs:
   analysis:
     name: scorecard
+    if: ${{ vars.SCORECARD == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

@@ -18,6 +18,13 @@
 # Runs on pushes to main, on every PR, weekly (new advisories against
 # unchanged code), and on demand. SARIF uploads are skipped for PRs from
 # forks, whose token cannot write security events.
+#
+# Code scanning (SARIF uploads, CodeQL) and dependency review need GitHub
+# Advanced Security on a private repository; on a public one they are
+# free. They run only when the repository variable ADVANCED_SECURITY is
+# "true" (Settings > Secrets and variables > Actions > Variables). Without
+# it every scanner still runs and still fails the job on findings; only
+# the uploads, CodeQL and dependency review are skipped.
 name: security
 
 on:
@@ -36,12 +43,15 @@ concurrency:
 
 env:
   GOTOOLCHAIN: auto
-  # True when this run may upload SARIF: not a PR from a fork.
-  CAN_UPLOAD: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+  # True when this run may upload SARIF: code scanning is available and the
+  # run is not a PR from a fork.
+  CAN_UPLOAD: ${{ vars.ADVANCED_SECURITY == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
 
 jobs:
   codeql:
     name: codeql
+    # CodeQL results exist only in code scanning.
+    if: ${{ vars.ADVANCED_SECURITY == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -113,6 +123,7 @@ jobs:
       security-events: write # upload SARIF to code scanning
     uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@a345acffa64b0eaede81a3d9aae6141214d9c8fc # v2.6.0
     with:
+      upload-sarif: ${{ vars.ADVANCED_SECURITY == 'true' }}
       scan-args: |-
         --recursive
         ./
@@ -126,7 +137,7 @@ jobs:
       security-events: write # upload SARIF to code scanning
     uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@a345acffa64b0eaede81a3d9aae6141214d9c8fc # v2.6.0
     with:
-      upload-sarif: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+      upload-sarif: ${{ vars.ADVANCED_SECURITY == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
       scan-args: |-
         --recursive
         ./
@@ -378,7 +389,7 @@ jobs:
 
   dependency-review:
     name: dependency review
-    if: ${{ github.event_name == 'pull_request' }}
+    if: ${{ github.event_name == 'pull_request' && vars.ADVANCED_SECURITY == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -404,7 +415,7 @@ jobs:
     permissions: {}
     steps:
       # A job skipped by its event filter (the PR-only and non-PR variants)
-      # counts as passing.
+      # or by ADVANCED_SECURITY being unset counts as passing.
       - name: Check every job passed
         env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
