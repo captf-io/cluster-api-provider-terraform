@@ -36,7 +36,10 @@ func ptr[T any](v T) *T { return &v }
 // equal value.
 func TestCommonTypesJSONRoundTrip(t *testing.T) {
 	t.Parallel()
-	start := metav1.NewTime(metav1.Now().Rfc3339Copy().Time)
+	// metav1.Time unmarshals into time.Local; Rfc3339Copy parses into UTC
+	// when the host zone is UTC (as on CI runners), and reflect.DeepEqual
+	// compares the *time.Location, so pin the expected value to Local too.
+	start := metav1.NewTime(metav1.Now().Rfc3339Copy().Local())
 	tests := []struct {
 		name string
 		in   any
