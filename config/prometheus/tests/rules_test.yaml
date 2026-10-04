@@ -1,0 +1,207 @@
+# promtool unit tests for config/prometheus/rules.yaml (make promtool-test;
+# the target extracts the PrometheusRule's spec to rules.yaml next to this
+# file). Not a kustomize resource.
+rule_files:
+- rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+# CAPTFJobFailing: a counter increase with no `for`. Deadline-exceeded Jobs
+# count as failures; succeeded and blocked (awaiting approval) ones never do.
+- interval: 5m
+  input_series:
+  - series: 'captf_jobs_total{kind="TerraformMachine",op="apply",result="deadline"}'
+    values: '0 1 2 3 4'
+  - series: 'captf_jobs_total{kind="TerraformCluster",op="apply",result="succeeded"}'
+    values: '0 5 10 15 20'
+  - series: 'captf_jobs_total{kind="TerraformCluster",op="apply",result="blocked"}'
+    values: '0 5 10 15 20'
+  # A changed approved plan (applyPolicy Manual) awaits a new approval.
+  - series: 'captf_jobs_total{kind="TerraformCluster",op="apply",result="plan_changed"}'
+    values: '0 5 10 15 20'
+  # Interrupted (a drain or eviction) is not a module failure.
+  - series: 'captf_jobs_total{kind="TerraformCluster",op="drift",result="interrupted"}'
+    values: '0 5 10 15 20'
+  alert_rule_test:
+  - eval_time: 20m
+    alertname: CAPTFJobFailing
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+        kind: TerraformMachine
+        op: apply
+      exp_annotations:
+        summary: TerraformMachine apply Jobs keep failing
+        description: >-
+          More than two apply Jobs for TerraformMachine objects failed or hit their deadline
+          in 30 minutes. Find the objects with ApplyJobSucceeded=False or DriftJobSucceeded=False and read
+          status.lastRun and the Job logs.
+        runbook_url: https://captf.io/docs/operator-guide/observability.html#captfjobfailing
+
+# CAPTFClusterDrift: a gauge with a one-hour `for`. Pending at 59m, firing
+# after the hour; machines never fire it.
+- interval: 1m
+  input_series:
+  - series: 'captf_drift_detected{kind="TerraformCluster",namespace="team-a",name="c1"}'
+    values: '1x90'
+  - series: 'captf_drift_detected{kind="TerraformMachine",namespace="team-a",name="m1"}'
+    values: '1x90'
+  alert_rule_test:
+  - eval_time: 59m
+    alertname: CAPTFClusterDrift
+    exp_alerts: []
+  - eval_time: 61m
+    alertname: CAPTFClusterDrift
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+        kind: TerraformCluster
+        namespace: team-a
+        name: c1
+      exp_annotations:
+        summary: TerraformCluster team-a/c1 has drifted
+        description: >-
+          The last drift check found changes for an hour. With drift.action Report this waits for an
+          operator; with Remediate the remediation apply keeps failing (see ApplyJobSucceeded).
+        runbook_url: https://captf.io/docs/operator-guide/observability.html#captfclusterdrift
+
+# CAPTFJobSlow: only Jobs that ran their course count. Slow succeeded
+# machine applies fire; equally long deadline Jobs of clusters do not.
+- interval: 1m
+  input_series:
+  - series: 'captf_job_duration_seconds_bucket{kind="TerraformMachine",op="apply",result="succeeded",le="1800"}'
+    values: '0x90'
+  - series: 'captf_job_duration_seconds_bucket{kind="TerraformMachine",op="apply",result="succeeded",le="3600"}'
+    values: '0+1x90'
+  - series: 'captf_job_duration_seconds_bucket{kind="TerraformMachine",op="apply",result="succeeded",le="+Inf"}'
+    values: '0+1x90'
+  - series: 'captf_job_duration_seconds_bucket{kind="TerraformCluster",op="apply",result="deadline",le="1800"}'
+    values: '0x90'
+  - series: 'captf_job_duration_seconds_bucket{kind="TerraformCluster",op="apply",result="deadline",le="3600"}'
+    values: '0+1x90'
+  - series: 'captf_job_duration_seconds_bucket{kind="TerraformCluster",op="apply",result="deadline",le="+Inf"}'
+    values: '0+1x90'
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: CAPTFJobSlow
+    exp_alerts:
+    - exp_labels:
+        severity: info
+        kind: TerraformMachine
+        op: apply
+      exp_annotations:
+        summary: TerraformMachine apply Jobs are slow
+        description: The 90th percentile of apply Job duration has been above 30 minutes for 30 minutes.
+        runbook_url: https://captf.io/docs/operator-guide/observability.html#captfjobslow
+
+# CAPTFJobQueueSlow: every machine apply waits 5-10 minutes to start, so
+# p90 is above 300s; cluster drift Jobs start within 5 minutes.
+- interval: 1m
+  input_series:
+  - series: 'captf_job_queue_seconds_bucket{kind="TerraformMachine",op="apply",le="300"}'
+    values: '0x30'
+  - series: 'captf_job_queue_seconds_bucket{kind="TerraformMachine",op="apply",le="600"}'
+    values: '0+10x30'
+  - series: 'captf_job_queue_seconds_bucket{kind="TerraformMachine",op="apply",le="+Inf"}'
+    values: '0+10x30'
+  - series: 'captf_job_queue_seconds_bucket{kind="TerraformCluster",op="drift",le="300"}'
+    values: '0+10x30'
+  - series: 'captf_job_queue_seconds_bucket{kind="TerraformCluster",op="drift",le="600"}'
+    values: '0+10x30'
+  - series: 'captf_job_queue_seconds_bucket{kind="TerraformCluster",op="drift",le="+Inf"}'
+    values: '0+10x30'
+  alert_rule_test:
+  - eval_time: 5m
+    alertname: CAPTFJobQueueSlow
+    exp_alerts: []
+  - eval_time: 20m
+    alertname: CAPTFJobQueueSlow
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+        kind: TerraformMachine
+        op: apply
+      exp_annotations:
+        summary: TerraformMachine apply Jobs wait long to start
+        description: >-
+          The 90th percentile of the time apply Jobs for TerraformMachine objects take from
+          creation to running the module has been above 5 minutes. Look for Pending runner pods: node
+          capacity, quota, slow or failing image pulls.
+        runbook_url: https://captf.io/docs/operator-guide/observability.html#captfjobqueueslow
+
+# CAPTFStateNearSecretLimit and CAPTFInputsNearLimit: per-object gauges
+# with a 15-minute `for`; objects under the thresholds never fire.
+- interval: 1m
+  input_series:
+  - series: 'captf_state_bytes{kind="TerraformCluster",namespace="team-a",name="c1"}'
+    values: '943718x30'
+  - series: 'captf_state_bytes{kind="TerraformMachine",namespace="team-a",name="m1"}'
+    values: '500000x30'
+  - series: 'captf_inputs_bytes{kind="TerraformMachine",namespace="team-a",name="m1"}'
+    values: '950000x30'
+  - series: 'captf_inputs_bytes{kind="TerraformMachine",namespace="team-a",name="m2"}'
+    values: '899999x30'
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: CAPTFStateNearSecretLimit
+    exp_alerts: []
+  - eval_time: 20m
+    alertname: CAPTFStateNearSecretLimit
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+        kind: TerraformCluster
+        namespace: team-a
+        name: c1
+      exp_annotations:
+        summary: TerraformCluster team-a/c1 state is near the Secret size limit
+        description: >-
+          The compressed state is 921.6kiB, above 900 KiB. An OpenTofu state Secret
+          cannot grow past 1 MiB, and the next apply that crosses it fails to save state.
+        runbook_url: https://captf.io/docs/operator-guide/observability.html#captfstatenearsecretlimit
+  - eval_time: 20m
+    alertname: CAPTFInputsNearLimit
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+        kind: TerraformMachine
+        namespace: team-a
+        name: m1
+      exp_annotations:
+        summary: TerraformMachine team-a/m1 inputs are near the size limit
+        description: >-
+          The rendered main.tf.json and terraform.tfvars.json are 950k bytes. Above
+          1000000 no Job starts (ApplyJobSucceeded InputsTooLarge).
+        runbook_url: https://captf.io/docs/operator-guide/observability.html#captfinputsnearlimit
+
+# CAPTFNoRecentSuccess: promtool's clock starts at 0, so a last success at
+# 0 is 6h old at 6h. The drift check stopped succeeding; the refresh keeps
+# succeeding (its value follows the clock); apply is never alerted on.
+- interval: 1m
+  input_series:
+  - series: 'captf_last_success_timestamp_seconds{kind="TerraformMachine",namespace="team-a",name="m1",op="drift"}'
+    values: '0x500'
+  - series: 'captf_last_success_timestamp_seconds{kind="TerraformMachine",namespace="team-a",name="m1",op="refresh"}'
+    values: '0+60x500'
+  - series: 'captf_last_success_timestamp_seconds{kind="TerraformMachine",namespace="team-a",name="m1",op="apply"}'
+    values: '0x500'
+  alert_rule_test:
+  - eval_time: 6h20m
+    alertname: CAPTFNoRecentSuccess
+    exp_alerts: []
+  - eval_time: 6h40m
+    alertname: CAPTFNoRecentSuccess
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+        kind: TerraformMachine
+        namespace: team-a
+        name: m1
+        op: drift
+      exp_annotations:
+        summary: TerraformMachine team-a/m1 has had no successful drift for 6 hours
+        description: >-
+          Its drift Jobs keep failing or never start, so drift and health go unobserved. See
+          DriftJobSucceeded and status.lastRun.
+        runbook_url: https://captf.io/docs/operator-guide/observability.html#captfnorecentsuccess

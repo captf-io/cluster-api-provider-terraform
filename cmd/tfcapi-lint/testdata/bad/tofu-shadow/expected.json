@@ -1,0 +1,19 @@
+{
+  "module": "testdata/bad/tofu-shadow",
+  "contract": "v1alpha1",
+  "role": "machine",
+  "findings": [
+    {
+      "id": "module/tofu-shadow",
+      "severity": "warning",
+      "file": "main.tf",
+      "line": 25,
+      "message": "output.interruptible is declared for Terraform, but a .tofu file shadows it and OpenTofu does not see it; the contract checks read Terraform's files"
+    }
+  ],
+  "summary": {
+    "error": 0,
+    "warning": 1,
+    "info": 0
+  }
+}

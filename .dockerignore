@@ -1,0 +1,15 @@
+# Allow-list: only what the manager/runner build needs.
+*
+!go.work
+!go.mod
+!go.sum
+!cmd/
+!api/
+# go.work lists ./test: the build needs its go.mod and go.sum, not its code.
+!test/go.mod
+!test/go.sum
+!internal/
+!hack/boilerplate.go.txt
+!hack/verify-static.sh
+# Never ship tests into the build context.
+**/*_test.go

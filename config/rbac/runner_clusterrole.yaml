@@ -1,0 +1,56 @@
+# Static permissions of the per-namespace runner ServiceAccount, derived from
+# the Terraform/OpenTofu kubernetes state backend. The manager only creates
+# namespaced RoleBindings to it, using `bind` restricted to this name.
+#
+# The name is `runner` here; namePrefix in config/default makes it
+# `captf-runner`, the resourceName in the manager's bind rule.
+#
+# The verbs are the minimum the backend uses (Terraform v1.16.4 and OpenTofu
+# v1.12.6, internal/backend/remote-state/kubernetes):
+# - secrets get, create, update: read and write the state;
+# - secrets list: Terraform lists its state chunks by label on every read
+#   and write, and both list workspaces during init;
+# - secrets delete: Terraform deletes surplus chunks when the state shrinks.
+#   This makes the runner, and so any module image, able to create,
+#   overwrite and delete every Secret in the namespace
+#   (https://captf.io/docs/concepts/security-model.html);
+#   RBAC cannot scope it by label, and the chunk names are dynamic;
+# - leases get, create, update: lock, unlock and force-unlock (unlock and
+#   force-unlock update the Lease). The backends delete the lock Lease only
+#   when a workspace is deleted, which the runner never does, so `delete` is
+#   not granted; the manager deletes the Lease when the object is gone.
+#
+# Besides the backend, the runner itself reports its progress:
+# - events.k8s.io events create: RunStarted, StepStarted, ..., RunFinished on
+#   the object that owns the Job (https://captf.io/docs/operator-guide/observability.html "Events"). Only
+#   create: the runner emits no event series, so it never patches, and never
+#   reads Events. Unused with the manager's --runner-events=false.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: runner
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+  - list
+  - create
+  - update
+  - delete
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - get
+  - create
+  - update
+- apiGroups:
+  - events.k8s.io
+  resources:
+  - events
+  verbs:
+  - create

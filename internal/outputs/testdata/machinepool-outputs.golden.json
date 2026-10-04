@@ -1,0 +1,26 @@
+{
+  "provider_id": "libvirt-group:///pool-1",
+  "provider_id_list": [
+    "libvirt:///vm-1",
+    "libvirt:///vm-2"
+  ],
+  "replicas": 2,
+  "instances": [
+    {
+      "provider_id": "libvirt:///vm-1",
+      "state": "running"
+    },
+    {
+      "provider_id": "libvirt:///vm-2",
+      "instance_id": "i-2",
+      "failure_domain": "zone-a",
+      "state": "running"
+    }
+  ],
+  "health": {
+    "state": "running",
+    "healthy": true,
+    "message": null,
+    "reasons": []
+  }
+}

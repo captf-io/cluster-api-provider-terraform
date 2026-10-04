@@ -1,0 +1,19 @@
+{
+  "module": "testdata/bad/has-backend",
+  "contract": "v1alpha1",
+  "role": "machine",
+  "findings": [
+    {
+      "id": "module/backend",
+      "severity": "error",
+      "file": "backend.tf",
+      "line": 2,
+      "message": "terraform { backend } in the module: the generated root owns the backend, a module must not declare one"
+    }
+  ],
+  "summary": {
+    "error": 1,
+    "warning": 0,
+    "info": 0
+  }
+}

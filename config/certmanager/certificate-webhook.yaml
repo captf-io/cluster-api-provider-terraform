@@ -1,0 +1,20 @@
+# Self-signed serving certificate for the webhook Service.
+# SERVICE_NAME and SERVICE_NAMESPACE are substituted by the replacements in
+# config/default/kustomization.yaml.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  labels:
+    app.kubernetes.io/name: cluster-api-provider-terraform
+    app.kubernetes.io/managed-by: kustomize
+  name: serving-cert
+  namespace: system
+spec:
+  dnsNames:
+  - SERVICE_NAME.SERVICE_NAMESPACE.svc
+  - SERVICE_NAME.SERVICE_NAMESPACE.svc.cluster.local
+  issuerRef:
+    kind: Issuer
+    name: selfsigned-issuer
+  # Not prefixed: the Secret is created by cert-manager, not kustomize.
+  secretName: captf-webhook-service-cert

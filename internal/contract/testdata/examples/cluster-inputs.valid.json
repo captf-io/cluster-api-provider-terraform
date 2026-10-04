@@ -1,0 +1,34 @@
+{
+  "captf_contract": "v1alpha1",
+  "captf_cluster": {
+    "name": "demo",
+    "namespace": "default"
+  },
+  "captf_object": {
+    "kind": "TerraformCluster",
+    "name": "demo",
+    "namespace": "default"
+  },
+  "captf_cluster_outputs": null,
+  "captf_tags": {
+    "captf.io/cluster": "demo",
+    "captf.io/namespace": "default",
+    "captf.io/kind": "TerraformCluster",
+    "captf.io/name": "demo",
+    "captf.io/managed-by": "captf",
+    "captf.io/template": ""
+  },
+  "control_plane_endpoint": null,
+  "kubernetes_version": null,
+  "control_plane_initialized": false,
+  "cluster_network": {
+    "pods": [
+      "192.168.0.0/16"
+    ],
+    "services": [
+      "10.128.0.0/12"
+    ],
+    "service_domain": "cluster.local",
+    "api_server_port": 6443
+  }
+}

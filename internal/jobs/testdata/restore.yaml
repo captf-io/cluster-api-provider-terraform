@@ -1,0 +1,158 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  annotations:
+    captf.io/inputs-hash: h1:abc
+    captf.io/restore-serial: "7"
+  labels:
+    captf.infrastructure.cluster.x-k8s.io/attempt: "1"
+    captf.infrastructure.cluster.x-k8s.io/op: restore
+    captf.infrastructure.cluster.x-k8s.io/owner-kind: TerraformMachine
+    captf.infrastructure.cluster.x-k8s.io/owner-name: prod-md-0-abcde
+    captf.io/managed: "true"
+    cluster.x-k8s.io/cluster-name: prod
+  name: captf-m-prod-md-0-abcde-restore-a1-158d59
+  namespace: team-a
+spec:
+  activeDeadlineSeconds: 3600
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        captf.infrastructure.cluster.x-k8s.io/attempt: "1"
+        captf.infrastructure.cluster.x-k8s.io/op: restore
+        captf.infrastructure.cluster.x-k8s.io/owner-kind: TerraformMachine
+        captf.infrastructure.cluster.x-k8s.io/owner-name: prod-md-0-abcde
+        captf.io/managed: "true"
+        cluster.x-k8s.io/cluster-name: prod
+    spec:
+      containers:
+      - args:
+        - --op=restore
+        - --bin=/captf/runtime
+        - --image=ghcr.io/example/machine-module:v1.2.3
+        - --module=/captf/module
+        - --providers=/captf/providers
+        - --workdir=/captf/work
+        - --config=/captf/config
+        - --lock-timeout=300s
+        - --stop-timeout=570s
+        - --backend-config=secret_suffix=0123456789abcdef-m
+        - --backend-config=namespace=team-a
+        - --backend-config=in_cluster_config=true
+        - --backend-config=labels={"captf.infrastructure.cluster.x-k8s.io/owner-kind"="TerraformMachine","captf.infrastructure.cluster.x-k8s.io/owner-name"="prod-md-0-abcde","captf.io/managed"="true","cluster.x-k8s.io/cluster-name"="prod","clusterctl.cluster.x-k8s.io/move"=""}
+        - --restore-chunks=2
+        - --restore-resources=3
+        - --event-object=infrastructure.cluster.x-k8s.io/v1alpha1/TerraformMachine/team-a/prod-md-0-abcde/5f1d3c2a-0000-4000-8000-00000000000a
+        - --job-name=captf-m-prod-md-0-abcde-restore-a1-158d59
+        command:
+        - /captf/bin/runner
+        - run
+        env:
+        - name: TF_IN_AUTOMATION
+          value: "1"
+        - name: TF_INPUT
+          value: "0"
+        - name: HOME
+          value: /captf/work
+        - name: TMPDIR
+          value: /tmp
+        - name: KUBE_NAMESPACE
+          value: team-a
+        - name: CHECKPOINT_DISABLE
+          value: "1"
+        envFrom:
+        - secretRef:
+            name: captf-creds-aws
+        image: ghcr.io/example/machine-module:v1.2.3
+        imagePullPolicy: IfNotPresent
+        name: source
+        resources:
+          limits:
+            memory: 2Gi
+          requests:
+            cpu: 250m
+            memory: 512Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /captf/bin
+          name: runner
+          readOnly: true
+        - mountPath: /captf/work
+          name: work
+        - mountPath: /tmp
+          name: tmp
+        - mountPath: /captf/config
+          name: config
+          readOnly: true
+        - mountPath: /var/run/captf/credentials
+          name: creds
+          readOnly: true
+      imagePullSecrets:
+      - name: source-pull
+      initContainers:
+      - command:
+        - /runner
+        - copy
+        - /captf/bin/runner
+        image: ghcr.io/captf-io/cluster-api-provider-terraform:v0.1.0
+        name: runner
+        resources:
+          limits:
+            cpu: 100m
+            memory: 64Mi
+          requests:
+            cpu: 10m
+            memory: 32Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 65532
+        volumeMounts:
+        - mountPath: /captf/bin
+          name: runner
+      restartPolicy: Never
+      securityContext:
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: captf-runner
+      terminationGracePeriodSeconds: 600
+      volumes:
+      - emptyDir: {}
+        name: runner
+      - emptyDir: {}
+        name: work
+      - emptyDir: {}
+        name: tmp
+      - name: config
+        projected:
+          defaultMode: 288
+          sources:
+          - secret:
+              name: captf-run-captf-m-prod-md-0-abcde-restore-a1-158d59
+          - secret:
+              items:
+              - key: tfstate
+                path: restore/0
+              name: captf-state-backup-0123456789abcdef-m-7
+          - secret:
+              items:
+              - key: tfstate
+                path: restore/1
+              name: captf-state-backup-0123456789abcdef-m-7-part-1
+      - name: creds
+        secret:
+          defaultMode: 288
+          secretName: captf-creds-aws
+status: {}

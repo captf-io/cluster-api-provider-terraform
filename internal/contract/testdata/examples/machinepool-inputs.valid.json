@@ -1,0 +1,44 @@
+{
+  "captf_contract": "v1alpha1",
+  "captf_cluster": {
+    "name": "demo",
+    "namespace": "default"
+  },
+  "captf_object": {
+    "kind": "TerraformMachinePool",
+    "name": "demo-worker-mp0",
+    "namespace": "default"
+  },
+  "captf_cluster_outputs": {
+    "network_id": "net-1",
+    "subnet_ids": [
+      "subnet-1"
+    ]
+  },
+  "captf_tags": {
+    "captf.io/cluster": "demo",
+    "captf.io/namespace": "default",
+    "captf.io/kind": "TerraformMachinePool",
+    "captf.io/name": "demo-worker-mp0",
+    "captf.io/managed-by": "captf",
+    "captf.io/template": "demo-worker"
+  },
+  "machinepool_name": "demo-worker-mp0",
+  "replicas": 3,
+  "bootstrap_data": "I2Nsb3VkLWNvbmZpZwo=",
+  "bootstrap_format": "cloud-config",
+  "failure_domains": [],
+  "cluster_failure_domains": [
+    "zone-a",
+    "zone-b"
+  ],
+  "kubernetes_version": "v1.31.4+rke2r1",
+  "node_labels": {
+    "node.example.com/pool": "demo-worker"
+  },
+  "autoscaling": {
+    "enabled": false,
+    "min": 0,
+    "max": 0
+  }
+}

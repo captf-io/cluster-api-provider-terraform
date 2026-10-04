@@ -1,0 +1,31 @@
+# Trivy exceptions. Every entry names why the finding does not apply, and
+# vulnerability entries expire so they are looked at again. CI scans the
+# rendered infrastructure components (make manifests-release), the
+# Dockerfile and the manager image; the deliberately bad tfcapi-lint
+# fixtures and golden Job specs are skipped by directory in
+# .github/workflows/security.yaml.
+
+misconfigurations:
+  # Manage secrets. The manager reads and writes Terraform state, durable
+  # inputs, per-run inputs, credential mirrors and bootstrap data, all
+  # Secrets; the runner ClusterRole is bound per namespace (RoleBinding) so
+  # a Job's Terraform backend can write its state Secret. See
+  # https://captf.io/docs/concepts/security-model.html.
+  - id: KSV-0041
+    statement: CAPTF stores Terraform state and inputs in Secrets by design; the runner role is bound per namespace
+
+  # Manage workloads and pods. The manager creates and deletes the Jobs that
+  # run Terraform and reads their pods to find stale state locks.
+  - id: KSV-0048
+    statement: The manager runs Terraform as Jobs and inspects their pods
+
+  # Restrict images to trusted registries. Which registries are trusted is
+  # the installing cluster's policy (an admission controller), not the
+  # provider's manifests.
+  - id: KSV-0125
+    statement: Registry allowlisting is enforced by the installing cluster's admission policy
+
+  # No HEALTHCHECK. The manager is a distroless image with Kubernetes
+  # liveness and readiness probes.
+  - id: DS-0026
+    statement: Kubernetes probes replace Dockerfile HEALTHCHECK

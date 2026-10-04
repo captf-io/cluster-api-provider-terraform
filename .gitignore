@@ -1,0 +1,37 @@
+# Build output
+/bin/
+/dist/
+/out/
+
+# Pinned tools are downloaded by the Makefile; keep the directory itself.
+/hack/tools/bin/*
+!/hack/tools/bin/.gitkeep
+
+# Go
+*.test
+*.out
+coverage.*
+cover.out
+
+# Terraform / OpenTofu working files. Modules may ship .terraform.lock.hcl,
+# so it is not ignored.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+
+# Claude Code: personal and runtime files only. Shared project config
+# (.claude/settings.json, commands/, agents/, ...) stays trackable; .claude/
+# directories below the root are sandbox stubs.
+/.claude/settings.local.json
+/.claude/scheduled_tasks.lock
+/.claude/.cc-writes/
+/*/**/.claude/
+
+# Local tooling and editor state
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store

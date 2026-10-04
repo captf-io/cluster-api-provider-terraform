@@ -1,0 +1,238 @@
+# golangci-lint v2 configuration (golangci-lint v2.13.1, pinned in Makefile).
+# Derived from cluster-api v1.14.2 .golangci.yml, trimmed to CAPTF's linter
+# set. CAPI-specific aliases, depguard rules and path exclusions are
+# dropped; kube-api-linter lives in .golangci-kal.yml.
+version: "2"
+run:
+  timeout: 10m
+  go: "1.26"
+  build-tags:
+    - integration
+  allow-parallel-runners: true
+  # Paths in exclusion rules are relative to this file, whichever module
+  # directory `make lint` runs from.
+  relative-path-mode: cfg
+linters:
+  default: none
+  enable:
+    - depguard # dependency rules (contract stays stdlib-only; logging is klog)
+    - errcheck # unchecked errors
+    - forbidigo # logging goes through klog's contextual API only
+    - gocritic # bugs, performance, style
+    - govet # basically 'go vet'
+    - importas # consistent import aliases
+    - loggercheck # key/value pairs in logr and klog calls
+    - misspell # spelling
+    - nolintlint # badly formatted nolint directives
+    - revive # better version of golint
+    - staticcheck # staticcheck's rules
+    - unparam # unused function parameters
+    - unused # unused constants, variables, functions, types
+  # godot is deliberately off (CAPI enables it; this config trims it).
+  settings:
+    depguard:
+      rules:
+        # The contract, its hash and the renderer are shared with tfcapi-lint and
+        # must not pull in Kubernetes.
+        contract:
+          list-mode: strict
+          files:
+            - "**/internal/contract/**"
+            - "**/internal/hash/**"
+            - "**/internal/render/**"
+          allow:
+            - $gostd
+            - github.com/captf-io/cluster-api-provider-terraform/internal/contract
+        # All logging is k8s.io/klog/v2: klog.Logger is the logr interface,
+        # so nothing needs logr itself, controller-runtime's log helpers or
+        # the standard library loggers.
+        logging:
+          files:
+            - $all
+          deny:
+            - pkg: github.com/go-logr/logr
+              desc: use k8s.io/klog/v2 (klog.Logger, klog.FromContext, klog.NewContext)
+            - pkg: sigs.k8s.io/controller-runtime/pkg/log
+              desc: use klog.FromContext and klog.NewContext
+            - pkg: log/slog
+              desc: use k8s.io/klog/v2
+        # Metrics are declared with k8s.io/component-base/metrics (ALPHA
+        # stability), the way Kubernetes components declare their own,
+        # not raw client_golang. Only the bridge that
+        # merges controller-runtime's registry, CAPTF's own KubeRegistry and
+        # component-base's legacyregistry onto controller-runtime's metrics
+        # endpoint needs prometheus.Gatherers and the raw Collector/
+        # Registerer/Gatherer interfaces.
+        metrics:
+          files:
+            - $all
+            - "!**/internal/metrics/bridge.go"
+            - "!**/internal/metrics/bridge_test.go"
+          deny:
+            - pkg: github.com/prometheus/client_golang/prometheus
+              desc: declare metrics with k8s.io/component-base/metrics; only internal/metrics/bridge.go (and its test) merges gatherers with the raw prometheus API to serve controller-runtime's metrics endpoint
+    forbidigo:
+      forbid:
+        - pattern: ^ctrl\.(LoggerFrom|LoggerInto|Log)$
+          msg: use klog.FromContext, klog.NewContext or klog.Background
+        - pattern: ^klog\.(Info|Warning|Error|Fatal|Exit)(f|ln|S|Depth|Depthf)?$
+          msg: log through a contextual klog.Logger (klog.FromContext(ctx)), structured, never the global klog functions
+        - pattern: ^klog\.V$
+          msg: use logger.V(n) on a contextual klog.Logger
+    gocritic:
+      disabled-checks:
+        - appendAssign
+        - dupImport # https://github.com/go-critic/go-critic/issues/845
+        - evalOrder
+        - ifElseChain
+        - octalLiteral
+        - regexpSimplify
+        - sloppyReassign
+        - truncateCmp
+        - typeDefFirst
+        - unnamedResult
+        - unnecessaryDefer
+        - whyNoLint
+        - wrapperFunc
+        - rangeValCopy
+        - hugeParam
+      enabled-tags:
+        - diagnostic
+        - experimental
+        - performance
+    importas:
+      alias:
+        # Kubernetes
+        - pkg: k8s.io/api/core/v1
+          alias: corev1
+        - pkg: k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1
+          alias: apiextensionsv1
+        - pkg: k8s.io/apimachinery/pkg/apis/meta/v1
+          alias: metav1
+        - pkg: k8s.io/apimachinery/pkg/api/errors
+          alias: apierrors
+        - pkg: k8s.io/apimachinery/pkg/util/errors
+          alias: kerrors
+        - pkg: k8s.io/client-go/tools/cache
+          alias: toolscache
+        - pkg: k8s.io/component-base/logs/api/v1
+          alias: logsv1
+        - pkg: k8s.io/component-base/metrics
+          alias: cbmetrics
+        # Controller Runtime
+        - pkg: sigs.k8s.io/controller-runtime
+          alias: ctrl
+        - pkg: sigs.k8s.io/controller-runtime/pkg/cache
+          alias: ctrlcache
+        - pkg: sigs.k8s.io/controller-runtime/pkg/metrics
+          alias: ctrlmetrics
+        # Misc
+        - pkg: errors
+          alias: ""
+        # CAPI
+        - pkg: sigs.k8s.io/cluster-api/api/core/v1beta2
+          alias: clusterv1
+        - pkg: sigs.k8s.io/cluster-api/cmd/clusterctl/api/v1alpha3
+          alias: clusterctlv1
+        # CAPI utils
+        - pkg: sigs.k8s.io/cluster-api/util/conditions
+          alias: ""
+        - pkg: sigs.k8s.io/cluster-api/util/patch
+          alias: ""
+        - pkg: sigs.k8s.io/cluster-api/util/controller
+          alias: capicontrollerutil
+        # CAPTF
+        - pkg: github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1
+          alias: infrav1
+      no-unaliased: true
+    nolintlint:
+      require-specific: true
+      allow-unused: false
+    revive:
+      rules:
+        # The following rules are recommended https://github.com/mgechev/revive#recommended-configuration
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: exported
+        - name: if-return
+        - name: increment-decrement
+        - name: var-naming
+        - name: var-declaration
+        - name: package-comments
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: indent-error-flow
+        - name: errorf
+        - name: empty-block
+        - name: superfluous-else
+        - name: unused-parameter
+        - name: unreachable-code
+        - name: redefines-builtin-id
+        # Rules in addition to the recommended configuration above.
+        - name: bool-literal-in-expr
+        - name: constant-logical-expr
+  exclusions:
+    generated: strict
+    paths:
+      - zz_generated.*\.go$
+    rules:
+      # Controller-runtime wiring methods are self-describing.
+      - linters:
+          - revive
+        text: 'exported: exported method .*\.(Reconcile|SetupWithManager|SetupWebhookWithManager) should have comment or be unexported'
+      - linters:
+          - errcheck
+        text: Error return value of .((os\.)?std(out|err)\..*|.*Close|.*Flush|os\.Remove(All)?|.*print(f|ln)?|os\.(Un)?Setenv). is not checked
+      ## Exclude some packages or code to require comments, for example test code, or fake clients.
+      - linters:
+          - revive
+        text: exported (method|function|type|const) (.+) should have comment or be unexported
+        source: (func|type).*Fake.*
+      - linters:
+          - revive
+        path: fake_\.go
+        text: exported (method|function|type|const) (.+) should have comment or be unexported
+      ## Disable unparam "always receives" which might not be really useful when building libraries.
+      - linters:
+          - unparam
+        text: always receives
+      ## Append should be able to assign to a different var/slice.
+      - linters:
+          - gocritic
+        text: 'appendAssign: append result not assigned to the same slice'
+      ## We don't care about defer in for loops in test files.
+      - linters:
+          - gocritic
+        path: _test\.go
+        text: 'deferInLoop: Possible resource leak, ''defer'' is called in the ''for'' loop'
+      ## It's clearer to see that a field gets accessed or func gets called on the embedded objects
+      - linters:
+          - staticcheck
+        path: (.+)\.go$
+        text: 'QF1008: could remove embedded field'
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+formatters:
+  enable:
+    - gci # ensures imports are organized
+    - gofmt # warns about incorrect use of fmt functions
+    - goimports # import formatting
+  settings:
+    gci:
+      sections:
+        - standard # Standard section: captures all standard packages.
+        - default # Default section: contains all imports that could not be matched to another section type.
+        - prefix(github.com/captf-io/cluster-api-provider-terraform) # Custom section: our own packages.
+      custom-order: true
+  exclusions:
+    generated: strict
+    paths:
+      - zz_generated.*\.go$

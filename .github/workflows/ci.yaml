@@ -1,0 +1,232 @@
+# Continuous integration: unit tests with a per-package coverage gate, lint,
+# the offline verify checks, and cross-platform builds. Security scanning
+# lives in security.yaml; Scorecard in scorecard.yaml.
+#
+# Branch protection needs one required check: "ci / ok", which fails when
+# any job here fails or is cancelled.
+#
+# Checks NOT run here, and why:
+#   - docker-build with podman: the manager image is built (and scanned)
+#     with buildx in security.yaml.
+#   - The noop reference modules: they live in the noop-modules repository,
+#     which validates them.
+#   - e2e and any kind or cluster based tests: need live infrastructure, and
+#     are deferred until the software is near stable.
+#   - release, release-*: operator-only, publish artifacts.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Honor go.mod's toolchain directive (go1.26.x patch release) even if
+  # setup-go installed an older patch: the go command downloads it.
+  GOTOOLCHAIN: auto
+  GOFLAGS: -mod=readonly
+
+jobs:
+  test:
+    name: unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            api/go.sum
+            test/go.sum
+      # -race, -covermode=atomic; gotestsum's github-actions format folds
+      # each package's output and annotates failures on the PR diff.
+      - name: Test
+        run: make test-cover GOTESTSUM_FORMAT=github-actions
+      # Writes the per-package table to the job summary and fails on any
+      # package under its floor (hack/coverage-floors.txt).
+      - name: Coverage gate
+        run: make cover-check
+      - name: Upload coverage and JUnit reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-reports
+          path: |
+            bin/cover-*.out
+            bin/junit-*.xml
+          retention-days: 14
+          if-no-files-found: warn
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            api/go.sum
+            test/go.sum
+      # golangci-lint (.golangci.yml) in every module and on the test
+      # module's e2e-tagged code, and kube-api-linter on api/.
+      - name: Lint
+        run: make lint
+      - name: Vet
+        run: make vet
+
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      # Full history and tags: verify-metadata compares releaseSeries with
+      # the previous release tag.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            api/go.sum
+            test/go.sum
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      # verify-schemas needs jsonschema >= 4.18; verify-components,
+      # verify-metadata and promtool-* need PyYAML.
+      - name: Install Python dependencies
+        run: python3 -m pip install 'jsonschema>=4.18' PyYAML
+      # Pinned tool binaries (controller-gen, kustomize, clusterctl,
+      # promtool) are fetched into hack/tools/bin by the Makefile. -k runs
+      # every check and reports all failures, not just the first.
+      - name: Verify
+        run: >-
+          make -k verify-gen verify-godoc verify-components verify-templates
+          verify-schemas verify-modules verify-metadata verify-version
+          verify-local-repository check-licenses promtool-check promtool-test
+          verify-test-tiers
+
+  build:
+    name: build (${{ matrix.goos }}/${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            api/go.sum
+            test/go.sum
+      # The manager and runner ship in a distroless image and the runner is
+      # copied into module images, so both must be fully static.
+      - name: Build static manager and runner
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: make manager runner
+      - name: Build every binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: make build
+
+  release-snapshot:
+    name: tfcapi-lint release snapshot
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      # GoReleaser derives the snapshot version from tags.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            api/go.sum
+            test/go.sum
+      # Cross-compiles tfcapi-lint for every released platform (.goreleaser.yaml)
+      # and writes checksums; nothing is published.
+      - name: GoReleaser snapshot
+        run: make release-lint-snapshot
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tfcapi-lint-snapshot
+          path: dist/
+          retention-days: 7
+
+  ok:
+    name: ok
+    if: ${{ always() }}
+    needs: [test, lint, verify, build, release-snapshot]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Check every job passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "job results: ${RESULTS}"
+          for r in ${RESULTS}; do
+            if [[ "${r}" != "success" ]]; then
+              echo "::error::a required job finished with '${r}'"
+              exit 1
+            fi
+          done

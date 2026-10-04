@@ -1,0 +1,55 @@
+# ClusterClass flavor: a Cluster on the "noop" ClusterClass
+# (clusterclass-noop.yaml, applied to the namespace first). The images and
+# the identity are topology variables; the class patches them onto its
+# Terraform templates. Needs the ClusterTopology feature gate
+# (CLUSTER_TOPOLOGY=true at clusterctl init).
+#
+#   clusterctl generate cluster my-cluster --infrastructure terraform \
+#     --flavor clusterclass --target-namespace team-a | kubectl apply -f -
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: Cluster
+metadata:
+  name: "${CLUSTER_NAME}"
+spec:
+  clusterNetwork:
+    apiServerPort: 6443
+    pods:
+      cidrBlocks:
+      - "${POD_CIDR:=192.168.0.0/16}"
+    services:
+      cidrBlocks:
+      - "${SERVICE_CIDR:=10.128.0.0/12}"
+  topology:
+    classRef:
+      name: noop
+    version: "${KUBERNETES_VERSION}"
+    controlPlane:
+      replicas: ${CONTROL_PLANE_MACHINE_COUNT}
+      # The same overridable timeouts as cluster-template.yaml; the class
+      # carries the defaults.
+      healthCheck:
+        checks:
+          nodeStartupTimeoutSeconds: ${TERRAFORM_CP_NODE_STARTUP_TIMEOUT:=1800}
+          unhealthyMachineConditions:
+          - type: InfrastructureReady
+            status: "False"
+            timeoutSeconds: ${TERRAFORM_CP_UNHEALTHY_TIMEOUT:=3600}
+    workers:
+      machineDeployments:
+      - class: default-worker
+        name: md-0
+        replicas: ${WORKER_MACHINE_COUNT}
+        healthCheck:
+          checks:
+            nodeStartupTimeoutSeconds: ${TERRAFORM_NODE_STARTUP_TIMEOUT:=1200}
+            unhealthyMachineConditions:
+            - type: InfrastructureReady
+              status: "False"
+              timeoutSeconds: ${TERRAFORM_UNHEALTHY_TIMEOUT:=1800}
+    variables:
+    - name: identityName
+      value: "${TERRAFORM_IDENTITY_NAME}"
+    - name: clusterImage
+      value: "${TERRAFORM_CLUSTER_IMAGE}"
+    - name: machineImage
+      value: "${TERRAFORM_MACHINE_IMAGE}"

@@ -1,0 +1,58 @@
+# Area labels for actions/labeler (.github/workflows/labeler.yaml). A PR
+# gets every label whose globs match one of its changed files.
+
+area/api:
+  - changed-files:
+      - any-glob-to-any-file: ["api/**", "config/crd/**"]
+
+area/controllers:
+  - changed-files:
+      - any-glob-to-any-file: ["internal/controllers/**", "internal/conditions/**", "internal/ownership/**"]
+
+area/runner:
+  - changed-files:
+      - any-glob-to-any-file: ["cmd/runner/**", "internal/runner/**", "internal/render/**", "internal/outputs/**"]
+
+area/state:
+  - changed-files:
+      - any-glob-to-any-file: ["internal/state/**", "internal/inputs/**", "internal/runlease/**", "internal/locks/**", "internal/plankey/**"]
+
+area/jobs:
+  - changed-files:
+      - any-glob-to-any-file: ["internal/jobs/**"]
+
+area/identity:
+  - changed-files:
+      - any-glob-to-any-file: ["internal/identity/**", "internal/rbac/**"]
+
+area/webhooks:
+  - changed-files:
+      - any-glob-to-any-file: ["internal/webhooks/**", "config/webhook/**"]
+
+area/tfcapi-lint:
+  - changed-files:
+      - any-glob-to-any-file: ["cmd/tfcapi-lint/**", "internal/lint/**", "internal/imageinspect/**"]
+
+area/manager:
+  - changed-files:
+      - any-glob-to-any-file: ["cmd/manager/**", "internal/manager/**", "internal/metrics/**", "internal/feature/**"]
+
+area/deploy:
+  - changed-files:
+      - any-glob-to-any-file: ["config/**", "Dockerfile", "metadata.yaml"]
+
+area/templates:
+  - changed-files:
+      - any-glob-to-any-file: ["templates/**"]
+
+area/docs:
+  - changed-files:
+      - any-glob-to-any-file: ["hack/godoccheck/**", "README.md"]
+
+area/ci:
+  - changed-files:
+      - any-glob-to-any-file: [".github/**", "Makefile", "hack/**", ".golangci*.yml", ".goreleaser.yaml", ".gitleaks.toml", ".trivyignore.yaml", ".hadolint.yaml"]
+
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file: ["go.mod", "go.sum", "api/go.mod", "api/go.sum", "test/go.mod", "test/go.sum", "go.work", "go.work.sum"]

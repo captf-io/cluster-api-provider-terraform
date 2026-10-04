@@ -1,0 +1,9 @@
+# clusterctl provider metadata. releaseSeries is append-only: never remove a
+# series, or `clusterctl upgrade` from it breaks.
+# The contract must match the CRD label cluster.x-k8s.io/v1beta2.
+apiVersion: clusterctl.cluster.x-k8s.io/v1alpha3
+kind: Metadata
+releaseSeries:
+- major: 0
+  minor: 1
+  contract: v1beta2

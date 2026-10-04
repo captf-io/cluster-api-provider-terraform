@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://captf.io/schemas/v1alpha1/cluster-inputs.json",
+  "title": "CAPTF contract v1alpha1: cluster role inputs",
+  "description": "The rendered terraform.tfvars.json of a TerraformCluster apply (common.md, cluster.md). Module inputs are exactly the contract inputs: no other properties.",
+  "type": "object",
+  "properties": {
+    "captf_contract": { "$ref": "definitions.json#/$defs/captf_contract" },
+    "captf_cluster": { "$ref": "definitions.json#/$defs/captf_cluster" },
+    "captf_object": {
+      "$ref": "definitions.json#/$defs/captf_object",
+      "properties": { "kind": { "const": "TerraformCluster" } }
+    },
+    "captf_cluster_outputs": {
+      "description": "Not rendered for the cluster role (the key is absent); accepted as null for compatibility.",
+      "type": "null"
+    },
+    "captf_tags": {
+      "$ref": "definitions.json#/$defs/captf_tags",
+      "properties": { "captf.io/kind": { "const": "TerraformCluster" } }
+    },
+    "control_plane_endpoint": {
+      "description": "An endpoint the module does not own, or null (cluster.md).",
+      "anyOf": [{ "$ref": "definitions.json#/$defs/endpoint_input" }, { "type": "null" }]
+    },
+    "kubernetes_version": {
+      "description": "Cluster.spec.topology.version, or null without a ClusterClass topology.",
+      "anyOf": [{ "$ref": "definitions.json#/$defs/kubernetes_version" }, { "type": "null" }]
+    },
+    "control_plane_initialized": {
+      "description": "Cluster.status.initialization.controlPlaneInitialized, latched by the controller.",
+      "type": "boolean"
+    },
+    "cluster_network": {
+      "description": "Cluster.spec.clusterNetwork, or null when the Cluster sets none of it.",
+      "anyOf": [{ "$ref": "definitions.json#/$defs/cluster_network" }, { "type": "null" }]
+    }
+  },
+  "required": [
+    "captf_contract",
+    "captf_cluster",
+    "captf_object",
+    "captf_tags",
+    "control_plane_endpoint",
+    "kubernetes_version",
+    "control_plane_initialized",
+    "cluster_network"
+  ],
+  "additionalProperties": false
+}

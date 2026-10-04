@@ -1,0 +1,11 @@
+{
+  "module": "testdata/good/cluster",
+  "contract": "v1alpha1",
+  "role": "cluster",
+  "findings": [],
+  "summary": {
+    "error": 0,
+    "warning": 0,
+    "info": 0
+  }
+}

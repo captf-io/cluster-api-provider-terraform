@@ -1,0 +1,105 @@
+# The one Namespace of the provider; config/default renames it captf-system.
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    control-plane: controller-manager
+    app.kubernetes.io/name: cluster-api-provider-terraform
+    app.kubernetes.io/managed-by: kustomize
+  name: system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controller-manager
+  namespace: system
+  labels:
+    control-plane: controller-manager
+    app.kubernetes.io/name: cluster-api-provider-terraform
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  selector:
+    matchLabels:
+      control-plane: controller-manager
+      app.kubernetes.io/name: cluster-api-provider-terraform
+  replicas: 1
+  template:
+    metadata:
+      annotations:
+        kubectl.kubernetes.io/default-container: manager
+      labels:
+        control-plane: controller-manager
+        app.kubernetes.io/name: cluster-api-provider-terraform
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: manager
+        command:
+        - /manager
+        # clusterctl never injects --namespace; the manager watches all
+        # namespaces by default.
+        args:
+        - --leader-elect
+        - --diagnostics-address=:8443
+        - --insecure-diagnostics=false
+        - --webhook-port=9443
+        image: controller:latest
+        env:
+        # The runner image defaults to the manager's own image. The value is
+        # replaced with the built image by config/default.
+        - name: CAPTF_MANAGER_IMAGE
+          value: controller:latest
+        # The webhook lets only the manager's own ServiceAccount set
+        # TerraformMachine.spec.providerID.
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: SERVICE_ACCOUNT_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.serviceAccountName
+        ports:
+        - containerPort: 9440
+          name: healthz
+          protocol: TCP
+        - containerPort: 8443
+          name: metrics
+          protocol: TCP
+        securityContext:
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          privileged: false
+          capabilities:
+            drop:
+            - "ALL"
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: healthz
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: healthz
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          limits:
+            cpu: 500m
+            memory: 256Mi
+          requests:
+            cpu: 10m
+            memory: 64Mi
+        terminationMessagePolicy: FallbackToLogsOnError
+      serviceAccountName: controller-manager
+      terminationGracePeriodSeconds: 10
+      tolerations:
+      - effect: NoSchedule
+        key: node-role.kubernetes.io/control-plane

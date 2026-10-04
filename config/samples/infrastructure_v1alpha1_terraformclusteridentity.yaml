@@ -1,0 +1,16 @@
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: TerraformClusterIdentity
+metadata:
+  labels:
+    app.kubernetes.io/name: cluster-api-provider-terraform
+    app.kubernetes.io/managed-by: kustomize
+  name: terraformclusteridentity-sample
+spec:
+  # The cloud credentials; mirrored into each allowed namespace.
+  secretRef:
+    name: cloud-credentials
+    namespace: captf-system
+  # Only namespaces listed here may reference this identity.
+  allowedNamespaces:
+    list:
+    - default

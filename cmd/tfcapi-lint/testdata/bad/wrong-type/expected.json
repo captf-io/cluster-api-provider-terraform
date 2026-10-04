@@ -1,0 +1,19 @@
+{
+  "module": "testdata/bad/wrong-type",
+  "contract": "v1alpha1",
+  "role": "cluster",
+  "findings": [
+    {
+      "id": "input/type",
+      "severity": "error",
+      "file": "variables.tf",
+      "line": 34,
+      "message": "variable control_plane_initialized is declared as string, which does not accept the contract's bool"
+    }
+  ],
+  "summary": {
+    "error": 1,
+    "warning": 0,
+    "info": 0
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "provider_id": "noop-group:///default/demo-worker-mp0",
+  "provider_id_list": [
+    "noop:///default/demo-worker-mp0/0",
+    "noop:///default/demo-worker-mp0/1",
+    "noop:///default/demo-worker-mp0/2"
+  ],
+  "replicas": 3,
+  "instances": [
+    {
+      "provider_id": "noop:///default/demo-worker-mp0/0",
+      "state": "running"
+    },
+    {
+      "provider_id": "noop:///default/demo-worker-mp0/1",
+      "state": "running"
+    },
+    {
+      "provider_id": "noop:///default/demo-worker-mp0/2",
+      "state": "running"
+    }
+  ],
+  "health": {
+    "state": "running",
+    "healthy": true,
+    "message": null,
+    "reasons": []
+  }
+}

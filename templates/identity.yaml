@@ -1,0 +1,36 @@
+# Admin-applied, not a flavor: the credentials identity that TerraformClusters
+# in ${NAMESPACE} reference by name. TerraformClusterIdentity is
+# cluster-scoped, and its Secret lives in the provider namespace, so neither
+# belongs in a per-cluster template (templates/README.md).
+#
+#   clusterctl generate yaml --from templates/identity.yaml | kubectl apply -f -
+#
+# Replace the placeholder keys with the variables your module's providers
+# read. Each key reaches the Job as an environment variable (envFrom) and as
+# a file under /var/run/captf/credentials/<key>.
+#
+# Whoever applies this must be allowed to get the Secret: the identity webhook
+# checks with a SubjectAccessReview. The identity never owns the Secret;
+# the controller only labels it clusterctl.cluster.x-k8s.io/move so
+# `clusterctl move` copies it (https://captf.io/docs/operator-guide/runbooks/move.html).
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: TerraformClusterIdentity
+metadata:
+  name: "${TERRAFORM_IDENTITY_NAME}"
+spec:
+  secretRef:
+    name: "${TERRAFORM_IDENTITY_NAME}"
+    namespace: captf-system
+  allowedNamespaces:
+    list:
+    - "${NAMESPACE}"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: "${TERRAFORM_IDENTITY_NAME}"
+  namespace: captf-system
+type: Opaque
+stringData:
+  EXAMPLE_ACCESS_KEY: replace-me
+  EXAMPLE_SECRET_KEY: replace-me

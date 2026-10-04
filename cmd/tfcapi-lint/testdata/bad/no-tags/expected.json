@@ -1,0 +1,19 @@
+{
+  "module": "testdata/bad/no-tags",
+  "contract": "v1alpha1",
+  "role": "cluster",
+  "findings": [
+    {
+      "id": "input/tags-declared",
+      "severity": "error",
+      "file": "",
+      "line": 0,
+      "message": "variable captf_tags is not declared: every module must accept the contract's tags"
+    }
+  ],
+  "summary": {
+    "error": 1,
+    "warning": 0,
+    "info": 0
+  }
+}

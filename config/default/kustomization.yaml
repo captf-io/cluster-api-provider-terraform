@@ -1,0 +1,113 @@
+# Builds infrastructure-components.yaml for clusterctl, following its
+# kustomize rules for the clusterctl contract.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: captf-system
+
+namePrefix: captf-
+
+labels:
+- includeSelectors: true
+  pairs:
+    cluster.x-k8s.io/provider: infrastructure-terraform
+
+resources:
+- ../crd
+- ../rbac
+- ../manager
+- ../webhook
+- ../certmanager
+
+patches:
+# Mount the webhook serving certificate.
+- path: manager_webhook_patch.yaml
+
+# The image `make release` and `make docker-build` publish (Makefile IMG).
+images:
+- name: controller
+  newName: ghcr.io/captf-io/cluster-api-provider-terraform
+  newTag: dev
+
+replacements:
+# The runner image defaults to the manager's own image: copy the final
+# container image into CAPTF_MANAGER_IMAGE.
+- source:
+    kind: Deployment
+    name: controller-manager
+    fieldPath: spec.template.spec.containers.[name=manager].image
+  targets:
+  - select:
+      kind: Deployment
+      name: controller-manager
+    fieldPaths:
+    - spec.template.spec.containers.[name=manager].env.[name=CAPTF_MANAGER_IMAGE].value
+# Webhook Service name and namespace into the Certificate's DNS names.
+- source:
+    kind: Service
+    version: v1
+    name: webhook-service
+    fieldPath: .metadata.name
+  targets:
+  - select:
+      kind: Certificate
+      group: cert-manager.io
+      version: v1
+      name: serving-cert
+    fieldPaths:
+    - .spec.dnsNames.0
+    - .spec.dnsNames.1
+    options:
+      delimiter: '.'
+      index: 0
+      create: true
+- source:
+    kind: Service
+    version: v1
+    name: webhook-service
+    fieldPath: .metadata.namespace
+  targets:
+  - select:
+      kind: Certificate
+      group: cert-manager.io
+      version: v1
+      name: serving-cert
+    fieldPaths:
+    - .spec.dnsNames.0
+    - .spec.dnsNames.1
+    options:
+      delimiter: '.'
+      index: 1
+      create: true
+# cert-manager CA injection into the ValidatingWebhookConfiguration. There is
+# no MutatingWebhookConfiguration: nothing is defaulted at admission.
+- source:
+    kind: Certificate
+    group: cert-manager.io
+    version: v1
+    name: serving-cert
+    fieldPath: .metadata.namespace
+  targets:
+  - select:
+      kind: ValidatingWebhookConfiguration
+    fieldPaths:
+    - .metadata.annotations.[cert-manager.io/inject-ca-from]
+    options:
+      delimiter: '/'
+      index: 0
+      create: true
+- source:
+    kind: Certificate
+    group: cert-manager.io
+    version: v1
+    name: serving-cert
+    fieldPath: .metadata.name
+  targets:
+  - select:
+      kind: ValidatingWebhookConfiguration
+    fieldPaths:
+    - .metadata.annotations.[cert-manager.io/inject-ca-from]
+    options:
+      delimiter: '/'
+      index: 1
+      create: true

@@ -1,0 +1,20 @@
+name: Feature request
+description: Suggest a capability or an improvement.
+labels: [kind/feature]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do and what gets in the way today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you propose
+      description: How CAPTF could solve it, including any API or module contract change.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

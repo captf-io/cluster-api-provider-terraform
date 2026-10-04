@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://captf.io/schemas/v1alpha1/machine-outputs.json",
+  "title": "CAPTF contract v1alpha1: machine role outputs",
+  "description": "The machine role's root outputs as decoded from state, after the controller's normalization (\"\" for an ID becomes null) (common.md, machine.md). Every contract output must be declared; null means \"not yet known\". Extra, non-contract outputs are allowed and ignored. Address canonical order is enforced by the controller, not by this schema.",
+  "type": "object",
+  "properties": {
+    "provider_id": {
+      "description": "Must equal the Node's spec.providerID; 1-512 chars (infra-machine.md \"InfraMachine: provider ID\"). The controller normalizes \"\" to null before validation.",
+      "anyOf": [{ "type": "string", "minLength": 1, "maxLength": 512 }, { "type": "null" }]
+    },
+    "addresses": {
+      "description": "TerraformMachine.status.addresses; at most 256 entries.",
+      "anyOf": [
+        { "type": "array", "maxItems": 256, "items": { "$ref": "definitions.json#/$defs/machine_address" } },
+        { "type": "null" }
+      ]
+    },
+    "failure_domain": {
+      "description": "Actual placement; must equal the failure_domain input when that is non-null (enforced by the controller).",
+      "anyOf": [{ "$ref": "definitions.json#/$defs/failure_domain_name" }, { "type": "null" }]
+    },
+    "interruptible": {
+      "description": "true for spot/preemptible instances; null is written as false. Must be declared.",
+      "type": ["boolean", "null"]
+    },
+    "health": { "$ref": "definitions.json#/$defs/health" }
+  },
+  "required": ["provider_id", "addresses", "failure_domain", "interruptible", "health"]
+}

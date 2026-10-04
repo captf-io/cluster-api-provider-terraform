@@ -1,0 +1,153 @@
+# CAPTF alert rules, on the captf_* series of https://captf.io/docs/reference/metrics.html. Counters of
+# failures count transitions, not
+# reconciles; captf_jobs_total's result is succeeded, failed, deadline,
+# interrupted (stopped from outside: a drain, eviction or deletion),
+# blocked (a destructive TerraformCluster plan awaiting approval) or
+# plan_changed (an approved plan that changed before its apply, awaiting a
+# new approval); neither of the last two is a failure, each is reported by
+# its own condition and event.
+# Aggregate series carry kind and op only, so their alerts do not name the
+# object: the runbooks in https://captf.io/docs/operator-guide/observability.html say how to find it. The
+# per-object gauges (captf_state_bytes, captf_inputs_bytes,
+# captf_last_success_timestamp_seconds, ...) do name it.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: captf-alerts
+  namespace: captf-system
+  labels:
+    app.kubernetes.io/name: cluster-api-provider-terraform
+    cluster.x-k8s.io/provider: infrastructure-terraform
+spec:
+  groups:
+  - name: captf
+    rules:
+    - alert: CAPTFJobFailing
+      # Failed and deadline-exceeded Jobs both count; blocked ones do not.
+      expr: sum by (kind, op) (increase(captf_jobs_total{result=~"failed|deadline"}[30m])) > 2
+      labels:
+        severity: warning
+      annotations:
+        summary: '{{ $labels.kind }} {{ $labels.op }} Jobs keep failing'
+        description: >-
+          More than two {{ $labels.op }} Jobs for {{ $labels.kind }} objects failed or hit their deadline
+          in 30 minutes. Find the objects with ApplyJobSucceeded=False or DriftJobSucceeded=False and read
+          status.lastRun and the Job logs.
+        runbook_url: https://captf.io/docs/operator-guide/observability.html#captfjobfailing
+    - alert: CAPTFDestroyStuck
+      # Without a condition metric (kube-state-metrics custom resource
+      # state), repeated destroy failures stand in for "Deleting for 30m".
+      expr: sum by (kind) (increase(captf_jobs_total{op="destroy",result!="succeeded"}[30m])) > 0
+      for: 30m
+      labels:
+        severity: critical
+      annotations:
+        summary: '{{ $labels.kind }} destroy keeps failing'
+        description: >-
+          Destroy Jobs for {{ $labels.kind }} objects have failed for 30 minutes. The objects keep their
+          finalizer and their state; follow the stuck-destroy runbook.
+        runbook_url: https://captf.io/docs/operator-guide/observability.html#captfdestroystuck
+    - alert: CAPTFClusterDrift
+      expr: captf_drift_detected{kind="TerraformCluster"} == 1
+      for: 1h
+      labels:
+        severity: warning
+      annotations:
+        summary: 'TerraformCluster {{ $labels.namespace }}/{{ $labels.name }} has drifted'
+        description: >-
+          The last drift check found changes for an hour. With drift.action Report this waits for an
+          operator; with Remediate the remediation apply keeps failing (see ApplyJobSucceeded).
+        runbook_url: https://captf.io/docs/operator-guide/observability.html#captfclusterdrift
+    - alert: CAPTFStateUnreadable
+      # "No state yet" is not counted, so a new object never fires this.
+      expr: sum by (kind, reason) (increase(captf_state_read_errors_total[15m])) > 0
+      labels:
+        severity: critical
+      annotations:
+        summary: '{{ $labels.kind }} state became unreadable ({{ $labels.reason }})'
+        description: >-
+          A {{ $labels.kind }} state Secret turned {{ $labels.reason }}. Nothing is applied until it reads
+          again. Find the object with StateReadable=False.
+        runbook_url: https://captf.io/docs/operator-guide/observability.html#captfstateunreadable
+    - alert: CAPTFForceUnlocks
+      expr: sum by (kind) (increase(captf_lock_force_unlocks_total[1h])) > 0
+      labels:
+        severity: warning
+      annotations:
+        summary: 'A {{ $labels.kind }} state lock was force-unlocked'
+        description: >-
+          A Job force-unlocked a state lock whose holder pod was gone. Look for ForceUnlocked events and
+          check why the previous Job died.
+        runbook_url: https://captf.io/docs/operator-guide/observability.html#captfforceunlocks
+    - alert: CAPTFReconcileErrors
+      expr: sum by (controller) (rate(controller_runtime_reconcile_errors_total{controller=~"terraform.*"}[10m])) > 0.1
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: 'The {{ $labels.controller }} controller keeps failing to reconcile'
+        description: Reconcile errors above 0.1/s for 10 minutes; read the manager logs.
+        runbook_url: https://captf.io/docs/operator-guide/observability.html#captfreconcileerrors
+    - alert: CAPTFJobSlow
+      # Jobs that ran their course: a deadline Job lasts its deadline by
+      # definition, and blocked or interrupted ones stop early.
+      expr: histogram_quantile(0.9, sum by (le, kind, op) (rate(captf_job_duration_seconds_bucket{result=~"succeeded|failed"}[1h]))) > 1800
+      for: 30m
+      labels:
+        severity: info
+      annotations:
+        summary: '{{ $labels.kind }} {{ $labels.op }} Jobs are slow'
+        description: The 90th percentile of {{ $labels.op }} Job duration has been above 30 minutes for 30 minutes.
+        runbook_url: https://captf.io/docs/operator-guide/observability.html#captfjobslow
+    - alert: CAPTFJobQueueSlow
+      # Creation to the source container's start: scheduling, image pulls
+      # and the runner copy.
+      expr: histogram_quantile(0.9, sum by (le, kind, op) (rate(captf_job_queue_seconds_bucket[10m]))) > 300
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: '{{ $labels.kind }} {{ $labels.op }} Jobs wait long to start'
+        description: >-
+          The 90th percentile of the time {{ $labels.op }} Jobs for {{ $labels.kind }} objects take from
+          creation to running the module has been above 5 minutes. Look for Pending runner pods: node
+          capacity, quota, slow or failing image pulls.
+        runbook_url: https://captf.io/docs/operator-guide/observability.html#captfjobqueueslow
+    - alert: CAPTFStateNearSecretLimit
+      # The kubernetes backend stores at most 1 MiB per Secret; OpenTofu does
+      # not chunk, Terraform splits into -part-N Secrets.
+      expr: captf_state_bytes > 900 * 1024
+      for: 15m
+      labels:
+        severity: warning
+      annotations:
+        summary: '{{ $labels.kind }} {{ $labels.namespace }}/{{ $labels.name }} state is near the Secret size limit'
+        description: >-
+          The compressed state is {{ $value | humanize1024 }}B, above 900 KiB. An OpenTofu state Secret
+          cannot grow past 1 MiB, and the next apply that crosses it fails to save state.
+        runbook_url: https://captf.io/docs/operator-guide/observability.html#captfstatenearsecretlimit
+    - alert: CAPTFInputsNearLimit
+      expr: captf_inputs_bytes > 900000
+      for: 15m
+      labels:
+        severity: warning
+      annotations:
+        summary: '{{ $labels.kind }} {{ $labels.namespace }}/{{ $labels.name }} inputs are near the size limit'
+        description: >-
+          The rendered main.tf.json and terraform.tfvars.json are {{ $value | humanize }} bytes. Above
+          1000000 no Job starts (ApplyJobSucceeded InputsTooLarge).
+        runbook_url: https://captf.io/docs/operator-guide/observability.html#captfinputsnearlimit
+    - alert: CAPTFNoRecentSuccess
+      # Only scheduled ops export drift and refresh: none while an object is
+      # deleting or paused, has drift checks off (intervalSeconds 0), or (for
+      # refresh) samples no health. Assumes intervals well under 6h.
+      expr: time() - captf_last_success_timestamp_seconds{op=~"drift|refresh"} > 6 * 3600
+      for: 30m
+      labels:
+        severity: warning
+      annotations:
+        summary: '{{ $labels.kind }} {{ $labels.namespace }}/{{ $labels.name }} has had no successful {{ $labels.op }} for 6 hours'
+        description: >-
+          Its {{ $labels.op }} Jobs keep failing or never start, so drift and health go unobserved. See
+          DriftJobSucceeded and status.lastRun.
+        runbook_url: https://captf.io/docs/operator-guide/observability.html#captfnorecentsuccess

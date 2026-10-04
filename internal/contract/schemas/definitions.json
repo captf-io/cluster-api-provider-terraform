@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://captf.io/schemas/v1alpha1/definitions.json",
+  "title": "CAPTF contract v1alpha1: shared definitions",
+  "description": "Types shared by the role input and output schemas (https://captf.io/docs/module-author/contract/v1alpha1/common.html). Input objects are closed (additionalProperties: false) because the controller renders exactly these attributes; output objects are open because extra attributes are ignored (README.md \"Type conventions\"). Limits come from the CAPI v1.14.2 API markers cited per property.",
+  "$defs": {
+    "captf_contract": {
+      "description": "Contract version the inputs were generated for.",
+      "const": "v1alpha1"
+    },
+    "captf_cluster": {
+      "description": "The owning CAPI Cluster: name and namespace only (no uid, labels, annotations or generation; common.md \"What is hashed\").",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "namespace": { "type": "string", "minLength": 1 }
+      },
+      "required": ["name", "namespace"],
+      "additionalProperties": false
+    },
+    "captf_object": {
+      "description": "The Terraform* object being reconciled: kind, name and namespace only.",
+      "type": "object",
+      "properties": {
+        "kind": { "enum": ["TerraformCluster", "TerraformMachine", "TerraformMachinePool"] },
+        "name": { "type": "string", "minLength": 1 },
+        "namespace": { "type": "string", "minLength": 1 }
+      },
+      "required": ["kind", "name", "namespace"],
+      "additionalProperties": false
+    },
+    "captf_tags": {
+      "description": "The fixed tag keys the controller always sets (common.md). No other keys.",
+      "type": "object",
+      "properties": {
+        "captf.io/cluster": { "type": "string", "minLength": 1 },
+        "captf.io/namespace": { "type": "string", "minLength": 1 },
+        "captf.io/kind": { "enum": ["TerraformCluster", "TerraformMachine", "TerraformMachinePool"] },
+        "captf.io/name": { "type": "string", "minLength": 1 },
+        "captf.io/managed-by": { "const": "captf" },
+        "captf.io/template": {
+          "description": "The object's cluster.x-k8s.io/cloned-from-name annotation, or \"\" when absent.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "captf.io/cluster",
+        "captf.io/namespace",
+        "captf.io/kind",
+        "captf.io/name",
+        "captf.io/managed-by",
+        "captf.io/template"
+      ],
+      "additionalProperties": false
+    },
+    "kubernetes_version": {
+      "description": "Kubernetes version, passed verbatim (may carry a distro suffix such as +rke2r1); 1-256 chars (Machine.spec.version marker, capi/api/core/v1beta2/machine_types.go).",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "endpoint": {
+      "description": "APIEndpoint: host 1-512 chars, port 1-65535; both set (APIEndpoint.IsValid, capi/api/core/v1beta2/cluster_types.go). A half-set endpoint is invalid.",
+      "type": "object",
+      "properties": {
+        "host": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      },
+      "required": ["host", "port"]
+    },
+    "endpoint_input": {
+      "description": "endpoint as rendered by the controller: exactly host and port.",
+      "allOf": [{ "$ref": "#/$defs/endpoint" }],
+      "properties": { "host": true, "port": true },
+      "additionalProperties": false
+    },
+    "cidr_blocks": {
+      "description": "NetworkRanges.cidrBlocks: at most 100 entries, each 1-43 chars (capi/api/core/v1beta2/cluster_types.go).",
+      "type": "array",
+      "maxItems": 100,
+      "items": { "type": "string", "minLength": 1, "maxLength": 43 }
+    },
+    "cluster_network": {
+      "description": "Cluster.spec.clusterNetwork as rendered: every attribute is present; unset values are null or [] (cluster.md). api_server_port is not the kube-apiserver bind port with KCP.",
+      "type": "object",
+      "properties": {
+        "pods": { "$ref": "#/$defs/cidr_blocks" },
+        "services": { "$ref": "#/$defs/cidr_blocks" },
+        "service_domain": { "type": ["string", "null"], "minLength": 1, "maxLength": 253 },
+        "api_server_port": { "type": ["integer", "null"], "minimum": 1, "maximum": 65535 }
+      },
+      "required": ["pods", "services", "service_domain", "api_server_port"],
+      "additionalProperties": false
+    },
+    "failure_domain_name": {
+      "description": "Failure-domain name: 1-256 chars, no pattern (FailureDomain.Name, capi/api/core/v1beta2/cluster_types.go).",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "failure_domain": {
+      "description": "One entry of the cluster role's failure_domains output. Name uniqueness (listMapKey=name) is enforced by the controller, not by this schema.",
+      "type": "object",
+      "properties": {
+        "name": { "$ref": "#/$defs/failure_domain_name" },
+        "control_plane": {
+          "description": "optional(bool, true): the default is applied by the controller.",
+          "type": "boolean",
+          "default": true
+        },
+        "attributes": {
+          "description": "optional(map(string), {}): the default is applied by the controller.",
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "default": {}
+        }
+      },
+      "required": ["name"]
+    },
+    "machine_address": {
+      "description": "MachineAddress: type from the MachineAddressType enum, address 1-256 chars (capi/api/core/v1beta2/common_types.go).",
+      "type": "object",
+      "properties": {
+        "type": { "enum": ["Hostname", "ExternalIP", "InternalIP", "ExternalDNS", "InternalDNS"] },
+        "address": { "type": "string", "minLength": 1, "maxLength": 256 }
+      },
+      "required": ["type", "address"]
+    },
+    "pool_instance": {
+      "description": "One entry of the machinepool role's instances output; provider-defined shape, all but provider_id optional (machinepool.md).",
+      "type": "object",
+      "properties": {
+        "provider_id": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "instance_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "addresses": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/machine_address" } },
+        "failure_domain": { "$ref": "#/$defs/failure_domain_name" },
+        "state": {
+          "description": "The health.state enum, per instance.",
+          "enum": ["pending", "running", "degraded", "stopped", "terminated", "unknown"]
+        }
+      },
+      "required": ["provider_id"]
+    },
+    "health": {
+      "description": "The health output every role declares (common.md). state is a closed enum.",
+      "type": "object",
+      "properties": {
+        "state": { "enum": ["pending", "running", "degraded", "stopped", "terminated", "unknown"] },
+        "healthy": { "type": "boolean" },
+        "message": {
+          "description": "Optional; surfaced in the condition message.",
+          "type": ["string", "null"],
+          "default": null
+        },
+        "reasons": {
+          "description": "Optional machine-readable reasons.",
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        }
+      },
+      "required": ["state", "healthy"]
+    }
+  }
+}

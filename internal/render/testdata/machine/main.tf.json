@@ -1,0 +1,83 @@
+{
+  "terraform": {
+    "backend": {
+      "kubernetes": {}
+    }
+  },
+  "variable": {
+    "bootstrap_data": {
+      "type": "string",
+      "sensitive": true
+    },
+    "bootstrap_format": {
+      "type": "string"
+    },
+    "captf_cluster": {
+      "type": "any"
+    },
+    "captf_cluster_outputs": {
+      "type": "any"
+    },
+    "captf_contract": {
+      "type": "string"
+    },
+    "captf_object": {
+      "type": "any"
+    },
+    "captf_tags": {
+      "type": "map(string)"
+    },
+    "control_plane": {
+      "type": "bool"
+    },
+    "failure_domain": {
+      "type": "string",
+      "default": null
+    },
+    "kubernetes_version": {
+      "type": "string",
+      "default": null
+    },
+    "machine_name": {
+      "type": "string"
+    }
+  },
+  "module": {
+    "role": {
+      "bootstrap_data": "${var.bootstrap_data}",
+      "bootstrap_format": "${var.bootstrap_format}",
+      "captf_cluster": "${var.captf_cluster}",
+      "captf_cluster_outputs": "${var.captf_cluster_outputs}",
+      "captf_contract": "${var.captf_contract}",
+      "captf_object": "${var.captf_object}",
+      "captf_tags": "${var.captf_tags}",
+      "control_plane": "${var.control_plane}",
+      "failure_domain": "${var.failure_domain}",
+      "kubernetes_version": "${var.kubernetes_version}",
+      "machine_name": "${var.machine_name}",
+      "source": "../../module"
+    }
+  },
+  "output": {
+    "addresses": {
+      "value": "${module.role.addresses}",
+      "sensitive": true
+    },
+    "failure_domain": {
+      "value": "${module.role.failure_domain}",
+      "sensitive": true
+    },
+    "health": {
+      "value": "${module.role.health}",
+      "sensitive": true
+    },
+    "interruptible": {
+      "value": "${module.role.interruptible}",
+      "sensitive": true
+    },
+    "provider_id": {
+      "value": "${module.role.provider_id}",
+      "sensitive": true
+    }
+  }
+}

@@ -1,0 +1,94 @@
+{
+  "terraform": {
+    "backend": {
+      "kubernetes": {}
+    }
+  },
+  "variable": {
+    "autoscaling": {
+      "type": "object({enabled=bool, min=number, max=number})"
+    },
+    "bootstrap_data": {
+      "type": "string",
+      "sensitive": true
+    },
+    "bootstrap_format": {
+      "type": "string"
+    },
+    "captf_cluster": {
+      "type": "any"
+    },
+    "captf_cluster_outputs": {
+      "type": "any"
+    },
+    "captf_contract": {
+      "type": "string"
+    },
+    "captf_object": {
+      "type": "any"
+    },
+    "captf_tags": {
+      "type": "map(string)"
+    },
+    "cluster_failure_domains": {
+      "type": "list(string)"
+    },
+    "failure_domains": {
+      "type": "list(string)"
+    },
+    "kubernetes_version": {
+      "type": "string",
+      "default": null
+    },
+    "machinepool_name": {
+      "type": "string"
+    },
+    "node_labels": {
+      "type": "map(string)"
+    },
+    "replicas": {
+      "type": "number"
+    }
+  },
+  "module": {
+    "role": {
+      "autoscaling": "${var.autoscaling}",
+      "bootstrap_data": "${var.bootstrap_data}",
+      "bootstrap_format": "${var.bootstrap_format}",
+      "captf_cluster": "${var.captf_cluster}",
+      "captf_cluster_outputs": "${var.captf_cluster_outputs}",
+      "captf_contract": "${var.captf_contract}",
+      "captf_object": "${var.captf_object}",
+      "captf_tags": "${var.captf_tags}",
+      "cluster_failure_domains": "${var.cluster_failure_domains}",
+      "failure_domains": "${var.failure_domains}",
+      "kubernetes_version": "${var.kubernetes_version}",
+      "machinepool_name": "${var.machinepool_name}",
+      "node_labels": "${var.node_labels}",
+      "replicas": "${var.replicas}",
+      "source": "../../module"
+    }
+  },
+  "output": {
+    "health": {
+      "value": "${module.role.health}",
+      "sensitive": true
+    },
+    "instances": {
+      "value": "${module.role.instances}",
+      "sensitive": true
+    },
+    "provider_id": {
+      "value": "${module.role.provider_id}",
+      "sensitive": true
+    },
+    "provider_id_list": {
+      "value": "${module.role.provider_id_list}",
+      "sensitive": true
+    },
+    "replicas": {
+      "value": "${module.role.replicas}",
+      "sensitive": true
+    }
+  }
+}

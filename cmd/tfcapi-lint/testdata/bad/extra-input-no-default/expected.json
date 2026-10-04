@@ -1,0 +1,19 @@
+{
+  "module": "testdata/bad/extra-input-no-default",
+  "contract": "v1alpha1",
+  "role": "machine",
+  "findings": [
+    {
+      "id": "input/user-variable-default",
+      "severity": "warning",
+      "file": "extra.tf",
+      "line": 1,
+      "message": "variable region is not a contract input and has no default: an object that does not set it in spec.variables or variablesFrom fails to apply"
+    }
+  ],
+  "summary": {
+    "error": 0,
+    "warning": 1,
+    "info": 0
+  }
+}

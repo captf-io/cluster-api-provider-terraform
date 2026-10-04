@@ -1,0 +1,52 @@
+# SAMPLE, not applied by the network-policy component: a NetworkPolicy for
+# the Job pods CAPTF runs in one tenant namespace. Copy it, set the namespace,
+# replace the API server address, add your provider's egress, and apply it
+# in each tenant namespace (https://captf.io/docs/operator-guide/installation.html
+# "Optional components").
+#
+# The pods hold the identity's cloud credentials and a token that can write
+# every Secret of the namespace, so they get no ingress at all and egress
+# only to what the module needs.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: captf-jobs
+  namespace: TENANT-NAMESPACE # replace
+spec:
+  # Every CAPTF Job pod carries this label (internal/jobs Labels).
+  podSelector:
+    matchExpressions:
+    - key: captf.infrastructure.cluster.x-k8s.io/owner-kind
+      operator: Exists
+  policyTypes:
+  - Ingress
+  - Egress
+  egress:
+  # DNS.
+  - ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  # The API server, for the kubernetes state backend and its lock. Most CNIs
+  # evaluate policy after the `kubernetes` Service is translated, so list the
+  # API server endpoints (`kubectl get endpointslices -n default -l
+  # kubernetes.io/service-name=kubernetes`), not the Service IP.
+  - to:
+    - ipBlock:
+        cidr: 192.0.2.10/32 # replace: an API server endpoint (TEST-NET placeholder)
+    ports:
+    - protocol: TCP
+      port: 6443
+    - protocol: TCP
+      port: 443
+  # CLOUD API EGRESS IS NOT INCLUDED. Terraform providers must reach their
+  # cloud's endpoints (and registry.terraform.io / registry.opentofu.org, or
+  # a mirror, if the image does not vendor providers). Add a rule per
+  # provider, for example:
+  # - to:
+  #   - ipBlock:
+  #       cidr: 0.0.0.0/0
+  #   ports:
+  #   - protocol: TCP
+  #     port: 443

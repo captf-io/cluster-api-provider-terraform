@@ -1,0 +1,31 @@
+{
+  "captf_contract": "v1alpha1",
+  "captf_cluster": {
+    "name": "demo",
+    "namespace": "default"
+  },
+  "captf_object": {
+    "kind": "TerraformMachine",
+    "name": "demo-cp-abcde",
+    "namespace": "default"
+  },
+  "captf_cluster_outputs": {
+    "network_id": "net-1",
+    "subnet_ids": [
+      "subnet-1"
+    ]
+  },
+  "captf_tags": {
+    "captf.io/cluster": "demo",
+    "captf.io/namespace": "default",
+    "captf.io/kind": "TerraformMachine",
+    "captf.io/name": "demo-cp-abcde",
+    "captf.io/managed-by": "captf",
+    "captf.io/template": "demo-control-plane"
+  },
+  "bootstrap_data": "#cloud-config\n",
+  "bootstrap_format": "yaml",
+  "failure_domain": null,
+  "kubernetes_version": "v1.31.4+rke2r1",
+  "control_plane": "true"
+}

@@ -1,0 +1,21 @@
+# Opt-in Prometheus integration: a metrics
+# Service, a ServiceMonitor, the PrometheusRule alerts and the RBAC
+# Prometheus needs to scrape the authenticated diagnostics endpoint. Not part
+# of infrastructure-components.yaml; add it to an overlay of config/default:
+#
+#   resources:
+#   - <path>/config/default
+#   components:
+#   - <path>/config/prometheus
+#
+# The resources carry the names and namespace config/default produces
+# (captf- prefix, captf-system), since a component does not inherit them.
+# See https://captf.io/docs/operator-guide/observability.html.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+resources:
+- service.yaml
+- servicemonitor.yaml
+- rbac.yaml
+- rules.yaml

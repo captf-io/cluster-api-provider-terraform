@@ -1,0 +1,13 @@
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: TerraformMachine
+metadata:
+  labels:
+    app.kubernetes.io/name: cluster-api-provider-terraform
+    app.kubernetes.io/managed-by: kustomize
+  name: terraformmachine-sample
+spec:
+  # The machine-role image: module code and runtime (https://captf.io/docs/module-author/image-contract.html).
+  source:
+    image: ghcr.io/example/machine-module:v0.1.0
+  identityRef:
+    name: terraformclusteridentity-sample

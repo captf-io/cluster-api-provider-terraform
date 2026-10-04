@@ -1,0 +1,60 @@
+# Dependabot version updates. Security updates are enabled separately in
+# the repository settings and are not limited by these schedules.
+#
+# Updates are grouped so the weekly batch is a handful of PRs, each one a
+# single logical bump (the house rule: a dependency bump is its own
+# commit). Commit messages follow the repository's "<subsystem>: ..." form.
+# A 7-day cooldown keeps a release out until it has been public a week, so
+# a compromised publish is usually caught and yanked before it lands here.
+version: 2
+
+updates:
+  - package-ecosystem: gomod
+    directories: ["/", "/api"]
+    cooldown:
+      default-days: 7
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "deps"
+    labels: [dependencies]
+    open-pull-requests-limit: 10
+    groups:
+      # Cluster API and Kubernetes move together; bump them as one.
+      kubernetes:
+        patterns: ["k8s.io/*", "sigs.k8s.io/*"]
+      golang-x:
+        patterns: ["golang.org/x/*"]
+      otel-grpc-protobuf:
+        patterns: ["go.opentelemetry.io/*", "google.golang.org/*"]
+      hashicorp:
+        patterns: ["github.com/hashicorp/*", "github.com/zclconf/*"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    cooldown:
+      default-days: 7
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "ci"
+    labels: [dependencies, area/ci]
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # The Dockerfile's distroless base is pinned by digest. The golang build
+  # image comes in through ARGs (version plus digest), which Dependabot
+  # cannot follow, so bump it by hand; the Dockerfile says how.
+  - package-ecosystem: docker
+    directory: "/"
+    cooldown:
+      default-days: 7
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "deps"
+    labels: [dependencies]

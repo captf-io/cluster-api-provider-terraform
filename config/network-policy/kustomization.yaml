@@ -1,0 +1,21 @@
+# Opt-in NetworkPolicy for the CAPTF manager (https://captf.io/docs/operator-guide/installation.html
+# "Optional components"). Not part of infrastructure-components.yaml; add it to an overlay
+# of config/default:
+#
+#   resources:
+#   - <path>/config/default
+#   components:
+#   - <path>/config/network-policy
+#
+# The policy carries the namespace config/default produces (captf-system),
+# since a component does not inherit it. It only has an effect on a CNI that
+# enforces NetworkPolicy.
+#
+# job-egress-sample.yaml is NOT included: it is a starting point for each
+# tenant namespace's Job pods, to copy, complete with the API server address
+# and the cloud endpoints of the provider the modules use, and apply there.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+resources:
+- manager.yaml

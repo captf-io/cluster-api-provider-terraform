@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://captf.io/schemas/v1alpha1/machinepool-outputs.json",
+  "title": "CAPTF contract v1alpha1: machinepool role outputs",
+  "description": "The machinepool role's root outputs as decoded from state (common.md, machinepool.md). Every contract output must be declared. Extra, non-contract outputs are allowed and ignored. Sort order of provider_id_list is enforced by the controller, not by this schema.",
+  "type": "object",
+  "properties": {
+    "provider_id": {
+      "description": "The scaling-group id; optional in the contract (may stay null for group-less implementations), 1-512 chars when set (infra-machinepool.md \"InfraMachinePool: providerID\").",
+      "anyOf": [{ "type": "string", "minLength": 1, "maxLength": 512 }, { "type": "null" }]
+    },
+    "provider_id_list": {
+      "description": "Every non-terminated member of the group, each equal to its Node's spec.providerID; may be []. At most 10000 entries, each 1-512 chars.",
+      "type": "array",
+      "maxItems": 10000,
+      "items": { "type": "string", "minLength": 1, "maxLength": 512 }
+    },
+    "replicas": {
+      "description": "The group's desired capacity as observed at refresh; MUST equal length(provider_id_list) outside a scaling transition. The controller serialises 0 explicitly.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "instances": {
+      "description": "Provider-defined member list; may be []. The controller caps status.instances at 1000 entries.",
+      "type": "array",
+      "maxItems": 1000,
+      "items": { "$ref": "definitions.json#/$defs/pool_instance" }
+    },
+    "health": { "$ref": "definitions.json#/$defs/health" }
+  },
+  "required": ["provider_id", "provider_id_list", "replicas", "instances", "health"]
+}

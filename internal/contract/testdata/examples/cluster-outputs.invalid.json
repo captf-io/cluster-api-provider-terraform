@@ -1,0 +1,15 @@
+{
+  "control_plane_endpoint": {
+    "host": "api.demo.example.com",
+    "port": 0
+  },
+  "failure_domains": [
+    {
+      "name": ""
+    }
+  ],
+  "health": {
+    "state": "ok",
+    "healthy": true
+  }
+}

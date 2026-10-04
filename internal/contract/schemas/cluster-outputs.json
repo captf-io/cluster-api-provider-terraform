@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://captf.io/schemas/v1alpha1/cluster-outputs.json",
+  "title": "CAPTF contract v1alpha1: cluster role outputs",
+  "description": "The cluster role's root outputs as decoded from state (common.md, cluster.md). Every contract output must be declared; null means \"not yet known\" (README.md \"Null semantics\"). Extra, non-contract outputs are allowed and ignored.",
+  "type": "object",
+  "properties": {
+    "control_plane_endpoint": {
+      "description": "Written to TerraformCluster.spec.controlPlaneEndpoint once valid; must stay stable for the life of the object.",
+      "anyOf": [{ "$ref": "definitions.json#/$defs/endpoint" }, { "type": "null" }]
+    },
+    "failure_domains": {
+      "description": "TerraformCluster.status.failureDomains; null and [] both clear the field. At most 100 entries (MaxItems=100).",
+      "anyOf": [
+        { "type": "array", "maxItems": 100, "items": { "$ref": "definitions.json#/$defs/failure_domain" } },
+        { "type": "null" }
+      ]
+    },
+    "exports": {
+      "description": "Any value (object recommended), injected verbatim into machine/pool modules as captf_cluster_outputs; null is treated as {}."
+    },
+    "health": { "$ref": "definitions.json#/$defs/health" }
+  },
+  "required": ["control_plane_endpoint", "failure_domains", "exports", "health"]
+}

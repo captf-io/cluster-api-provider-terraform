@@ -1,0 +1,6 @@
+# hadolint configuration, shared by CI (.github/workflows/security.yaml).
+#
+# The remaining Dockerfile builds a distroless image with no apk or apt
+# step, so no rule needs ignoring (DL3018 was only for the Alpine noop
+# images). The base images are pinned by digest.
+failure-threshold: warning

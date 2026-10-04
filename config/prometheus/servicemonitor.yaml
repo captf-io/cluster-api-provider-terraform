@@ -1,0 +1,26 @@
+# Scrapes the manager's authenticated diagnostics endpoint with the
+# Prometheus ServiceAccount's token. The metrics server uses a self-signed
+# certificate unless the manager gets --diagnostics-tls-cert-dir, hence
+# insecureSkipVerify; with a CA-signed certificate set tlsConfig.ca instead.
+# Newer Prometheus Operator releases prefer
+# `authorization: {type: Bearer, credentials: …}` to bearerTokenFile.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: captf-controller-manager
+  namespace: captf-system
+  labels:
+    app.kubernetes.io/name: cluster-api-provider-terraform
+    cluster.x-k8s.io/provider: infrastructure-terraform
+spec:
+  endpoints:
+  - port: metrics
+    path: /metrics
+    scheme: https
+    bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+    tlsConfig:
+      insecureSkipVerify: true
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: metrics
+      cluster.x-k8s.io/provider: infrastructure-terraform

@@ -1,0 +1,29 @@
+{
+  "captf_contract": "v1alpha1",
+  "captf_cluster": {
+    "name": "prod",
+    "namespace": "team-a"
+  },
+  "captf_object": {
+    "kind": "TerraformCluster",
+    "name": "prod-md-0-abcde",
+    "namespace": "team-a"
+  },
+  "captf_tags": {
+    "captf.io/cluster": "prod",
+    "captf.io/kind": "TerraformCluster",
+    "captf.io/managed-by": "captf",
+    "captf.io/name": "prod-md-0-abcde",
+    "captf.io/namespace": "team-a",
+    "captf.io/template": "prod-md-0"
+  },
+  "control_plane_endpoint": null,
+  "kubernetes_version": null,
+  "control_plane_initialized": false,
+  "cluster_network": {
+    "pods": [],
+    "services": [],
+    "service_domain": null,
+    "api_server_port": null
+  }
+}

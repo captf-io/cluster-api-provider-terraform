@@ -1,0 +1,19 @@
+# Copied to encryption.tf for the opentofu-encrypted case only
+# (hack/fixtures-state.sh). OpenTofu client-side state encryption with a
+# pbkdf2 key provider; Terraform does not know this block. The passphrase is
+# a fixed test value: the fixture only has to prove the reader recognizes
+# the encrypted envelope, not that anyone can decrypt it.
+
+terraform {
+  encryption {
+    key_provider "pbkdf2" "fixture" {
+      passphrase = "captf-fixture-passphrase-not-a-secret"
+    }
+    method "aes_gcm" "fixture" {
+      keys = key_provider.pbkdf2.fixture
+    }
+    state {
+      method = method.aes_gcm.fixture
+    }
+  }
+}

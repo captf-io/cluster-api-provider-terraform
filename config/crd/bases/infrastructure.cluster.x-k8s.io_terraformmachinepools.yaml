@@ -1,0 +1,1416 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: terraformmachinepools.infrastructure.cluster.x-k8s.io
+spec:
+  group: infrastructure.cluster.x-k8s.io
+  names:
+    categories:
+    - cluster-api
+    kind: TerraformMachinePool
+    listKind: TerraformMachinePoolList
+    plural: terraformmachinepools
+    singular: terraformmachinepool
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - description: Cluster
+      jsonPath: .metadata.labels['cluster\.x-k8s\.io/cluster-name']
+      name: Cluster
+      type: string
+    - description: MachinePool owning this TerraformMachinePool
+      jsonPath: .metadata.ownerReferences[?(@.kind=="MachinePool")].name
+      name: MachinePool
+      type: string
+    - description: Desired replicas
+      jsonPath: .status.replicas
+      name: Replicas
+      type: integer
+    - description: Ready condition
+      jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - description: Time since creation
+      jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          TerraformMachinePool is the Schema for the terraformmachinepools API: the
+          InfraMachinePool of Cluster API, provisioned by a Terraform/OpenTofu
+          module.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec is the desired state of the TerraformMachinePool.
+            minProperties: 1
+            properties:
+              drift:
+                description: |-
+                  drift is merged field by field over the cluster's defaults.drift.
+                  Unlike a machine's, a pool's drift may be remediated.
+                properties:
+                  action:
+                    description: |-
+                      action taken when drift is found: Report or Remediate. Defaults to
+                      Report, applied at reconcile. Unlike a machine's, a pool's drift may
+                      be remediated: the group's instances are not immutable infrastructure.
+                    enum:
+                    - Report
+                    - Remediate
+                    type: string
+                  intervalSeconds:
+                    description: |-
+                      intervalSeconds between drift checks, in seconds. Defaults to the
+                      manager's --drift-default-interval (30m), applied at reconcile when
+                      unset (0). Unlike a machine's or the cluster's, a pool's drift cannot
+                      be disabled, so 0 always means "use the default", never "disabled".
+                    format: int32
+                    minimum: 1
+                    type: integer
+                type: object
+              identityRef:
+                description: |-
+                  identityRef names the TerraformClusterIdentity whose credentials this
+                  object's Jobs use. Whether it is required, and where it falls back to
+                  when unset, depends on the kind.
+                properties:
+                  name:
+                    description: name of the TerraformClusterIdentity.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                type: object
+              jobs:
+                description: |-
+                  jobs tunes the Jobs that run this object's module. On a kind that
+                  inherits defaults it is merged field by field over them (see
+                  JobPolicy).
+                properties:
+                  activeDeadlineSeconds:
+                    description: |-
+                      activeDeadlineSeconds bounds a Job's run time, in seconds, at most one
+                      day. Defaults to 3600, applied at reconcile when unset (0). When a
+                      policy sets both, lockTimeoutSeconds must be less than
+                      activeDeadlineSeconds.
+                    format: int64
+                    maximum: 86400
+                    minimum: 1
+                    type: integer
+                  env:
+                    description: |-
+                      env adds environment variables to the main container. It cannot override
+                      the TF_* and KUBE_* variables the runner sets.
+                    items:
+                      description: EnvVar represents an environment variable present
+                        in a Container.
+                      properties:
+                        name:
+                          description: |-
+                            Name of the environment variable.
+                            May consist of any printable ASCII characters except '='.
+                          type: string
+                        value:
+                          description: |-
+                            Variable references $(VAR_NAME) are expanded
+                            using the previously defined environment variables in the container and
+                            any service environment variables. If a variable cannot be resolved,
+                            the reference in the input string will be unchanged. Double $$ are reduced
+                            to a single $, which allows for escaping the $(VAR_NAME) syntax: i.e.
+                            "$$(VAR_NAME)" will produce the string literal "$(VAR_NAME)".
+                            Escaped references will never be expanded, regardless of whether the variable
+                            exists or not.
+                            Defaults to "".
+                          type: string
+                        valueFrom:
+                          description: Source for the environment variable's value.
+                            Cannot be used if value is not empty.
+                          properties:
+                            configMapKeyRef:
+                              description: Selects a key of a ConfigMap.
+                              properties:
+                                key:
+                                  description: The key to select.
+                                  type: string
+                                name:
+                                  default: ""
+                                  description: |-
+                                    Name of the referent.
+                                    This field is effectively required, but due to backwards compatibility is
+                                    allowed to be empty. Instances of this type with an empty value here are
+                                    almost certainly wrong.
+                                    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                  type: string
+                                optional:
+                                  description: Specify whether the ConfigMap or its
+                                    key must be defined
+                                  type: boolean
+                              required:
+                              - key
+                              type: object
+                              x-kubernetes-map-type: atomic
+                            fieldRef:
+                              description: |-
+                                Selects a field of the pod: supports metadata.name, metadata.namespace, `metadata.labels['<KEY>']`, `metadata.annotations['<KEY>']`,
+                                spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podIPs.
+                              properties:
+                                apiVersion:
+                                  description: Version of the schema the FieldPath
+                                    is written in terms of, defaults to "v1".
+                                  type: string
+                                fieldPath:
+                                  description: Path of the field to select in the
+                                    specified API version.
+                                  type: string
+                              required:
+                              - fieldPath
+                              type: object
+                              x-kubernetes-map-type: atomic
+                            fileKeyRef:
+                              description: |-
+                                FileKeyRef selects a key of the env file.
+                                Requires the EnvFiles feature gate to be enabled.
+                              properties:
+                                key:
+                                  description: |-
+                                    The key within the env file. An invalid key will prevent the pod from starting.
+                                    The keys defined within a source may consist of any printable ASCII characters except '='.
+                                    During Alpha stage of the EnvFiles feature gate, the key size is limited to 128 characters.
+                                  type: string
+                                optional:
+                                  default: false
+                                  description: |-
+                                    Specify whether the file or its key must be defined. If the file or key
+                                    does not exist, then the env var is not published.
+                                    If optional is set to true and the specified key does not exist,
+                                    the environment variable will not be set in the Pod's containers.
+
+                                    If optional is set to false and the specified key does not exist,
+                                    an error will be returned during Pod creation.
+                                  type: boolean
+                                path:
+                                  description: |-
+                                    The path within the volume from which to select the file.
+                                    Must be relative and may not contain the '..' path or start with '..'.
+                                  type: string
+                                volumeName:
+                                  description: The name of the volume mount containing
+                                    the env file.
+                                  type: string
+                              required:
+                              - key
+                              - path
+                              - volumeName
+                              type: object
+                              x-kubernetes-map-type: atomic
+                            resourceFieldRef:
+                              description: |-
+                                Selects a resource of the container: only resources limits and requests
+                                (limits.cpu, limits.memory, limits.ephemeral-storage, requests.cpu, requests.memory and requests.ephemeral-storage) are currently supported.
+                              properties:
+                                containerName:
+                                  description: 'Container name: required for volumes,
+                                    optional for env vars'
+                                  type: string
+                                divisor:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  description: Specifies the output format of the
+                                    exposed resources, defaults to "1"
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                                resource:
+                                  description: 'Required: resource to select'
+                                  type: string
+                              required:
+                              - resource
+                              type: object
+                              x-kubernetes-map-type: atomic
+                            secretKeyRef:
+                              description: Selects a key of a secret in the pod's
+                                namespace
+                              properties:
+                                key:
+                                  description: The key of the secret to select from.  Must
+                                    be a valid secret key.
+                                  type: string
+                                name:
+                                  default: ""
+                                  description: |-
+                                    Name of the referent.
+                                    This field is effectively required, but due to backwards compatibility is
+                                    allowed to be empty. Instances of this type with an empty value here are
+                                    almost certainly wrong.
+                                    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                  type: string
+                                optional:
+                                  description: Specify whether the Secret or its key
+                                    must be defined
+                                  type: boolean
+                              required:
+                              - key
+                              type: object
+                              x-kubernetes-map-type: atomic
+                          type: object
+                      required:
+                      - name
+                      type: object
+                    maxItems: 64
+                    minItems: 1
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  failedJobsHistoryLimit:
+                    description: |-
+                      failedJobsHistoryLimit is how many failed Jobs to keep per object and
+                      operation. The newest failed Job of an operation is kept even at 0
+                      while no newer Job of that operation succeeded: retry backoff counts
+                      it. Defaults to 3, applied at reconcile.
+                    format: int32
+                    maximum: 100
+                    minimum: 0
+                    type: integer
+                  imagePullSecrets:
+                    description: |-
+                      imagePullSecrets for the Job pod: they cover the source image and the
+                      runner init image.
+                    items:
+                      description: |-
+                        LocalObjectReference contains enough information to let you locate the
+                        referenced object inside the same namespace.
+                      properties:
+                        name:
+                          default: ""
+                          description: |-
+                            Name of the referent.
+                            This field is effectively required, but due to backwards compatibility is
+                            allowed to be empty. Instances of this type with an empty value here are
+                            almost certainly wrong.
+                            More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                          type: string
+                      type: object
+                      x-kubernetes-map-type: atomic
+                    maxItems: 10
+                    minItems: 1
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  lockTimeoutSeconds:
+                    description: |-
+                      lockTimeoutSeconds is passed to the runtime as -lock-timeout, in seconds.
+                      Defaults to 300, applied at reconcile.
+                    format: int32
+                    maximum: 3600
+                    minimum: 0
+                    type: integer
+                  podSecurityContext:
+                    description: |-
+                      podSecurityContext of the Job pod. Defaults, applied when the Job is
+                      built: seccompProfile RuntimeDefault.
+                    properties:
+                      appArmorProfile:
+                        description: |-
+                          appArmorProfile is the AppArmor options to use by the containers in this pod.
+                          Note that this field cannot be set when spec.os.name is windows.
+                        properties:
+                          localhostProfile:
+                            description: |-
+                              localhostProfile indicates a profile loaded on the node that should be used.
+                              The profile must be preconfigured on the node to work.
+                              Must match the loaded name of the profile.
+                              Must be set if and only if type is "Localhost".
+                            type: string
+                          type:
+                            description: |-
+                              type indicates which kind of AppArmor profile will be applied.
+                              Valid options are:
+                                Localhost - a profile pre-loaded on the node.
+                                RuntimeDefault - the container runtime's default profile.
+                                Unconfined - no AppArmor enforcement.
+                            type: string
+                        required:
+                        - type
+                        type: object
+                      fsGroup:
+                        description: |-
+                          A special supplemental group that applies to all containers in a pod.
+                          Some volume types allow the Kubelet to change the ownership of that volume
+                          to be owned by the pod:
+
+                          1. The owning GID will be the FSGroup
+                          2. The setgid bit is set (new files created in the volume will be owned by FSGroup)
+                          3. The permission bits are OR'd with rw-rw----
+
+                          If unset, the Kubelet will not modify the ownership and permissions of any volume.
+                          Note that this field cannot be set when spec.os.name is windows.
+                        format: int64
+                        type: integer
+                      fsGroupChangePolicy:
+                        description: |-
+                          fsGroupChangePolicy defines behavior of changing ownership and permission of the volume
+                          before being exposed inside Pod. This field will only apply to
+                          volume types which support fsGroup based ownership(and permissions).
+                          It will have no effect on ephemeral volume types such as: secret, configmaps
+                          and emptydir.
+                          Valid values are "OnRootMismatch" and "Always". If not specified, "Always" is used.
+                          Note that this field cannot be set when spec.os.name is windows.
+                        type: string
+                      runAsGroup:
+                        description: |-
+                          The GID to run the entrypoint of the container process.
+                          Uses runtime default if unset.
+                          May also be set in SecurityContext.  If set in both SecurityContext and
+                          PodSecurityContext, the value specified in SecurityContext takes precedence
+                          for that container.
+                          Note that this field cannot be set when spec.os.name is windows.
+                        format: int64
+                        type: integer
+                      runAsNonRoot:
+                        description: |-
+                          Indicates that the container must run as a non-root user.
+                          If true, the Kubelet will validate the image at runtime to ensure that it
+                          does not run as UID 0 (root) and fail to start the container if it does.
+                          If unset or false, no such validation will be performed.
+                          May also be set in SecurityContext.  If set in both SecurityContext and
+                          PodSecurityContext, the value specified in SecurityContext takes precedence.
+                        type: boolean
+                      runAsUser:
+                        description: |-
+                          The UID to run the entrypoint of the container process.
+                          Defaults to user specified in image metadata if unspecified.
+                          May also be set in SecurityContext.  If set in both SecurityContext and
+                          PodSecurityContext, the value specified in SecurityContext takes precedence
+                          for that container.
+                          Note that this field cannot be set when spec.os.name is windows.
+                        format: int64
+                        type: integer
+                      seLinuxChangePolicy:
+                        description: |-
+                          seLinuxChangePolicy defines how the container's SELinux label is applied to all volumes used by the Pod.
+                          It has no effect on nodes that do not support SELinux or to volumes does not support SELinux.
+                          Valid values are "MountOption" and "Recursive".
+
+                          "Recursive" means relabeling of all files on all Pod volumes by the container runtime.
+                          This may be slow for large volumes, but allows mixing privileged and unprivileged Pods sharing the same volume on the same node.
+
+                          "MountOption" mounts all eligible Pod volumes with `-o context` mount option.
+                          This requires all Pods that share the same volume to use the same SELinux label.
+                          It is not possible to share the same volume among privileged and unprivileged Pods.
+                          Eligible volumes are in-tree FibreChannel and iSCSI volumes, and all CSI volumes
+                          whose CSI driver announces SELinux support by setting spec.seLinuxMount: true in their
+                          CSIDriver instance. Other volumes are always re-labelled recursively.
+                          "MountOption" value is allowed only when SELinuxMount feature gate is enabled.
+
+                          If not specified and SELinuxMount feature gate is enabled, "MountOption" is used.
+                          If not specified and SELinuxMount feature gate is disabled, "MountOption" is used for ReadWriteOncePod volumes
+                          and "Recursive" for all other volumes.
+
+                          This field affects only Pods that have SELinux label set, either in PodSecurityContext or in SecurityContext of all containers.
+
+                          All Pods that use the same volume should use the same seLinuxChangePolicy, otherwise some pods can get stuck in ContainerCreating state.
+                          Note that this field cannot be set when spec.os.name is windows.
+                        type: string
+                      seLinuxOptions:
+                        description: |-
+                          The SELinux context to be applied to all containers.
+                          If unspecified, the container runtime will allocate a random SELinux context for each
+                          container.  May also be set in SecurityContext.  If set in
+                          both SecurityContext and PodSecurityContext, the value specified in SecurityContext
+                          takes precedence for that container.
+                          Note that this field cannot be set when spec.os.name is windows.
+                        properties:
+                          level:
+                            description: Level is SELinux level label that applies
+                              to the container.
+                            type: string
+                          role:
+                            description: Role is a SELinux role label that applies
+                              to the container.
+                            type: string
+                          type:
+                            description: Type is a SELinux type label that applies
+                              to the container.
+                            type: string
+                          user:
+                            description: User is a SELinux user label that applies
+                              to the container.
+                            type: string
+                        type: object
+                      seccompProfile:
+                        description: |-
+                          The seccomp options to use by the containers in this pod.
+                          Note that this field cannot be set when spec.os.name is windows.
+                        properties:
+                          localhostProfile:
+                            description: |-
+                              localhostProfile indicates a profile defined in a file on the node should be used.
+                              The profile must be preconfigured on the node to work.
+                              Must be a descending path, relative to the kubelet's configured seccomp profile location.
+                              Must be set if type is "Localhost". Must NOT be set for any other type.
+                            type: string
+                          type:
+                            description: |-
+                              type indicates which kind of seccomp profile will be applied.
+                              Valid options are:
+
+                              Localhost - a profile defined in a file on the node should be used.
+                              RuntimeDefault - the container runtime default profile should be used.
+                              Unconfined - no profile should be applied.
+                            type: string
+                        required:
+                        - type
+                        type: object
+                      supplementalGroups:
+                        description: |-
+                          A list of groups applied to the first process run in each container, in
+                          addition to the container's primary GID and fsGroup (if specified).  If
+                          the SupplementalGroupsPolicy feature is enabled, the
+                          supplementalGroupsPolicy field determines whether these are in addition
+                          to or instead of any group memberships defined in the container image.
+                          If unspecified, no additional groups are added, though group memberships
+                          defined in the container image may still be used, depending on the
+                          supplementalGroupsPolicy field.
+                          Note that this field cannot be set when spec.os.name is windows.
+                        items:
+                          format: int64
+                          type: integer
+                        type: array
+                        x-kubernetes-list-type: atomic
+                      supplementalGroupsPolicy:
+                        description: |-
+                          Defines how supplemental groups of the first container processes are calculated.
+                          Valid values are "Merge" and "Strict". If not specified, "Merge" is used.
+                          (Alpha) Using the field requires the SupplementalGroupsPolicy feature gate to be enabled
+                          and the container runtime must implement support for this feature.
+                          Note that this field cannot be set when spec.os.name is windows.
+                        type: string
+                      sysctls:
+                        description: |-
+                          Sysctls hold a list of namespaced sysctls used for the pod. Pods with unsupported
+                          sysctls (by the container runtime) might fail to launch.
+                          Note that this field cannot be set when spec.os.name is windows.
+                        items:
+                          description: Sysctl defines a kernel parameter to be set
+                          properties:
+                            name:
+                              description: Name of a property to set
+                              type: string
+                            value:
+                              description: Value of a property to set
+                              type: string
+                          required:
+                          - name
+                          - value
+                          type: object
+                        type: array
+                        x-kubernetes-list-type: atomic
+                      windowsOptions:
+                        description: |-
+                          The Windows specific settings applied to all containers.
+                          If unspecified, the options within a container's SecurityContext will be used.
+                          If set in both SecurityContext and PodSecurityContext, the value specified in SecurityContext takes precedence.
+                          Note that this field cannot be set when spec.os.name is linux.
+                        properties:
+                          gmsaCredentialSpec:
+                            description: |-
+                              GMSACredentialSpec is where the GMSA admission webhook
+                              (https://github.com/kubernetes-sigs/windows-gmsa) inlines the contents of the
+                              GMSA credential spec named by the GMSACredentialSpecName field.
+                            type: string
+                          gmsaCredentialSpecName:
+                            description: GMSACredentialSpecName is the name of the
+                              GMSA credential spec to use.
+                            type: string
+                          hostProcess:
+                            description: |-
+                              HostProcess determines if a container should be run as a 'Host Process' container.
+                              All of a Pod's containers must have the same effective HostProcess value
+                              (it is not allowed to have a mix of HostProcess containers and non-HostProcess containers).
+                              In addition, if HostProcess is true then HostNetwork must also be set to true.
+                            type: boolean
+                          runAsUserName:
+                            description: |-
+                              The UserName in Windows to run the entrypoint of the container process.
+                              Defaults to the user specified in image metadata if unspecified.
+                              May also be set in PodSecurityContext. If set in both SecurityContext and
+                              PodSecurityContext, the value specified in SecurityContext takes precedence.
+                            type: string
+                        type: object
+                    type: object
+                  resources:
+                    description: resources of the main container.
+                    properties:
+                      claims:
+                        description: |-
+                          Claims lists the names of resources, defined in spec.resourceClaims,
+                          that are used by this container.
+
+                          This field depends on the
+                          DynamicResourceAllocation feature gate.
+
+                          This field is immutable. It can only be set for containers.
+                        items:
+                          description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                          properties:
+                            name:
+                              description: |-
+                                Name must match the name of one entry in pod.spec.resourceClaims of
+                                the Pod where this field is used. It makes that resource available
+                                inside a container.
+                              type: string
+                            request:
+                              description: |-
+                                Request is the name chosen for a request in the referenced claim.
+                                If empty, everything from the claim is made available, otherwise
+                                only the result of this request.
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
+                      limits:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Limits describes the maximum amount of compute resources allowed.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                      requests:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Requests describes the minimum amount of compute resources required.
+                          If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                          otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                    type: object
+                  securityContext:
+                    description: |-
+                      securityContext of the main container. Defaults, applied when the Job is
+                      built: seccompProfile RuntimeDefault, capabilities drop ALL,
+                      allowPrivilegeEscalation false, readOnlyRootFilesystem true. runAsNonRoot
+                      is not defaulted. The webhook rejects privileged: true,
+                      allowPrivilegeEscalation: true and any capabilities.add: the container
+                      holds cloud credentials.
+                    properties:
+                      allowPrivilegeEscalation:
+                        description: |-
+                          AllowPrivilegeEscalation controls whether a process can gain more
+                          privileges than its parent process. This bool directly controls if
+                          the no_new_privs flag will be set on the container process.
+                          AllowPrivilegeEscalation is true always when the container is:
+                          1) run as Privileged
+                          2) has CAP_SYS_ADMIN
+                          Note that this field cannot be set when spec.os.name is windows.
+                        type: boolean
+                      appArmorProfile:
+                        description: |-
+                          appArmorProfile is the AppArmor options to use by this container. If set, this profile
+                          overrides the pod's appArmorProfile.
+                          Note that this field cannot be set when spec.os.name is windows.
+                        properties:
+                          localhostProfile:
+                            description: |-
+                              localhostProfile indicates a profile loaded on the node that should be used.
+                              The profile must be preconfigured on the node to work.
+                              Must match the loaded name of the profile.
+                              Must be set if and only if type is "Localhost".
+                            type: string
+                          type:
+                            description: |-
+                              type indicates which kind of AppArmor profile will be applied.
+                              Valid options are:
+                                Localhost - a profile pre-loaded on the node.
+                                RuntimeDefault - the container runtime's default profile.
+                                Unconfined - no AppArmor enforcement.
+                            type: string
+                        required:
+                        - type
+                        type: object
+                      capabilities:
+                        description: |-
+                          The capabilities to add/drop when running containers.
+                          Defaults to the default set of capabilities granted by the container runtime.
+                          Note that this field cannot be set when spec.os.name is windows.
+                        properties:
+                          add:
+                            description: Added capabilities
+                            items:
+                              description: Capability represent POSIX capabilities
+                                type
+                              type: string
+                            type: array
+                            x-kubernetes-list-type: atomic
+                          drop:
+                            description: Removed capabilities
+                            items:
+                              description: Capability represent POSIX capabilities
+                                type
+                              type: string
+                            type: array
+                            x-kubernetes-list-type: atomic
+                        type: object
+                      privileged:
+                        description: |-
+                          Run container in privileged mode.
+                          Processes in privileged containers are essentially equivalent to root on the host.
+                          Defaults to false.
+                          Note that this field cannot be set when spec.os.name is windows.
+                        type: boolean
+                      procMount:
+                        description: |-
+                          procMount denotes the type of proc mount to use for the containers.
+                          The default value is Default which uses the container runtime defaults for
+                          readonly paths and masked paths.
+                          Note that this field cannot be set when spec.os.name is windows.
+                        type: string
+                      readOnlyRootFilesystem:
+                        description: |-
+                          Whether this container has a read-only root filesystem.
+                          Default is false.
+                          Note that this field cannot be set when spec.os.name is windows.
+                        type: boolean
+                      runAsGroup:
+                        description: |-
+                          The GID to run the entrypoint of the container process.
+                          Uses runtime default if unset.
+                          May also be set in PodSecurityContext.  If set in both SecurityContext and
+                          PodSecurityContext, the value specified in SecurityContext takes precedence.
+                          Note that this field cannot be set when spec.os.name is windows.
+                        format: int64
+                        type: integer
+                      runAsNonRoot:
+                        description: |-
+                          Indicates that the container must run as a non-root user.
+                          If true, the Kubelet will validate the image at runtime to ensure that it
+                          does not run as UID 0 (root) and fail to start the container if it does.
+                          If unset or false, no such validation will be performed.
+                          May also be set in PodSecurityContext.  If set in both SecurityContext and
+                          PodSecurityContext, the value specified in SecurityContext takes precedence.
+                        type: boolean
+                      runAsUser:
+                        description: |-
+                          The UID to run the entrypoint of the container process.
+                          Defaults to user specified in image metadata if unspecified.
+                          May also be set in PodSecurityContext.  If set in both SecurityContext and
+                          PodSecurityContext, the value specified in SecurityContext takes precedence.
+                          Note that this field cannot be set when spec.os.name is windows.
+                        format: int64
+                        type: integer
+                      seLinuxOptions:
+                        description: |-
+                          The SELinux context to be applied to the container.
+                          If unspecified, the container runtime will allocate a random SELinux context for each
+                          container.  May also be set in PodSecurityContext.  If set in both SecurityContext and
+                          PodSecurityContext, the value specified in SecurityContext takes precedence.
+                          Note that this field cannot be set when spec.os.name is windows.
+                        properties:
+                          level:
+                            description: Level is SELinux level label that applies
+                              to the container.
+                            type: string
+                          role:
+                            description: Role is a SELinux role label that applies
+                              to the container.
+                            type: string
+                          type:
+                            description: Type is a SELinux type label that applies
+                              to the container.
+                            type: string
+                          user:
+                            description: User is a SELinux user label that applies
+                              to the container.
+                            type: string
+                        type: object
+                      seccompProfile:
+                        description: |-
+                          The seccomp options to use by this container. If seccomp options are
+                          provided at both the pod & container level, the container options
+                          override the pod options.
+                          Note that this field cannot be set when spec.os.name is windows.
+                        properties:
+                          localhostProfile:
+                            description: |-
+                              localhostProfile indicates a profile defined in a file on the node should be used.
+                              The profile must be preconfigured on the node to work.
+                              Must be a descending path, relative to the kubelet's configured seccomp profile location.
+                              Must be set if type is "Localhost". Must NOT be set for any other type.
+                            type: string
+                          type:
+                            description: |-
+                              type indicates which kind of seccomp profile will be applied.
+                              Valid options are:
+
+                              Localhost - a profile defined in a file on the node should be used.
+                              RuntimeDefault - the container runtime default profile should be used.
+                              Unconfined - no profile should be applied.
+                            type: string
+                        required:
+                        - type
+                        type: object
+                      windowsOptions:
+                        description: |-
+                          The Windows specific settings applied to all containers.
+                          If unspecified, the options from the PodSecurityContext will be used.
+                          If set in both SecurityContext and PodSecurityContext, the value specified in SecurityContext takes precedence.
+                          Note that this field cannot be set when spec.os.name is linux.
+                        properties:
+                          gmsaCredentialSpec:
+                            description: |-
+                              GMSACredentialSpec is where the GMSA admission webhook
+                              (https://github.com/kubernetes-sigs/windows-gmsa) inlines the contents of the
+                              GMSA credential spec named by the GMSACredentialSpecName field.
+                            type: string
+                          gmsaCredentialSpecName:
+                            description: GMSACredentialSpecName is the name of the
+                              GMSA credential spec to use.
+                            type: string
+                          hostProcess:
+                            description: |-
+                              HostProcess determines if a container should be run as a 'Host Process' container.
+                              All of a Pod's containers must have the same effective HostProcess value
+                              (it is not allowed to have a mix of HostProcess containers and non-HostProcess containers).
+                              In addition, if HostProcess is true then HostNetwork must also be set to true.
+                            type: boolean
+                          runAsUserName:
+                            description: |-
+                              The UserName in Windows to run the entrypoint of the container process.
+                              Defaults to the user specified in image metadata if unspecified.
+                              May also be set in PodSecurityContext. If set in both SecurityContext and
+                              PodSecurityContext, the value specified in SecurityContext takes precedence.
+                            type: string
+                        type: object
+                    type: object
+                  serviceAccountName:
+                    description: |-
+                      serviceAccountName overrides the runner ServiceAccount. When unset the
+                      controller creates captf-runner, bound to the static captf-runner
+                      ClusterRole. An override ServiceAccount must exist and carry the label
+                      captf.io/runner=true, or no Job is created.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  successfulJobsHistoryLimit:
+                    description: |-
+                      successfulJobsHistoryLimit is how many succeeded Jobs to keep per object
+                      and operation. The newest succeeded Job of each operation is kept even
+                      at 0. Defaults to 3, applied at reconcile.
+                    format: int32
+                    maximum: 100
+                    minimum: 0
+                    type: integer
+                type: object
+              membershipRefreshIntervalSeconds:
+                description: |-
+                  membershipRefreshIntervalSeconds is how often the controller runs
+                  `apply -refresh-only` to pick up group membership changes (new or
+                  departed instances) between applies, in seconds
+                  (https://captf.io/docs/module-author/contract/v1alpha1/machinepool.html "Membership refresh"). 0 (unset)
+                  means 60, applied at reconcile; the CRD schema's minimum of 15 makes 0
+                  itself an invalid setting, so it unambiguously means unset, the same
+                  convention as activeDeadlineSeconds and unhealthyThreshold
+                  (kube-api-linter optionalfields: WhenRequired).
+                format: int32
+                maximum: 86400
+                minimum: 15
+                type: integer
+              providerID:
+                description: |-
+                  providerID is the scaling group's provider ID, set by the controller
+                  from the module's provider_id output. Optional in the InfraMachinePool
+                  contract; may stay unset for group-less implementations.
+                maxLength: 512
+                minLength: 1
+                type: string
+              providerIDList:
+                description: |-
+                  providerIDList are the provider IDs of every non-terminated member of
+                  the group, set by the controller from the module's provider_id_list
+                  output. Each entry must equal the corresponding Node's spec.providerID.
+                items:
+                  maxLength: 512
+                  minLength: 1
+                  type: string
+                maxItems: 10000
+                type: array
+                x-kubernetes-list-type: atomic
+              source:
+                description: 'source is the role image: module code and runtime.'
+                properties:
+                  image:
+                    description: |-
+                      image is the OCI image reference, registry/repo:tag or
+                      registry/repo@sha256:digest. The tag or digest is the module version.
+                      Referencing an image grants its publisher Secret-read and cloud-credential
+                      access in this namespace.
+                    maxLength: 512
+                    minLength: 1
+                    type: string
+                  imagePullPolicy:
+                    description: |-
+                      imagePullPolicy for the image. Defaults to IfNotPresent, applied when the
+                      Job is built; Always is recommended for mutable tags.
+                    enum:
+                    - IfNotPresent
+                    - Always
+                    - Never
+                    type: string
+                required:
+                - image
+                type: object
+              variables:
+                description: |-
+                  variables are module variables, a JSON object: each key becomes a
+                  named argument of the role module, converted by the module's declared
+                  type. Keys are Terraform identifiers; captf_ names and the role's
+                  contract inputs are reserved. Inline variables win over variablesFrom.
+                  Whether a change re-applies or is rejected as immutable depends on the
+                  kind. A key the module does not declare fails the apply ("Unsupported
+                  argument").
+                maxProperties: 256
+                minProperties: 1
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              variablesFrom:
+                description: |-
+                  variablesFrom reads module variables from ConfigMaps and Secrets in
+                  this namespace labeled captf.io/variables=true, in list order: a later
+                  source wins on the same key, and inline variables win over all of
+                  them. Whether and when a change to a referenced source takes effect
+                  depends on the kind.
+                items:
+                  description: |-
+                    VariablesSource reads module variables from the data of one ConfigMap or
+                    Secret in the object's namespace: every data key becomes a variable of the
+                    same name. The source must carry the label captf.io/variables=true.
+                    Variables from a Secret are declared sensitive in the generated root, so
+                    Terraform redacts them in plan and apply output; they are still stored in
+                    the inputs Secrets and in state, like every input.
+                  properties:
+                    configMapRef:
+                      description: |-
+                        configMapRef names a ConfigMap. Exactly one of configMapRef and
+                        secretRef is set.
+                      properties:
+                        name:
+                          description: name of the ConfigMap or Secret.
+                          maxLength: 253
+                          minLength: 1
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    format:
+                      description: |-
+                        format of the data values: String passes each value as a string, JSON
+                        parses each as JSON. Defaults to String, applied at reconcile.
+                      enum:
+                      - String
+                      - JSON
+                      type: string
+                    optional:
+                      description: |-
+                        optional makes a missing or unlabeled source contribute nothing
+                        instead of holding the object at DependenciesReady False
+                        (VariablesSourceNotFound). Defaults to false.
+                      type: boolean
+                    secretRef:
+                      description: |-
+                        secretRef names a Secret. Exactly one of configMapRef and secretRef is
+                        set.
+                      properties:
+                        name:
+                          description: name of the ConfigMap or Secret.
+                          maxLength: 253
+                          minLength: 1
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                          type: string
+                      required:
+                      - name
+                      type: object
+                  type: object
+                  x-kubernetes-validations:
+                  - message: exactly one of the fields in [configMapRef secretRef]
+                      must be set
+                    rule: '[has(self.configMapRef),has(self.secretRef)].filter(x,x==true).size()
+                      == 1'
+                maxItems: 16
+                minItems: 1
+                type: array
+                x-kubernetes-list-type: atomic
+            required:
+            - source
+            type: object
+          status:
+            description: status is the observed state of the TerraformMachinePool.
+            minProperties: 1
+            properties:
+              activeJob:
+                description: activeJob is the Job currently running for this object,
+                  if any.
+                properties:
+                  attempt:
+                    description: |-
+                      attempt is the operation's Job sequence number, the a<N> in the Job
+                      name, starting at 1. It counts every Job of the operation still
+                      retained, not retries: the 40th refresh is attempt 40.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  name:
+                    description: name of the Job.
+                    maxLength: 63
+                    minLength: 1
+                    type: string
+                  operation:
+                    description: operation the Job runs.
+                    enum:
+                    - apply
+                    - destroy
+                    - drift
+                    - refresh
+                    - restore
+                    - plan
+                    type: string
+                  startTime:
+                    description: startTime of the Job.
+                    format: date-time
+                    type: string
+                required:
+                - attempt
+                - name
+                - operation
+                type: object
+              conditions:
+                description: |-
+                  conditions of the TerraformMachinePool. Ready is mirrored by Cluster
+                  API into the MachinePool's InfrastructureReady condition.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                maxItems: 32
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              initialization:
+                description: initialization is the v1beta2 contract's initialization
+                  status.
+                minProperties: 1
+                properties:
+                  provisioned:
+                    description: |-
+                      provisioned is true once the infrastructure is provisioned: derived from
+                      state until it first holds, then latched for the object's life.
+                    type: boolean
+                type: object
+              instances:
+                description: |-
+                  instances are the group's members, from the module's instances
+                  output. Provider-defined shape; not used by core Cluster API.
+                items:
+                  description: |-
+                    MachinePoolInstance is one entry of a TerraformMachinePool's
+                    status.instances, mapped from the module's instances output
+                    (https://captf.io/docs/module-author/contract/v1alpha1/machinepool.html "instances").
+                  minProperties: 1
+                  properties:
+                    addresses:
+                      description: addresses of the instance.
+                      items:
+                        description: MachineAddress contains information for the node's
+                          address.
+                        properties:
+                          address:
+                            description: address is the machine address.
+                            maxLength: 256
+                            minLength: 1
+                            type: string
+                          type:
+                            description: type is the machine address type, one of
+                              Hostname, ExternalIP, InternalIP, ExternalDNS or InternalDNS.
+                            enum:
+                            - Hostname
+                            - ExternalIP
+                            - InternalIP
+                            - ExternalDNS
+                            - InternalDNS
+                            type: string
+                        required:
+                        - address
+                        - type
+                        type: object
+                      maxItems: 256
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: atomic
+                    failureDomain:
+                      description: failureDomain the instance actually runs in.
+                      maxLength: 256
+                      minLength: 1
+                      type: string
+                    instanceID:
+                      description: |-
+                        instanceID is a provider-defined identifier, distinct from providerID
+                        when the module has one to give.
+                      maxLength: 256
+                      minLength: 1
+                      type: string
+                    providerID:
+                      description: providerID of the instance.
+                      maxLength: 512
+                      minLength: 1
+                      type: string
+                    state:
+                      description: state of the instance, the health.state enum.
+                      enum:
+                      - pending
+                      - running
+                      - degraded
+                      - stopped
+                      - terminated
+                      - unknown
+                      type: string
+                  required:
+                  - providerID
+                  type: object
+                maxItems: 1000
+                minItems: 1
+                type: array
+                x-kubernetes-list-type: atomic
+              lastDriftCheck:
+                description: lastDriftCheck is when the last drift check completed.
+                format: date-time
+                type: string
+              lastRefresh:
+                description: |-
+                  lastRefresh is when the last refresh or drift check completed, or,
+                  for a kind whose apply itself can give a definite health reading,
+                  when that apply finished instead (that reading stands in for the
+                  refresh after the apply).
+                format: date-time
+                type: string
+              lastRestoredSerial:
+                description: |-
+                  lastRestoredSerial is the backup serial of the last restore Job the
+                  controller consumed (succeeded or failed), so a restore-state
+                  annotation naming it is not run again.
+                format: int64
+                minimum: 1
+                type: integer
+              lastRun:
+                description: lastRun is the result of the most recent completed Job.
+                properties:
+                  drift:
+                    description: drift is set when a drift run found changes.
+                    minProperties: 1
+                    properties:
+                      add:
+                        description: add is the number of resources the plan would
+                          create.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      change:
+                        description: change is the number of resources the plan would
+                          update in place.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      destroy:
+                        description: |-
+                          destroy is the number of resources the plan would destroy, counting
+                          replacements.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      resources:
+                        description: resources are the addresses of the drifted resources,
+                          at most 20.
+                        items:
+                          maxLength: 512
+                          minLength: 1
+                          type: string
+                        maxItems: 20
+                        minItems: 1
+                        type: array
+                        x-kubernetes-list-type: atomic
+                    type: object
+                  error:
+                    description: error is set when the run failed.
+                    properties:
+                      kind:
+                        description: kind of failure.
+                        enum:
+                        - image-layout
+                        - step
+                        - interrupted
+                        - blocked
+                        - plan-changed
+                        type: string
+                      step:
+                        description: step that failed, for kind step.
+                        maxLength: 64
+                        minLength: 1
+                        type: string
+                      summary:
+                        description: |-
+                          summary is the runner's short description of the failure, at most 512
+                          bytes. It is not raw stderr: status is readable by everyone who can get
+                          the object, so the full output stays in the Job's logs.
+                        maxLength: 512
+                        minLength: 1
+                        type: string
+                    required:
+                    - kind
+                    type: object
+                  job:
+                    description: job is the name of the Job.
+                    maxLength: 63
+                    minLength: 1
+                    type: string
+                  operation:
+                    description: operation the Job ran.
+                    enum:
+                    - apply
+                    - destroy
+                    - drift
+                    - refresh
+                    - restore
+                    - plan
+                    type: string
+                  steps:
+                    description: steps the runner executed, in order.
+                    items:
+                      description: RunStep is one runtime command the runner executed.
+                      properties:
+                        durationMilliseconds:
+                          description: durationMilliseconds is the step's wall time,
+                            in milliseconds.
+                          format: int64
+                          minimum: 0
+                          type: integer
+                        exitCode:
+                          description: exitCode of the step.
+                          format: int32
+                          type: integer
+                        name:
+                          description: name of the step, e.g. init, validate, plan,
+                            apply, apply-refresh-only.
+                          maxLength: 64
+                          minLength: 1
+                          type: string
+                      required:
+                      - exitCode
+                      - name
+                      type: object
+                    maxItems: 16
+                    minItems: 1
+                    type: array
+                    x-kubernetes-list-type: atomic
+                required:
+                - job
+                - operation
+                type: object
+              observedGeneration:
+                description: observedGeneration is the generation this status was
+                  computed for.
+                format: int64
+                minimum: 1
+                type: integer
+              observedStateSerial:
+                description: |-
+                  observedStateSerial is the Terraform state serial the outputs were read
+                  from.
+                format: int64
+                minimum: 1
+                type: integer
+              pendingRefreshes:
+                description: |-
+                  pendingRefreshes counts the consecutive health samples (completed
+                  refresh or drift Jobs) that read pending since the last other reading
+                  or the last apply; unset otherwise. It spaces the refreshes while
+                  health is pending: 30s, then 1m, 2m, 4m and at most 5m. It lives in
+                  status only, so it restarts at 0 (30s) after clusterctl move.
+                format: int32
+                minimum: 1
+                type: integer
+              ready:
+                description: |-
+                  ready is the v1beta1 compatibility field Cluster API v1.14 still reads
+                  to decide the pool is provisioned (external.IsReady,
+                  capi/core/reconcilers/machinepool/machinepool_controller_phases.go).
+                  It is latched together with initialization.provisioned: once true, it
+                  stays true for the object's life.
+                type: boolean
+              replicas:
+                description: |-
+                  replicas is the group's desired capacity as observed at the last
+                  refresh, from the module's replicas output. Outside a scaling
+                  transition it equals len(providerIDList).
+                format: int32
+                minimum: 0
+                type: integer
+              source:
+                description: source records what the last Job actually ran.
+                minProperties: 1
+                properties:
+                  image:
+                    description: image is the reference that was run last, as given
+                      in the spec.
+                    maxLength: 512
+                    minLength: 1
+                    type: string
+                  imageDigest:
+                    description: |-
+                      imageDigest is the digest the container runtime resolved the image to
+                      (pod status imageID). Informational: the pinned copy lives on the durable
+                      inputs Secret as captf.io/image-digest.
+                    maxLength: 512
+                    minLength: 1
+                    type: string
+                  runtimeVersion:
+                    description: runtimeVersion reported by `<command> version -json`.
+                    maxLength: 64
+                    minLength: 1
+                    type: string
+                type: object
+              stateBackups:
+                description: |-
+                  stateBackups are the state backups the controller keeps (newest
+                  first), as of the last backup, prune or restore request.
+                items:
+                  description: |-
+                    StateBackup is one versioned copy of the object's Terraform state that
+                    the controller keeps in a captf-state-backup-* Secret.
+                  properties:
+                    bytes:
+                      description: bytes is the compressed size of the backup summed
+                        over its Secrets.
+                      format: int64
+                      minimum: 1
+                      type: integer
+                    serial:
+                      description: |-
+                        serial is the state serial the backup holds; set it as the
+                        captf.io/restore-state annotation to restore it.
+                      format: int64
+                      minimum: 1
+                      type: integer
+                    takenAt:
+                      description: takenAt is when the controller copied the state.
+                      format: date-time
+                      type: string
+                  required:
+                  - bytes
+                  - serial
+                  - takenAt
+                  type: object
+                maxItems: 16
+                minItems: 1
+                type: array
+                x-kubernetes-list-type: atomic
+              stateSecretSuffix:
+                description: |-
+                  stateSecretSuffix is the kubernetes backend secret_suffix of this
+                  object's state. Informational: the controller derives it
+                  deterministically.
+                maxLength: 63
+                minLength: 1
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

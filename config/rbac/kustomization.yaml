@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+# The manager's ServiceAccount and ClusterRole; role.yaml is generated from
+# the markers in internal/controllers/rbac.go by `make manifests`.
+- service_account.yaml
+- role.yaml
+- role_binding.yaml
+# Leader election, namespaced to the manager namespace.
+- leader_election_role.yaml
+- leader_election_role_binding.yaml
+# The static runner ClusterRole, bound per namespace by the manager.
+- runner_clusterrole.yaml

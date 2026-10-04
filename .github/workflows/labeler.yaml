@@ -1,0 +1,31 @@
+# Labels pull requests by the areas they touch (.github/labeler.yml), so
+# reviews and release notes can be filtered by area.
+#
+# pull_request_target runs in the base repository's context so a PR from a
+# fork can be labeled. That is safe here only because this workflow never
+# checks out or runs the PR's code: actions/labeler reads the changed file
+# list through the API. Never add a checkout of the PR head to this file.
+name: labeler
+
+on:
+  pull_request_target: # zizmor: ignore[dangerous-triggers] no PR code is checked out or run
+    types: [opened, synchronize, reopened]
+
+permissions: {}
+
+concurrency:
+  group: labeler-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  label:
+    name: label
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write # add and remove the PR's area labels
+    steps:
+      - uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13 # v7.0.0
+        with:
+          sync-labels: true

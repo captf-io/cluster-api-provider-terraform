@@ -1,0 +1,27 @@
+# gitleaks configuration: the default rules, plus a path and a value
+# allowlist.
+#
+# internal/state/testdata/fixtures/ holds kubernetes-backend state Secrets
+# captured from a throwaway API server (before the move, they lived in
+# test/fixtures/state/, which the path regex keeps allowlisted so a scan of
+# the full git history stays clean). Their gzip state
+# payloads (including 1.6 MiB of random data) and the hashed
+# tfstateSecretSuffix label values are high-entropy test data that the
+# generic-api-key rule flags. They contain no credential.
+#
+# The regexes are fixture values the generic-api-key rule flags in tests
+# and internal/jobs/testdata: the placeholder UID-derived suffixes
+# 0123456789abcdef-c and -m, and base64 of "secret-bootstrap" and
+# "#cloud-config\n". Matching values rather than commit fingerprints
+# keeps the allowlist valid across history rewrites.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Generated state fixtures and known test placeholder values"
+paths = ['''(^|/)(internal/state/testdata/fixtures|test/fixtures/state)/[^/]+\.yaml$''']
+regexes = [
+  '''^0123456789abcdef-[cm]$''',
+  '''^c2VjcmV0LWJvb3RzdHJhcA==$''',
+  '''^I2Nsb3VkLWNvbmZpZwo=$''',
+]

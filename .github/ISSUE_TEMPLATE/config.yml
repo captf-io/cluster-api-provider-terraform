@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/captf-io/cluster-api-provider-terraform/security/advisories/new
+    about: Report vulnerabilities privately, never in a public issue.
+  - name: Documentation
+    url: https://captf.io/docs/
+    about: Concepts, user and operator guides, runbooks and the module contract.

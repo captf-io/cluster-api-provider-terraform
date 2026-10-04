@@ -1,0 +1,170 @@
+# Default flavor: a kubeadm control plane and one MachineDeployment, on
+# infrastructure the TerraformCluster and TerraformMachine modules create
+# (templates/README.md lists the variables).
+#
+#   clusterctl generate cluster my-cluster --infrastructure terraform \
+#     --target-namespace team-a | kubectl apply -f -
+#
+# The identity is admin-applied and cluster-scoped (templates/identity.yaml):
+# apply it before this template. String variables are quoted and integer
+# ones are not, as in CAPI's own templates.
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: Cluster
+metadata:
+  name: "${CLUSTER_NAME}"
+spec:
+  clusterNetwork:
+    apiServerPort: 6443
+    pods:
+      cidrBlocks:
+      - "${POD_CIDR:=192.168.0.0/16}"
+    services:
+      cidrBlocks:
+      - "${SERVICE_CIDR:=10.128.0.0/12}"
+  controlPlaneRef:
+    apiGroup: controlplane.cluster.x-k8s.io
+    kind: KubeadmControlPlane
+    name: "${CLUSTER_NAME}-control-plane"
+  infrastructureRef:
+    apiGroup: infrastructure.cluster.x-k8s.io
+    kind: TerraformCluster
+    name: "${CLUSTER_NAME}"
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: TerraformCluster
+metadata:
+  name: "${CLUSTER_NAME}"
+spec:
+  source:
+    image: "${TERRAFORM_CLUSTER_IMAGE}"
+  identityRef:
+    name: "${TERRAFORM_IDENTITY_NAME}"
+  # Machines without their own identityRef use this one.
+  defaults:
+    identityRef:
+      name: "${TERRAFORM_IDENTITY_NAME}"
+---
+apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+kind: KubeadmControlPlane
+metadata:
+  name: "${CLUSTER_NAME}-control-plane"
+spec:
+  replicas: ${CONTROL_PLANE_MACHINE_COUNT}
+  version: "${KUBERNETES_VERSION}"
+  machineTemplate:
+    spec:
+      infrastructureRef:
+        apiGroup: infrastructure.cluster.x-k8s.io
+        kind: TerraformMachineTemplate
+        name: "${CLUSTER_NAME}-control-plane"
+  # A module that fails deterministically must not replace machines forever
+  # (cp-kubeadm.md K9): three attempts, five minutes apart.
+  remediation:
+    maxRetry: 3
+    retryPeriodSeconds: 300
+  # Replace in place instead of surging: no extra instance during a rollout,
+  # for quota-limited clouds. Needs an odd replica count >= 3 to stay
+  # available.
+  rollout:
+    strategy:
+      rollingUpdate:
+        maxSurge: 0
+  kubeadmConfigSpec:
+    # bindPort follows Cluster.spec.clusterNetwork.apiServerPort; kubeadm
+    # never reads that field, so the two are kept equal here
+    # (https://captf.io/docs/module-author/contract/v1alpha1/cluster.html "cluster_network").
+    initConfiguration:
+      localAPIEndpoint:
+        bindPort: 6443
+    joinConfiguration:
+      controlPlane:
+        localAPIEndpoint:
+          bindPort: 6443
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: TerraformMachineTemplate
+metadata:
+  name: "${CLUSTER_NAME}-control-plane"
+spec:
+  template:
+    spec:
+      source:
+        image: "${TERRAFORM_MACHINE_IMAGE}"
+---
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: MachineDeployment
+metadata:
+  name: "${CLUSTER_NAME}-md-0"
+spec:
+  clusterName: "${CLUSTER_NAME}"
+  replicas: ${WORKER_MACHINE_COUNT}
+  # CAPI's webhook fills in the selector and the template labels.
+  selector:
+    matchLabels:
+  template:
+    spec:
+      clusterName: "${CLUSTER_NAME}"
+      version: "${KUBERNETES_VERSION}"
+      bootstrap:
+        configRef:
+          apiGroup: bootstrap.cluster.x-k8s.io
+          kind: KubeadmConfigTemplate
+          name: "${CLUSTER_NAME}-md-0"
+      infrastructureRef:
+        apiGroup: infrastructure.cluster.x-k8s.io
+        kind: TerraformMachineTemplate
+        name: "${CLUSTER_NAME}-md-0"
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: TerraformMachineTemplate
+metadata:
+  name: "${CLUSTER_NAME}-md-0"
+spec:
+  template:
+    spec:
+      source:
+        image: "${TERRAFORM_MACHINE_IMAGE}"
+---
+apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
+kind: KubeadmConfigTemplate
+metadata:
+  name: "${CLUSTER_NAME}-md-0"
+---
+# Workers: InfrastructureReady=False (the module's health output) is
+# unhealthy after the timeout. It starts at apply start, so the timeout must
+# exceed apply time plus one drift interval (default 30m).
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: MachineHealthCheck
+metadata:
+  name: "${CLUSTER_NAME}-md-0"
+spec:
+  clusterName: "${CLUSTER_NAME}"
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/deployment-name: "${CLUSTER_NAME}-md-0"
+  checks:
+    nodeStartupTimeoutSeconds: ${TERRAFORM_NODE_STARTUP_TIMEOUT:=1200}
+    unhealthyMachineConditions:
+    - type: InfrastructureReady
+      status: "False"
+      timeoutSeconds: ${TERRAFORM_UNHEALTHY_TIMEOUT:=1800}
+---
+# Control plane: a longer remediation window, since replacing a
+# control-plane machine is costlier, and a longer node-startup window,
+# since kubeadm init/join plus kube-vip does strictly more work than a
+# worker join.
+apiVersion: cluster.x-k8s.io/v1beta2
+kind: MachineHealthCheck
+metadata:
+  name: "${CLUSTER_NAME}-control-plane"
+spec:
+  clusterName: "${CLUSTER_NAME}"
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/control-plane: ""
+  checks:
+    nodeStartupTimeoutSeconds: ${TERRAFORM_CP_NODE_STARTUP_TIMEOUT:=1800}
+    unhealthyMachineConditions:
+    - type: InfrastructureReady
+      status: "False"
+      timeoutSeconds: ${TERRAFORM_CP_UNHEALTHY_TIMEOUT:=3600}

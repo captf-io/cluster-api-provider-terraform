@@ -1,0 +1,62 @@
+# GoReleaser v2 config (GoReleaser v2.17.1, pinned in Makefile).
+# Builds only the tfcapi-lint release binaries (tfcapi-lint-<os>-<arch>).
+# The manager/runner image is built by
+# the podman targets (make docker-build / docker-buildx), not here.
+# Local dry run: make release-lint-snapshot (release --snapshot --clean:
+# named assets and checksums); goreleaser build --snapshot --clean builds
+# the bare binaries only.
+version: 2
+
+project_name: cluster-api-provider-terraform
+
+builds:
+  - id: tfcapi-lint
+    main: ./cmd/tfcapi-lint
+    binary: tfcapi-lint
+    env:
+      - CGO_ENABLED=0
+      # Workspace mode (go.work), as in the Makefile and Dockerfile: the main
+      # module imports the api module, which only go.work resolves.
+      - GOTOOLCHAIN=local
+    flags:
+      - -trimpath
+    # Mirrors the Makefile LDFLAGS (k8s.io/component-base/version).
+    ldflags:
+      - -s -w
+      - -X k8s.io/component-base/version.gitVersion={{ .Tag }}
+      - -X k8s.io/component-base/version.gitCommit={{ .FullCommit }}
+      - -X k8s.io/component-base/version.gitTreeState={{ .GitTreeState }}
+      - -X k8s.io/component-base/version.buildDate={{ .Date }}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+archives:
+  # Plain binaries named like the release assets (no tarball).
+  - id: tfcapi-lint
+    ids:
+      - tfcapi-lint
+    formats:
+      - binary
+    name_template: "tfcapi-lint-{{ .Os }}-{{ .Arch }}"
+
+checksum:
+  name_template: tfcapi-lint-checksums.txt
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  disable: true
+
+release:
+  # Release publishing (with the clusterctl assets) is not wired up here.
+  disable: true

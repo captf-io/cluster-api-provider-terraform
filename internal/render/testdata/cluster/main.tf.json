@@ -1,0 +1,67 @@
+{
+  "terraform": {
+    "backend": {
+      "kubernetes": {}
+    }
+  },
+  "variable": {
+    "captf_cluster": {
+      "type": "any"
+    },
+    "captf_contract": {
+      "type": "string"
+    },
+    "captf_object": {
+      "type": "any"
+    },
+    "captf_tags": {
+      "type": "map(string)"
+    },
+    "cluster_network": {
+      "type": "object({pods=list(string), services=list(string), service_domain=string, api_server_port=number})",
+      "default": null
+    },
+    "control_plane_endpoint": {
+      "type": "object({host=string, port=number})",
+      "default": null
+    },
+    "control_plane_initialized": {
+      "type": "bool"
+    },
+    "kubernetes_version": {
+      "type": "string",
+      "default": null
+    }
+  },
+  "module": {
+    "role": {
+      "captf_cluster": "${var.captf_cluster}",
+      "captf_contract": "${var.captf_contract}",
+      "captf_object": "${var.captf_object}",
+      "captf_tags": "${var.captf_tags}",
+      "cluster_network": "${var.cluster_network}",
+      "control_plane_endpoint": "${var.control_plane_endpoint}",
+      "control_plane_initialized": "${var.control_plane_initialized}",
+      "kubernetes_version": "${var.kubernetes_version}",
+      "source": "../../module"
+    }
+  },
+  "output": {
+    "control_plane_endpoint": {
+      "value": "${module.role.control_plane_endpoint}",
+      "sensitive": true
+    },
+    "exports": {
+      "value": "${module.role.exports}",
+      "sensitive": true
+    },
+    "failure_domains": {
+      "value": "${module.role.failure_domains}",
+      "sensitive": true
+    },
+    "health": {
+      "value": "${module.role.health}",
+      "sensitive": true
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "provider_id": "noop:///default/demo-cp-abcde",
+  "addresses": [
+    {
+      "type": "InternalIP",
+      "address": "10.0.0.1"
+    }
+  ],
+  "failure_domain": null,
+  "interruptible": false,
+  "health": {
+    "state": "running",
+    "healthy": true,
+    "message": null,
+    "reasons": []
+  }
+}

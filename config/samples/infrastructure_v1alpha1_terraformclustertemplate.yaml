@@ -1,0 +1,14 @@
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: TerraformClusterTemplate
+metadata:
+  labels:
+    app.kubernetes.io/name: cluster-api-provider-terraform
+    app.kubernetes.io/managed-by: kustomize
+  name: terraformclustertemplate-sample
+spec:
+  template:
+    spec:
+      source:
+        image: ghcr.io/example/cluster-module:v0.1.0
+      identityRef:
+        name: terraformclusteridentity-sample

@@ -1,0 +1,34 @@
+{
+  "captf_contract": "v1alpha1",
+  "captf_cluster": {
+    "name": "prod",
+    "namespace": "team-a"
+  },
+  "captf_object": {
+    "kind": "TerraformMachinePool",
+    "name": "prod-md-0-abcde",
+    "namespace": "team-a"
+  },
+  "captf_tags": {
+    "captf.io/cluster": "prod",
+    "captf.io/kind": "TerraformMachinePool",
+    "captf.io/managed-by": "captf",
+    "captf.io/name": "prod-md-0-abcde",
+    "captf.io/namespace": "team-a",
+    "captf.io/template": "prod-md-0"
+  },
+  "captf_cluster_outputs": {},
+  "machinepool_name": "prod-mp-0",
+  "replicas": 0,
+  "bootstrap_data": "e30=",
+  "bootstrap_format": "ignition",
+  "failure_domains": [],
+  "cluster_failure_domains": [],
+  "kubernetes_version": null,
+  "node_labels": {},
+  "autoscaling": {
+    "enabled": false,
+    "min": 0,
+    "max": 0
+  }
+}

@@ -1,0 +1,25 @@
+# Per-package statement-coverage floors, enforced by `make cover-check`
+# (hack/covercheck) over the profiles `make test-cover` writes to bin/.
+#
+# Syntax, one entry per line, "#" starts a comment:
+#   default <pct>                   floor for every package without a line
+#   <package> <pct>  # reason       floor for one package
+#   <package> exempt  # reason      package is reported but never gated
+# Packages are import paths relative to the module path
+# (github.com/captf-io/cluster-api-provider-terraform).
+#
+# The floors are a ratchet. When a package's coverage rises, raise its
+# floor (round down to the integer) in the same change. Never lower a
+# floor, or add an exemption, without a reason on the line.
+
+default 80
+
+# Main-only wiring packages: flag parsing and process start. The logic
+# they call lives in the app/ packages, which are gated below.
+cmd/manager exempt  # main-only wiring; logic lives in cmd/manager/app
+cmd/runner exempt  # main-only wiring; logic lives in cmd/runner/app
+cmd/tfcapi-lint exempt  # main-only wiring; logic lives in cmd/tfcapi-lint/app
+
+# Ratchet floors, below the default until their coverage catches up.
+cmd/manager/app 65  # measured 65.7% under -race on 2026-10-03; raise toward the default
+internal/plankey 78  # measured 78.8% under -race on 2026-10-03; raise toward the default

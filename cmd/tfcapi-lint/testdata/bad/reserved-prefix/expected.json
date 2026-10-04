@@ -1,0 +1,19 @@
+{
+  "module": "testdata/bad/reserved-prefix",
+  "contract": "v1alpha1",
+  "role": "machine",
+  "findings": [
+    {
+      "id": "input/reserved",
+      "severity": "error",
+      "file": "extra.tf",
+      "line": 1,
+      "message": "variable captf_extra uses the reserved captf_ prefix but is not a contract input"
+    }
+  ],
+  "summary": {
+    "error": 1,
+    "warning": 0,
+    "info": 0
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "control_plane_endpoint": {
+    "host": "api.example.com",
+    "port": 6443
+  },
+  "failure_domains": [
+    {
+      "name": "zone-a"
+    },
+    {
+      "name": "zone-b",
+      "control_plane": false,
+      "attributes": {
+        "rack": "2"
+      }
+    }
+  ],
+  "exports": {
+    "network_id": "net-1",
+    "subnets": [
+      "a",
+      "b"
+    ]
+  },
+  "health": {
+    "state": "running",
+    "healthy": true,
+    "message": null,
+    "reasons": []
+  }
+}

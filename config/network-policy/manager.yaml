@@ -1,0 +1,44 @@
+# The manager pod accepts only webhook, metrics and health-probe traffic, and
+# reaches only DNS, the API server and container registries.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: captf-controller-manager
+  namespace: captf-system
+spec:
+  podSelector:
+    matchLabels:
+      control-plane: controller-manager
+      app.kubernetes.io/name: cluster-api-provider-terraform
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Admission webhooks (the API server calls them, often from the host
+  # network, so no peer is pinned), the authenticated diagnostics/metrics
+  # endpoint, and the kubelet's liveness/readiness probes (some CNIs apply
+  # policy to node-originated traffic).
+  - ports:
+    - protocol: TCP
+      port: 9443
+    - protocol: TCP
+      port: 8443
+    - protocol: TCP
+      port: 9440
+  egress:
+  # DNS, wherever the cluster resolver runs.
+  - ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  # The API server (6443 on most distributions, 443 behind the `kubernetes`
+  # Service or a load balancer) and container registries over HTTPS: the
+  # manager reads module image metadata when it resolves a
+  # TerraformMachineTemplate's capacity. Narrow `to:` to the API server
+  # endpoints and your registries' addresses where they are known.
+  - ports:
+    - protocol: TCP
+      port: 6443
+    - protocol: TCP
+      port: 443

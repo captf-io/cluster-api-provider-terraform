@@ -1,0 +1,19 @@
+{
+  "module": "testdata/bad/missing-output",
+  "contract": "v1alpha1",
+  "role": "machine",
+  "findings": [
+    {
+      "id": "output/required",
+      "severity": "error",
+      "file": "",
+      "line": 0,
+      "message": "contract output interruptible is not declared"
+    }
+  ],
+  "summary": {
+    "error": 1,
+    "warning": 0,
+    "info": 0
+  }
+}

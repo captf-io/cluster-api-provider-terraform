@@ -1,0 +1,10 @@
+## Append samples of your project ##
+resources:
+- infrastructure_v1alpha1_terraformcluster.yaml
+- infrastructure_v1alpha1_terraformclustertemplate.yaml
+- infrastructure_v1alpha1_terraformmachine.yaml
+- infrastructure_v1alpha1_terraformmachinetemplate.yaml
+- infrastructure_v1alpha1_terraformmachinepool.yaml
+- infrastructure_v1alpha1_terraformmachinepooltemplate.yaml
+- infrastructure_v1alpha1_terraformclusteridentity.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples

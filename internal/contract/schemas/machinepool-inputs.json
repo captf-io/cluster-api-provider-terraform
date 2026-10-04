@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://captf.io/schemas/v1alpha1/machinepool-inputs.json",
+  "title": "CAPTF contract v1alpha1: machinepool role inputs",
+  "description": "The rendered terraform.tfvars.json of a TerraformMachinePool apply (common.md, machinepool.md). Module inputs are exactly the contract inputs: no other properties.",
+  "type": "object",
+  "properties": {
+    "captf_contract": { "$ref": "definitions.json#/$defs/captf_contract" },
+    "captf_cluster": { "$ref": "definitions.json#/$defs/captf_cluster" },
+    "captf_object": {
+      "$ref": "definitions.json#/$defs/captf_object",
+      "properties": { "kind": { "const": "TerraformMachinePool" } }
+    },
+    "captf_cluster_outputs": {
+      "description": "The cluster role's exports output, verbatim; {} when the TerraformCluster is externally managed."
+    },
+    "captf_tags": {
+      "$ref": "definitions.json#/$defs/captf_tags",
+      "properties": { "captf.io/kind": { "const": "TerraformMachinePool" } }
+    },
+    "machinepool_name": {
+      "description": "The owning CAPI MachinePool's name.",
+      "type": "string",
+      "minLength": 1
+    },
+    "replicas": {
+      "description": "The group's desired capacity: MachinePool.spec.replicas with autoscaling disabled, or the observed replicas output on every apply after the first with autoscaling enabled.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "bootstrap_data": {
+      "description": "Base64 (standard alphabet, padded) of the bootstrap Secret's value key, always encoded (machinepool.md). contentEncoding is an annotation only; the pattern is the assertion.",
+      "type": "string",
+      "contentEncoding": "base64",
+      "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+    },
+    "bootstrap_format": {
+      "description": "The bootstrap Secret's format key; cloud-config when absent.",
+      "enum": ["cloud-config", "ignition"]
+    },
+    "failure_domains": {
+      "description": "MachinePool.spec.failureDomains; may be [] (the module then chooses). At most 100 entries.",
+      "type": "array",
+      "maxItems": 100,
+      "items": { "$ref": "definitions.json#/$defs/failure_domain_name" }
+    },
+    "cluster_failure_domains": {
+      "description": "Names read from the cluster's own state's failure_domains output at render time; may be [].",
+      "type": "array",
+      "items": { "$ref": "definitions.json#/$defs/failure_domain_name" }
+    },
+    "kubernetes_version": {
+      "description": "MachinePool.spec.template.spec.version, verbatim (may carry a +rke2rN suffix), or null.",
+      "anyOf": [{ "$ref": "definitions.json#/$defs/kubernetes_version" }, { "type": "null" }]
+    },
+    "node_labels": {
+      "description": "MachinePool.spec.template.metadata.labels verbatim; {} when absent.",
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "autoscaling": {
+      "description": "The pool's only autoscaling switch, parsed from the MachinePool's autoscaler min/max-size annotations; {enabled=false, min=0, max=0} when absent, incomplete or invalid.",
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "min": { "type": "integer", "minimum": 0 },
+        "max": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["enabled", "min", "max"],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "captf_contract",
+    "captf_cluster",
+    "captf_object",
+    "captf_cluster_outputs",
+    "captf_tags",
+    "machinepool_name",
+    "replicas",
+    "bootstrap_data",
+    "bootstrap_format",
+    "failure_domains",
+    "cluster_failure_domains",
+    "kubernetes_version",
+    "node_labels",
+    "autoscaling"
+  ],
+  "additionalProperties": false
+}
