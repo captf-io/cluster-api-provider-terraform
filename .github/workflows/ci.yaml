@@ -13,11 +13,20 @@
 # limitations under the License.
 
 # Continuous integration: unit tests with a per-package coverage gate, lint,
-# the offline verify checks, license headers, and cross-platform builds. Security scanning
-# lives in security.yaml; Scorecard in scorecard.yaml.
+# the offline verify checks, license headers, and cross-platform builds.
+# Security scanning lives in security.yaml; Scorecard in scorecard.yaml.
 #
 # Branch protection needs one required check: "ci / ok", which fails when
-# any job here fails or is cancelled.
+# any job here fails or is cancelled. Jobs skipped by design (the arm64
+# cross-build on pull requests) count as passing.
+#
+# Speed: tools and Go build caches are restored per job (see the cache steps;
+# pull requests only restore, main, weekly and manual runs also save, to keep
+# the repository inside its cache quota),
+# the license-header and amd64 build checks share the verify job's runner, and
+# the slow, rarely-breaking checks (arm64 cross-build, release snapshot) run on
+# main, weekly and on demand. A pull request runs the snapshot only when a
+# release-relevant path changed.
 #
 # Checks NOT run here, and why:
 #   - docker-build with podman: the manager image is built (and scanned)
@@ -34,6 +43,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # Weekly (Monday): refreshes the caches and catches toolchain drift.
+    - cron: "41 5 * * 1"
   workflow_dispatch:
 
 permissions: {}
@@ -52,7 +64,7 @@ jobs:
   test:
     name: unit tests
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
@@ -62,13 +74,69 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The Go caches are restored by hand below (cache: false): setup-go's
+      # single shared key was saved by whichever job finished first, so the
+      # test job's -race objects and the arm64 objects were never persisted.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        id: go
         with:
           go-version-file: go.mod
-          cache-dependency-path: |
-            go.sum
-            api/go.sum
-            test/go.sum
+          cache: false
+      - name: Go cache paths
+        id: gopaths
+        run: |
+          echo "build=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+          echo "mod=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+      # One module cache shared by every job; a build cache per job, because
+      # each job compiles different objects (race and cover, arm64, lint).
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name == 'pull_request' }}
+        with:
+          path: ${{ steps.gopaths.outputs.mod }}
+          key: gomod-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}
+          restore-keys: |
+            gomod-${{ runner.os }}-${{ steps.go.outputs.go-version }}-
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name != 'pull_request' }}
+        with:
+          path: ${{ steps.gopaths.outputs.mod }}
+          key: gomod-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}
+          restore-keys: |
+            gomod-${{ runner.os }}-${{ steps.go.outputs.go-version }}-
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name == 'pull_request' }}
+        with:
+          path: ${{ steps.gopaths.outputs.build }}
+          key: go-test-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-test-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}-
+            go-test-${{ runner.os }}-${{ steps.go.outputs.go-version }}-
+      # Pinned tools are built or downloaded into hack/tools/bin; a restored
+      # binary short-circuits the Makefile rule. The key covers only the
+      # version file, so unrelated Makefile edits keep the cache.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name != 'pull_request' }}
+        with:
+          path: ${{ steps.gopaths.outputs.build }}
+          key: go-test-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-test-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}-
+            go-test-${{ runner.os }}-${{ steps.go.outputs.go-version }}-
+      # Pinned tools are built or downloaded into hack/tools/bin; a restored
+      # binary short-circuits the Makefile rule. The key covers only the
+      # version file, so unrelated Makefile edits keep the cache.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name == 'pull_request' }}
+        with:
+          path: hack/tools/bin
+          key: tools-test-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('hack/tools/versions.mk') }}
+      # -race, -covermode=atomic; gotestsum's github-actions format folds
+      # each package's output and annotates failures on the PR diff.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name != 'pull_request' }}
+        with:
+          path: hack/tools/bin
+          key: tools-test-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('hack/tools/versions.mk') }}
       # -race, -covermode=atomic; gotestsum's github-actions format folds
       # each package's output and annotates failures on the PR diff.
       - name: Test
@@ -91,7 +159,7 @@ jobs:
   lint:
     name: lint
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
@@ -101,13 +169,87 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The Go caches are restored by hand below (cache: false): setup-go's
+      # single shared key was saved by whichever job finished first, so the
+      # test job's -race objects and the arm64 objects were never persisted.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        id: go
         with:
           go-version-file: go.mod
-          cache-dependency-path: |
-            go.sum
-            api/go.sum
-            test/go.sum
+          cache: false
+      - name: Go cache paths
+        id: gopaths
+        run: |
+          echo "build=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+          echo "mod=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+      # One module cache shared by every job; a build cache per job, because
+      # each job compiles different objects (race and cover, arm64, lint).
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name == 'pull_request' }}
+        with:
+          path: ${{ steps.gopaths.outputs.mod }}
+          key: gomod-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}
+          restore-keys: |
+            gomod-${{ runner.os }}-${{ steps.go.outputs.go-version }}-
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name != 'pull_request' }}
+        with:
+          path: ${{ steps.gopaths.outputs.mod }}
+          key: gomod-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}
+          restore-keys: |
+            gomod-${{ runner.os }}-${{ steps.go.outputs.go-version }}-
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name == 'pull_request' }}
+        with:
+          path: ${{ steps.gopaths.outputs.build }}
+          key: go-lint-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-lint-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}-
+            go-lint-${{ runner.os }}-${{ steps.go.outputs.go-version }}-
+      # Pinned tools are built or downloaded into hack/tools/bin; a restored
+      # binary short-circuits the Makefile rule. The key covers only the
+      # version file, so unrelated Makefile edits keep the cache.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name != 'pull_request' }}
+        with:
+          path: ${{ steps.gopaths.outputs.build }}
+          key: go-lint-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-lint-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}-
+            go-lint-${{ runner.os }}-${{ steps.go.outputs.go-version }}-
+      # Pinned tools are built or downloaded into hack/tools/bin; a restored
+      # binary short-circuits the Makefile rule. The key covers only the
+      # version file, so unrelated Makefile edits keep the cache.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name == 'pull_request' }}
+        with:
+          path: hack/tools/bin
+          key: tools-lint-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('hack/tools/versions.mk') }}
+      # golangci-lint's own analysis cache: a cold run is ~2 minutes.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name != 'pull_request' }}
+        with:
+          path: hack/tools/bin
+          key: tools-lint-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('hack/tools/versions.mk') }}
+      # golangci-lint's own analysis cache: a cold run is ~2 minutes.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name == 'pull_request' }}
+        with:
+          path: ~/.cache/golangci-lint
+          key: golangci-lint-${{ runner.os }}-${{ hashFiles('.golangci.yml', 'go.sum', 'api/go.sum', 'test/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            golangci-lint-${{ runner.os }}-${{ hashFiles('.golangci.yml', 'go.sum', 'api/go.sum', 'test/go.sum') }}-
+            golangci-lint-${{ runner.os }}-
+      # golangci-lint (.golangci.yml) in every module and on the test
+      # module's e2e-tagged code, and kube-api-linter on api/.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name != 'pull_request' }}
+        with:
+          path: ~/.cache/golangci-lint
+          key: golangci-lint-${{ runner.os }}-${{ hashFiles('.golangci.yml', 'go.sum', 'api/go.sum', 'test/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            golangci-lint-${{ runner.os }}-${{ hashFiles('.golangci.yml', 'go.sum', 'api/go.sum', 'test/go.sum') }}-
+            golangci-lint-${{ runner.os }}-
       # golangci-lint (.golangci.yml) in every module and on the test
       # module's e2e-tagged code, and kube-api-linter on api/.
       - name: Lint
@@ -118,7 +260,7 @@ jobs:
   verify:
     name: verify
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
@@ -131,13 +273,67 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      # The Go caches are restored by hand below (cache: false): setup-go's
+      # single shared key was saved by whichever job finished first, so the
+      # test job's -race objects and the arm64 objects were never persisted.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        id: go
         with:
           go-version-file: go.mod
-          cache-dependency-path: |
-            go.sum
-            api/go.sum
-            test/go.sum
+          cache: false
+      - name: Go cache paths
+        id: gopaths
+        run: |
+          echo "build=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+          echo "mod=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+      # One module cache shared by every job; a build cache per job, because
+      # each job compiles different objects (race and cover, arm64, lint).
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name == 'pull_request' }}
+        with:
+          path: ${{ steps.gopaths.outputs.mod }}
+          key: gomod-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}
+          restore-keys: |
+            gomod-${{ runner.os }}-${{ steps.go.outputs.go-version }}-
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name != 'pull_request' }}
+        with:
+          path: ${{ steps.gopaths.outputs.mod }}
+          key: gomod-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}
+          restore-keys: |
+            gomod-${{ runner.os }}-${{ steps.go.outputs.go-version }}-
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name == 'pull_request' }}
+        with:
+          path: ${{ steps.gopaths.outputs.build }}
+          key: go-verify-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-verify-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}-
+            go-verify-${{ runner.os }}-${{ steps.go.outputs.go-version }}-
+      # Pinned tools are built or downloaded into hack/tools/bin; a restored
+      # binary short-circuits the Makefile rule. The key covers only the
+      # version file, so unrelated Makefile edits keep the cache.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name != 'pull_request' }}
+        with:
+          path: ${{ steps.gopaths.outputs.build }}
+          key: go-verify-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-verify-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}-
+            go-verify-${{ runner.os }}-${{ steps.go.outputs.go-version }}-
+      # Pinned tools are built or downloaded into hack/tools/bin; a restored
+      # binary short-circuits the Makefile rule. The key covers only the
+      # version file, so unrelated Makefile edits keep the cache.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name == 'pull_request' }}
+        with:
+          path: hack/tools/bin
+          key: tools-verify-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('hack/tools/versions.mk') }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name != 'pull_request' }}
+        with:
+          path: hack/tools/bin
+          key: tools-verify-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('hack/tools/versions.mk') }}
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
@@ -145,28 +341,46 @@ jobs:
       # hack/ci/requirements.txt (see requirements.in to regenerate).
       - name: Install Python dependencies
         run: python3 -m pip install --require-hashes -r hack/ci/requirements.txt
+      # Every source file carries the Apache-2.0 license header;
+      # .licenserc.yaml says which files need it. Runs here, not in a job of
+      # its own, to save a runner start.
+      - name: Check license headers
+        run: make check-headers CONTAINER_TOOL=docker
+      # The manager and runner ship in a distroless image and the runner is
+      # copied into module images, so both must be fully static.
+      - name: Build static manager and runner
+        env:
+          GOOS: linux
+          GOARCH: amd64
+        run: make manager runner
+      - name: Build every binary
+        env:
+          GOOS: linux
+          GOARCH: amd64
+        run: make build
       # Pinned tool binaries (controller-gen, kustomize, clusterctl,
       # promtool) are fetched into hack/tools/bin by the Makefile. -k runs
       # every check and reports all failures, not just the first.
+      # verify-components reads the flags of the manager built above instead
+      # of compiling it again with `go run`.
       - name: Verify
+        env:
+          MANAGER_BIN: ${{ github.workspace }}/bin/manager
         run: >-
           make -k verify-gen verify-godoc verify-components verify-templates
           verify-schemas verify-modules verify-metadata verify-version
           verify-local-repository check-licenses promtool-check promtool-test
           verify-test-tiers
 
-  build:
-    name: build (${{ matrix.goos }}/${{ matrix.goarch }})
+  # The arm64 cross-compile is the slowest build and rarely the first thing to
+  # break, so pull requests skip it.
+  build-arm64:
+    name: build (linux/arm64)
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
       contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { goos: linux, goarch: amd64 }
-          - { goos: linux, goarch: arm64 }
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
@@ -174,24 +388,60 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The Go caches are restored by hand below (cache: false): setup-go's
+      # single shared key was saved by whichever job finished first, so the
+      # test job's -race objects and the arm64 objects were never persisted.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        id: go
         with:
           go-version-file: go.mod
-          cache-dependency-path: |
-            go.sum
-            api/go.sum
-            test/go.sum
-      # The manager and runner ship in a distroless image and the runner is
-      # copied into module images, so both must be fully static.
+          cache: false
+      - name: Go cache paths
+        id: gopaths
+        run: |
+          echo "build=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+          echo "mod=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+      # One module cache shared by every job; a build cache per job, because
+      # each job compiles different objects (race and cover, arm64, lint).
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name == 'pull_request' }}
+        with:
+          path: ${{ steps.gopaths.outputs.mod }}
+          key: gomod-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}
+          restore-keys: |
+            gomod-${{ runner.os }}-${{ steps.go.outputs.go-version }}-
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name != 'pull_request' }}
+        with:
+          path: ${{ steps.gopaths.outputs.mod }}
+          key: gomod-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}
+          restore-keys: |
+            gomod-${{ runner.os }}-${{ steps.go.outputs.go-version }}-
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name == 'pull_request' }}
+        with:
+          path: ${{ steps.gopaths.outputs.build }}
+          key: go-build-arm64-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-build-arm64-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}-
+            go-build-arm64-${{ runner.os }}-${{ steps.go.outputs.go-version }}-
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name != 'pull_request' }}
+        with:
+          path: ${{ steps.gopaths.outputs.build }}
+          key: go-build-arm64-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-build-arm64-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}-
+            go-build-arm64-${{ runner.os }}-${{ steps.go.outputs.go-version }}-
       - name: Build static manager and runner
         env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
+          GOOS: linux
+          GOARCH: arm64
         run: make manager runner
       - name: Build every binary
         env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
+          GOOS: linux
+          GOARCH: arm64
         run: make build
 
   release-snapshot:
@@ -204,61 +454,124 @@ jobs:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
-      # GoReleaser derives the snapshot version from tags.
+      # GoReleaser derives the snapshot version from tags, and the change
+      # check below needs the base commit.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
+      # Pushes to main, the weekly run and manual runs always build the
+      # snapshot; a pull request builds it only when a file that feeds
+      # tfcapi-lint or its release changed. publish.yaml runs GoReleaser on tags.
+      - name: Detect release-relevant changes
+        id: rel
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [[ "${EVENT}" != "pull_request" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          pattern='^(\.goreleaser\.yaml|Makefile|go\.mod|go\.sum|go\.work|hack/tools/versions\.mk|api/|cmd/tfcapi-lint/|internal/(contract|lint|imageinspect)/)'
+          if git diff --name-only "${BASE_SHA}" HEAD | grep -Eq "${pattern}"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No release-relevant files changed; skipping the snapshot."
+          fi
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: ${{ steps.rel.outputs.run == 'true' }}
+        id: go
         with:
           go-version-file: go.mod
-          cache-dependency-path: |
-            go.sum
-            api/go.sum
-            test/go.sum
+          cache: false
+      - name: Go cache paths
+        if: ${{ steps.rel.outputs.run == 'true' }}
+        id: gopaths
+        run: |
+          echo "build=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+          echo "mod=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+      # One module cache shared by every job; a build cache per job, because
+      # each job compiles different objects (race and cover, arm64, lint).
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name == 'pull_request' && (steps.rel.outputs.run == 'true') }}
+        with:
+          path: ${{ steps.gopaths.outputs.mod }}
+          key: gomod-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}
+          restore-keys: |
+            gomod-${{ runner.os }}-${{ steps.go.outputs.go-version }}-
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name != 'pull_request' && (steps.rel.outputs.run == 'true') }}
+        with:
+          path: ${{ steps.gopaths.outputs.mod }}
+          key: gomod-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}
+          restore-keys: |
+            gomod-${{ runner.os }}-${{ steps.go.outputs.go-version }}-
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name == 'pull_request' && (steps.rel.outputs.run == 'true') }}
+        with:
+          path: ${{ steps.gopaths.outputs.build }}
+          key: go-release-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-release-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}-
+            go-release-${{ runner.os }}-${{ steps.go.outputs.go-version }}-
+      # Pinned tools are built or downloaded into hack/tools/bin; a restored
+      # binary short-circuits the Makefile rule. The key covers only the
+      # version file, so unrelated Makefile edits keep the cache.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name != 'pull_request' && (steps.rel.outputs.run == 'true') }}
+        with:
+          path: ${{ steps.gopaths.outputs.build }}
+          key: go-release-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-release-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}-
+            go-release-${{ runner.os }}-${{ steps.go.outputs.go-version }}-
+      # Pinned tools are built or downloaded into hack/tools/bin; a restored
+      # binary short-circuits the Makefile rule. The key covers only the
+      # version file, so unrelated Makefile edits keep the cache.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name == 'pull_request' && (steps.rel.outputs.run == 'true') }}
+        with:
+          path: hack/tools/bin
+          key: tools-release-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('hack/tools/versions.mk') }}
+      # Cross-compiles tfcapi-lint for every released platform (.goreleaser.yaml)
+      # and writes checksums; nothing is published.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name != 'pull_request' && (steps.rel.outputs.run == 'true') }}
+        with:
+          path: hack/tools/bin
+          key: tools-release-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('hack/tools/versions.mk') }}
       # Cross-compiles tfcapi-lint for every released platform (.goreleaser.yaml)
       # and writes checksums; nothing is published.
       - name: GoReleaser snapshot
+        if: ${{ steps.rel.outputs.run == 'true' }}
         run: make release-lint-snapshot
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ steps.rel.outputs.run == 'true' }}
         with:
           name: tfcapi-lint-snapshot
           path: dist/
           retention-days: 7
 
-  license-headers:
-    name: license headers
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
-        with:
-          egress-policy: audit
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      # Every source file carries the Apache-2.0 license header;
-      # .licenserc.yaml says which files need it.
-      - name: Check license headers
-        run: make check-headers CONTAINER_TOOL=docker
-
   ok:
     name: ok
     if: ${{ always() }}
-    needs: [test, lint, verify, license-headers, build, release-snapshot]
+    needs: [test, lint, verify, build-arm64, release-snapshot]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}
     steps:
+      # "skipped" is a pass: build-arm64 skips on pull requests by design. A
+      # job that never ran because a dependency failed reports "failure" or
+      # "cancelled" here, which still fails the check.
       - name: Check every job passed
         env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
           echo "job results: ${RESULTS}"
           for r in ${RESULTS}; do
-            if [[ "${r}" != "success" ]]; then
+            if [[ "${r}" != "success" && "${r}" != "skipped" ]]; then
               echo "::error::a required job finished with '${r}'"
               exit 1
             fi
