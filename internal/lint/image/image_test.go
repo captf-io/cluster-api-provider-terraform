@@ -401,15 +401,27 @@ func TestExtractLimits(t *testing.T) {
 	if _, _, _, err := checkImage(img, Options{Role: contract.RoleCluster, Contract: contract.Version, MaxBytes: 1024}); !errors.Is(err, ErrTooLarge) {
 		t.Errorf("err = %v", err)
 	}
-	// A name that tries to climb out stays inside the extraction root.
+	// A name that tries to climb out never lands outside the extraction
+	// root. Older go-containerregistry hands it to extract, which clamps it
+	// under the root; v0.22+ drops such entries before extract sees them.
+	// Either is safe; writing outside the root is not.
 	img = build(t, "amd64", nil, append(goodEntries(t, "cluster"), file("../../captf/module/escape.tf", "")))
-	root := t.TempDir()
+	parent := t.TempDir()
+	root := filepath.Join(parent, "a", "b")
+	if err := os.MkdirAll(root, 0o750); err != nil {
+		t.Fatal(err)
+	}
 	tr, err := extract(img, root, DefaultMaxBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "captf", "module", "escape.tf")); err != nil || tr.headers["/captf/module/escape.tf"] == nil {
-		t.Errorf("escape.tf not under the root: %v", err)
+	if _, err := os.Stat(filepath.Join(parent, "captf", "module", "escape.tf")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("escape.tf landed outside the extraction root (stat err %v)", err)
+	}
+	if tr.headers["/captf/module/escape.tf"] != nil {
+		if _, err := os.Stat(filepath.Join(root, "captf", "module", "escape.tf")); err != nil {
+			t.Errorf("escape.tf recorded but not written under the root: %v", err)
+		}
 	}
 	// A module that does not parse is an error (exit 2), not findings.
 	img = build(t, "amd64", nil, append(goodEntries(t, "cluster"), file("captf/module/broken.tf", "variable {")))
