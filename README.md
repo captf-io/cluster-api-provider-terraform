@@ -105,16 +105,13 @@ for the rest of the workflow.
 
 ## Releasing
 
-A release needs a clean tree with `HEAD` tagged `vX.Y.Z` (or `vX.Y.Z-rc.N`).
-Then:
-
-```sh
-make release VERSION=vX.Y.Z
-```
-
-This pushes the manager image and builds every release asset into
-`out/release`. The [releasing guide](https://captf.io/docs/developer-guide/releasing.html)
-has the checklist.
+Pushing a `vX.Y.Z` (or `vX.Y.Z-rc.N`) tag is the release:
+[publish.yaml](.github/workflows/publish.yaml) runs `make release-preflight`,
+pushes the signed image, builds the release assets and creates the GitHub
+Release. `make release VERSION=vX.Y.Z` is the manual fallback for when CI
+cannot run; never run both for one tag. The [releasing
+guide](https://captf.io/docs/developer-guide/releasing.html) has the
+checklist.
 
 ## Security
 
