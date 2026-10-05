@@ -2,21 +2,30 @@
 # Verifies the Go workspace:
 #  - no replace directives in go.work or any go.mod;
 #  - go.work and every go.mod declare the same go version;
-#  - controller-runtime and the k8s.io staging modules resolve to the pinned
-#    versions in each module on its own (GOWORK=off) and in the workspace.
+#  - controller-runtime and the k8s.io staging modules stay on the pinned
+#    minor version (they move together with a Cluster API release), and
+#    every module resolves the same patch version, on its own (GOWORK=off)
+#    and in the workspace. Patch bumps are fine as long as they land in all
+#    modules at once.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODULES=(. api test)
 
+# Pinned minor versions ("v0.36" matches v0.36.x).
 declare -A PINS=(
-	[sigs.k8s.io/controller-runtime]=v0.24.1
-	[k8s.io/api]=v0.36.3
-	[k8s.io/apimachinery]=v0.36.3
-	[k8s.io/client-go]=v0.36.3
-	[k8s.io/apiextensions-apiserver]=v0.36.3
-	[k8s.io/component-base]=v0.36.3
+	[sigs.k8s.io/controller-runtime]=v0.24
+	[k8s.io/api]=v0.36
+	[k8s.io/apimachinery]=v0.36
+	[k8s.io/client-go]=v0.36
+	[k8s.io/apiextensions-apiserver]=v0.36
+	[k8s.io/component-base]=v0.36
 )
+
+# First version seen for each pinned path, and where: every other module
+# and mode must resolve the same one.
+declare -A SEEN=()
+declare -A SEEN_AT=()
 
 fail=0
 err() {
@@ -50,8 +59,17 @@ for m in "${MODULES[@]}"; do
 			if [[ "${mode}" == module ]]; then gowork=off; else gowork="${ROOT}/go.work"; fi
 			got="$(cd "${ROOT}/${m}" && GOWORK="${gowork}" go list -m -e -f '{{if not .Error}}{{.Version}}{{end}}' "${path}")"
 			# A module outside this module's graph is not a disagreement.
-			if [[ -n "${got}" && "${got}" != "${want}" ]]; then
-				err "${m} (${mode}): ${path} is ${got}, want ${want}"
+			if [[ -z "${got}" ]]; then
+				continue
+			fi
+			if [[ "${got}" != "${want}" && "${got}" != "${want}."* ]]; then
+				err "${m} (${mode}): ${path} is ${got}, want ${want}.x"
+			fi
+			if [[ -z "${SEEN[${path}]:-}" ]]; then
+				SEEN[${path}]="${got}"
+				SEEN_AT[${path}]="${m} (${mode})"
+			elif [[ "${got}" != "${SEEN[${path}]}" ]]; then
+				err "${m} (${mode}): ${path} is ${got}, but ${SEEN_AT[${path}]} has ${SEEN[${path}]}; bump every module together"
 			fi
 		done
 	done
