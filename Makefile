@@ -463,7 +463,7 @@ verify-version: ## Check that hack/version.sh prints a valid semantic version fo
 	@echo "VERSION=$(VERSION)"
 
 .PHONY: verify-modules
-verify-modules: ## Check go.work/go.mod pins and the no-replace rule.
+verify-modules: ## Check go.work/go.mod pins and that only this repo's own modules are replaced (locally).
 	hack/verify-modules.sh
 
 .PHONY: verify-schemas

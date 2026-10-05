@@ -5,6 +5,7 @@ go 1.26.0
 toolchain go1.26.8
 
 require (
+	github.com/captf-io/cluster-api-provider-terraform/api v0.0.0-00010101000000-000000000000
 	github.com/distribution/reference v0.6.0
 	github.com/google/go-containerregistry v0.20.8
 	github.com/hashicorp/hcl/v2 v2.20.1
@@ -24,12 +25,12 @@ require (
 	sigs.k8s.io/cluster-api v1.14.2
 	sigs.k8s.io/cluster-api/api v1.14.2
 	sigs.k8s.io/controller-runtime v0.24.1
-	sigs.k8s.io/yaml v1.6.0
 )
 
 require (
 	cel.dev/expr v0.25.2 // indirect
 	dario.cat/mergo v1.0.1 // indirect
+	github.com/Azure/go-ansiterm v0.0.0-20230124172434-306776ec8161 // indirect
 	github.com/Masterminds/goutils v1.1.1 // indirect
 	github.com/Masterminds/semver/v3 v3.4.0 // indirect
 	github.com/Masterminds/sprig/v3 v3.3.0 // indirect
@@ -75,6 +76,7 @@ require (
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
 	github.com/mitchellh/go-wordwrap v1.0.0 // indirect
 	github.com/mitchellh/reflectwalk v1.0.2 // indirect
+	github.com/moby/term v0.5.0 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
@@ -131,4 +133,7 @@ require (
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.2 // indirect
+	sigs.k8s.io/yaml v1.6.0 // indirect
 )
+
+replace github.com/captf-io/cluster-api-provider-terraform/api => ./api

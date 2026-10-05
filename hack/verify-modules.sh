@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Verifies the Go workspace:
-#  - no replace directives in go.work or any go.mod;
+#  - no replace directives in go.work or any go.mod, except a go.mod
+#    replacing one of this repository's own modules with its local
+#    directory (the root module's api => ./api). Tools that ignore go.work
+#    (Dependabot, go mod tidy, GOWORK=off) need it to resolve the api
+#    module without fetching it, and `go install ...@version` cannot work
+#    here anyway (the api module is not versioned);
 #  - go.work and every go.mod declare the same go version;
 #  - controller-runtime and the k8s.io staging modules stay on the pinned
 #    minor version (they move together with a Cluster API release), and
@@ -35,6 +40,8 @@ err() {
 
 cd "${ROOT}"
 
+REPO_MOD="$(go mod edit -json "${ROOT}/go.mod" | jq -r '.Module.Path')"
+
 work_go="$(go work edit -json | jq -r '.Go')"
 if [[ "$(go work edit -json | jq '.Replace // [] | length')" != 0 ]]; then
 	err "go.work contains replace directives"
@@ -44,9 +51,19 @@ for m in "${MODULES[@]}"; do
 	gomod="${ROOT}/${m}/go.mod"
 	json="$(go mod edit -json "${gomod}")"
 
-	if [[ "$(jq '.Replace // [] | length' <<<"${json}")" != 0 ]]; then
-		err "${m}/go.mod contains replace directives"
-	fi
+	# Only replaces of this repository's own modules by a local path that
+	# holds that module are allowed.
+	while IFS=$'\t' read -r old new; do
+		[[ -z "${old}" ]] && continue
+		if [[ "${old}" != "${REPO_MOD}/"* || "${new}" != ./* && "${new}" != ../* ]]; then
+			err "${m}/go.mod replaces ${old} => ${new}; only this repository's modules may be replaced, by a local path"
+			continue
+		fi
+		target="$(cd "${ROOT}/${m}" && go mod edit -json "${new}/go.mod" 2>/dev/null | jq -r '.Module.Path' || true)"
+		if [[ "${target}" != "${old}" ]]; then
+			err "${m}/go.mod replaces ${old} => ${new}, but ${new}/go.mod is module ${target:-<none>}"
+		fi
+	done < <(jq -r '.Replace // [] | .[] | [.Old.Path, .New.Path] | @tsv' <<<"${json}")
 
 	mod_go="$(jq -r '.Go' <<<"${json}")"
 	if [[ "${mod_go}" != "${work_go}" ]]; then
