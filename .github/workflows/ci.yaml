@@ -126,10 +126,10 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
-      # verify-schemas needs jsonschema >= 4.18; verify-components,
-      # verify-metadata and promtool-* need PyYAML.
+      # jsonschema and PyYAML for the verify scripts, hash-locked in
+      # hack/ci/requirements.txt (see requirements.in to regenerate).
       - name: Install Python dependencies
-        run: python3 -m pip install 'jsonschema>=4.18' PyYAML
+        run: python3 -m pip install --require-hashes -r hack/ci/requirements.txt
       # Pinned tool binaries (controller-gen, kustomize, clusterctl,
       # promtool) are fetched into hack/tools/bin by the Makefile. -k runs
       # every check and reports all failures, not just the first.

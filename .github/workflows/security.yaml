@@ -365,8 +365,9 @@ jobs:
       security-events: write # upload SARIF to code scanning
     env:
       ACTIONLINT_VERSION: 1.7.12
-      # The download script at the v1.7.12 release commit, not main.
-      ACTIONLINT_SCRIPT: https://raw.githubusercontent.com/rhysd/actionlint/914e7df21a07ef503a81201c76d2b11c789d3fca/scripts/download-actionlint.bash
+      # sha256 of actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz, from
+      # the release's checksums file; bump both together.
+      ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
@@ -384,7 +385,11 @@ jobs:
       # the shell in run steps.
       - name: actionlint
         run: |
-          bash <(curl -fsSL "${ACTIONLINT_SCRIPT}") "${ACTIONLINT_VERSION}" "${RUNNER_TEMP}"
+          tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSLo "${RUNNER_TEMP}/${tarball}" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
+          echo "${ACTIONLINT_SHA256}  ${RUNNER_TEMP}/${tarball}" | sha256sum -c -
+          tar -xzf "${RUNNER_TEMP}/${tarball}" -C "${RUNNER_TEMP}" actionlint
           "${RUNNER_TEMP}/actionlint" -color
 
   dependency-review:

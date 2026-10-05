@@ -1,0 +1,9 @@
+# Python packages the CI verify job needs. Regenerate the hash-locked
+# requirements.txt after changing this file:
+#   uv pip compile --generate-hashes --python-version 3.13 \
+#     -o hack/ci/requirements.txt hack/ci/requirements.in
+#
+# verify-schemas needs jsonschema >= 4.18 (referencing); verify-components,
+# verify-metadata and promtool-* need PyYAML.
+jsonschema>=4.18
+PyYAML

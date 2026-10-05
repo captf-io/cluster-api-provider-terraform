@@ -71,3 +71,18 @@ updates:
     commit-message:
       prefix: "deps"
     labels: [dependencies]
+
+  # The hash-locked Python packages the CI verify job installs
+  # (hack/ci/requirements.txt, compiled from requirements.in).
+  - package-ecosystem: pip
+    directory: "/hack/ci"
+    cooldown:
+      default-days: 7
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "ci"
+    labels: [dependencies, area/ci]
+    groups:
+      python:
+        patterns: ["*"]
