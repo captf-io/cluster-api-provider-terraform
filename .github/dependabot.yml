@@ -30,10 +30,14 @@ updates:
     schedule:
       interval: weekly
       day: monday
+      time: "03:00"
+      timezone: "Etc/UTC"
+    # No auto-rebase: each rebase re-runs the full CI on the PR.
+    rebase-strategy: disabled
     commit-message:
       prefix: "deps"
     labels: [dependencies]
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 3
     ignore:
       # Kubernetes, controller-runtime and Cluster API minors move together
       # with a CAPI release (hack/verify-modules.sh pins them); bump those by
@@ -57,6 +61,11 @@ updates:
         patterns: ["go.opentelemetry.io/*", "google.golang.org/*"]
       hashicorp:
         patterns: ["github.com/hashicorp/*", "github.com/zclconf/*"]
+      # Everything else (client_golang, client_model, go-containerregistry,
+      # ...). Dependabot assigns a dependency to the first group that
+      # matches, so this catch-all only takes what the groups above leave.
+      other:
+        patterns: ["*"]
 
   - package-ecosystem: github-actions
     directory: "/"
@@ -65,9 +74,14 @@ updates:
     schedule:
       interval: weekly
       day: monday
+      time: "03:00"
+      timezone: "Etc/UTC"
+    # No auto-rebase: each rebase re-runs the full CI on the PR.
+    rebase-strategy: disabled
     commit-message:
       prefix: "ci"
     labels: [dependencies, area/ci]
+    open-pull-requests-limit: 2
     groups:
       actions:
         patterns: ["*"]
@@ -82,9 +96,17 @@ updates:
     schedule:
       interval: weekly
       day: monday
+      time: "03:00"
+      timezone: "Etc/UTC"
+    # No auto-rebase: each rebase re-runs the full CI on the PR.
+    rebase-strategy: disabled
     commit-message:
       prefix: "deps"
     labels: [dependencies]
+    open-pull-requests-limit: 2
+    groups:
+      docker:
+        patterns: ["*"]
 
   # The hash-locked Python packages the CI verify job installs
   # (hack/ci/requirements.txt, compiled from requirements.in).
@@ -94,6 +116,10 @@ updates:
       default-days: 7
     schedule:
       interval: monthly
+      time: "03:00"
+      timezone: "Etc/UTC"
+    rebase-strategy: disabled
+    open-pull-requests-limit: 2
     commit-message:
       prefix: "ci"
     labels: [dependencies, area/ci]
