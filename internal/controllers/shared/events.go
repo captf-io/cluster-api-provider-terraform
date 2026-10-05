@@ -122,6 +122,10 @@ const (
 	// EventFailureDomainsChanged: a TerraformCluster's
 	// status.failureDomains changed.
 	EventFailureDomainsChanged = "FailureDomainsChanged"
+	// EventExportsNotPublished: a TerraformCluster's exports output is
+	// larger than the publish limit, so status.exports is empty; machines
+	// and pools still read the output from the state.
+	EventExportsNotPublished = "ExportsNotPublished"
 
 	// EventInputsChanged: the inputs hash differs from the state's and an
 	// apply of the new inputs starts.
@@ -224,7 +228,7 @@ func DocumentedEvents() []string {
 		EventPlanReady, EventPlanApproved, EventPlanApplied, EventPlanChanged,
 		EventWaitingForRunLease, EventWaitingForClusterOperation, EventWaitingForMachineOperations,
 		EventDeletionStarted, EventDestroyed, EventFinalizerRemoved, EventInfrastructureAbandoned, EventPaused, EventResumed, EventProvisioned,
-		EventProviderIDSet, EventControlPlaneEndpointSet, EventFailureDomainsChanged,
+		EventProviderIDSet, EventControlPlaneEndpointSet, EventFailureDomainsChanged, EventExportsNotPublished,
 		EventInputsChanged, EventDigestPinned, EventDigestUnknown, EventForceUnlocked, EventStateAdopted,
 		EventStateLost, EventStateLocked, EventStateUnreadable, EventOutputsInvalid,
 		EventStateBackedUp, EventStateRestored, EventStateRestoreFailed,

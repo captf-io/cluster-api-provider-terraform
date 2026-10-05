@@ -761,6 +761,7 @@ func (in *TerraformClusterStatus) DeepCopyInto(out *TerraformClusterStatus) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
+	in.Exports.DeepCopyInto(&out.Exports)
 	in.Plan.DeepCopyInto(&out.Plan)
 }
 

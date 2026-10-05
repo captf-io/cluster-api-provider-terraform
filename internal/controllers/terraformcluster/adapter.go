@@ -17,7 +17,9 @@ limitations under the License.
 package terraformcluster
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -25,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/conditions"
@@ -180,6 +183,9 @@ func (a *adapter) ApplyOutputs(_ context.Context, owner shared.OwnerInfo, st *st
 		}
 		a.obj.Status.FailureDomains = fds
 	}
+	if !res.Concerns("exports") {
+		a.publishExports(out.Exports)
+	}
 	var health *contract.Health
 	if !res.Concerns("health") {
 		health = &out.Health
@@ -187,6 +193,32 @@ func (a *adapter) ApplyOutputs(_ context.Context, owner shared.OwnerInfo, st *st
 	prev := a.obj.Status.Initialization.Provisioned
 	a.setEndpointAvailable(owner, shared.Provisioned(prev != nil && *prev, st.InputsHash != "", res.Valid(), health), out.ControlPlaneEndpoint)
 	return res, health, nil
+}
+
+// publishExports copies exports, the decoded exports output, into
+// status.exports in compact form. Over infrav1.MaxPublishedExportsBytes it
+// clears the field and warns, once per transition: when the field held a
+// value, or when this is the first pass over a new generation (the
+// reconciler's patch helper records status.observedGeneration after the
+// pass); an unchanged oversize output on later passes stays quiet.
+func (a *adapter) publishExports(exports json.RawMessage) {
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, exports); err != nil {
+		return // DecodeCluster validated it; keep the previous value
+	}
+	cur := a.obj.Status.Exports.Raw
+	if buf.Len() > infrav1.MaxPublishedExportsBytes {
+		if len(cur) > 0 || a.obj.Status.ObservedGeneration != a.obj.Generation {
+			a.d.Emit(a.obj, corev1.EventTypeWarning, shared.EventExportsNotPublished, "Reconcile",
+				"status.exports not published: the exports output is %d bytes, over the %d-byte limit; machines and pools still read it from the state",
+				buf.Len(), infrav1.MaxPublishedExportsBytes)
+		}
+		a.obj.Status.Exports = runtime.RawExtension{}
+		return
+	}
+	if !bytes.Equal(cur, buf.Bytes()) {
+		a.obj.Status.Exports = runtime.RawExtension{Raw: buf.Bytes()}
+	}
 }
 
 // failureDomainNames lists fds' names for an event; it returns that list

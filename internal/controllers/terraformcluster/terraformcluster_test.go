@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -478,6 +479,78 @@ func TestApplyOutputsModuleEndpoint(t *testing.T) {
 	}
 	if n := len(rec.reasons); n != 3 || rec.reasons[2] != shared.EventFailureDomainsChanged {
 		t.Errorf("events after a new failure domain = %v", rec.reasons)
+	}
+}
+
+// TestApplyOutputsExports proves adapter.ApplyOutputs publishes the
+// exports output compactly in status.exports (any JSON value, null or
+// absent as {}), keeps the previous value on a violation, leaves an
+// unchanged value alone, and clears it with one warning when it is over
+// the publish limit.
+func TestApplyOutputsExports(t *testing.T) {
+	t.Parallel()
+	a, c := newTestAdapter(t, testTC())
+	rec := &recorder{}
+	a.d.Recorder = rec
+	durable := writeDurable(t, c, a.obj, nil)
+	apply := func(exports string) {
+		t.Helper()
+		outs := map[string]string{"health": healthy}
+		if exports != "" {
+			outs["exports"] = exports
+		}
+		if _, _, err := a.ApplyOutputs(t.Context(), shared.OwnerInfo{}, clusterState(true, outs), durable); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(want string) {
+		t.Helper()
+		if got := string(a.obj.Status.Exports.Raw); got != want {
+			t.Errorf("status.exports = %q, want %q", got, want)
+		}
+	}
+
+	apply("{ \"a\": 1,\n \"b\": [true, null] }")
+	check(`{"a":1,"b":[true,null]}`)
+	apply(`["x", 2]`)
+	check(`["x",2]`)
+	apply(`"s"`)
+	check(`"s"`)
+	apply(`null`)
+	check(`{}`)
+	apply("")
+	check(`{}`)
+	apply(`{"k":"v"}`)
+	check(`{"k":"v"}`)
+
+	// A fractional number violates the contract: the previous value stays.
+	if res, _, _ := a.ApplyOutputs(t.Context(), shared.OwnerInfo{}, clusterState(true, map[string]string{"exports": `{"k":1.5}`, "health": healthy}), durable); res.Valid() {
+		t.Error("a fractional exports output is valid")
+	}
+	check(`{"k":"v"}`)
+
+	// An unchanged value keeps the same bytes and emits nothing.
+	before := a.obj.Status.Exports.Raw
+	apply(`{ "k": "v" }`)
+	if &before[0] != &a.obj.Status.Exports.Raw[0] {
+		t.Error("an unchanged exports value was rewritten")
+	}
+	if len(rec.reasons) != 0 {
+		t.Errorf("events = %v, want none", rec.reasons)
+	}
+
+	// Over the limit: cleared, one warning, none on the next pass.
+	big, err := json.Marshal(map[string]string{"blob": strings.Repeat("x", infrav1.MaxPublishedExportsBytes)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	apply(string(big))
+	if len(a.obj.Status.Exports.Raw) != 0 {
+		t.Errorf("oversize exports published: %d bytes", len(a.obj.Status.Exports.Raw))
+	}
+	apply(string(big))
+	if want := []string{shared.EventExportsNotPublished}; !slices.Equal(rec.reasons, want) {
+		t.Errorf("events = %v, want %v", rec.reasons, want)
 	}
 }
 

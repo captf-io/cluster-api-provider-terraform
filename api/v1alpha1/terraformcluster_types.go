@@ -18,6 +18,7 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 )
 
@@ -179,12 +180,31 @@ type TerraformClusterStatus struct {
 	// +kubebuilder:validation:MaxItems=100
 	FailureDomains []clusterv1.FailureDomain `json:"failureDomains,omitempty"`
 
+	// exports is a copy of the cluster module's exports output, published
+	// for consumers outside CAPTF, such as a Terraform root that installs
+	// add-ons. It is any JSON value the module returns (an object is
+	// recommended), in compact form; a null or absent output becomes {}.
+	// It is omitted when its compact form is larger than
+	// MaxPublishedExportsBytes, and for an externally managed cluster; a
+	// module output that breaks the contract leaves the previous value. The
+	// controller never reads it back: machines and pools read the exports
+	// from the cluster's state. Anyone who can get the TerraformCluster can
+	// read it, so exports must hold no secrets.
+	// +optional
+	// +kubebuilder:validation:Schemaless
+	// +kubebuilder:pruning:PreserveUnknownFields
+	Exports runtime.RawExtension `json:"exports,omitempty,omitzero"`
+
 	// plan is the plan of the change waiting for approval under
 	// applyPolicy Manual; empty when none waits. Approve it by setting the
 	// captf.io/approve-plan annotation to plan.planHash.
 	// +optional
 	Plan PlanPreview `json:"plan,omitempty,omitzero"`
 }
+
+// MaxPublishedExportsBytes caps the compact JSON size of status.exports; a
+// larger exports output is not published.
+const MaxPublishedExportsBytes = 64 << 10
 
 // MaxPlanResources caps status.plan.resources.
 const MaxPlanResources = 50

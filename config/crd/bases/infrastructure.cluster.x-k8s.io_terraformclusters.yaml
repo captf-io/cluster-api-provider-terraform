@@ -1859,6 +1859,19 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              exports:
+                description: |-
+                  exports is a copy of the cluster module's exports output, published
+                  for consumers outside CAPTF, such as a Terraform root that installs
+                  add-ons. It is any JSON value the module returns (an object is
+                  recommended), in compact form; a null or absent output becomes {}.
+                  It is omitted when its compact form is larger than
+                  MaxPublishedExportsBytes, and for an externally managed cluster; a
+                  module output that breaks the contract leaves the previous value. The
+                  controller never reads it back: machines and pools read the exports
+                  from the cluster's state. Anyone who can get the TerraformCluster can
+                  read it, so exports must hold no secrets.
+                x-kubernetes-preserve-unknown-fields: true
               failureDomains:
                 description: failureDomains reported by the module's failure_domains
                   output.

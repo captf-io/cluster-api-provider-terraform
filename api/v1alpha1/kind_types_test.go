@@ -202,6 +202,7 @@ func TestKindsJSONRoundTrip(t *testing.T) {
 					FailureDomains: []clusterv1.FailureDomain{
 						{Name: "zone-a", ControlPlane: ptr(true), Attributes: map[string]string{"region": "r1"}},
 					},
+					Exports: runtime.RawExtension{Raw: []byte(`{"kubeconfig_secret":"demo-kubeconfig","zones":["a","b"]}`)},
 				},
 			},
 			out: func() any { return &TerraformCluster{} },
