@@ -131,7 +131,9 @@ func newRedactor(secrets []secret) *Redactor {
 	// sorting by length (descending) makes the longest match win. The sort
 	// is stable on a deterministic input order.
 	slices.SortStableFunc(forms, func(a, b string) int { return len(b) - len(a) })
-	pairs := make([]string, 0, 2*len(forms))
+	// The capacity is a hint (append grows it to two entries per form);
+	// keeping arithmetic out of the allocation size rules out an overflow.
+	pairs := make([]string, 0, len(forms))
 	for _, f := range forms {
 		pairs = append(pairs, f, Redacted)
 	}

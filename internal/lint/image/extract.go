@@ -117,8 +117,15 @@ func (t *tree) readEntries(tr *tar.Reader, budget, scan *int64) error {
 			return ErrTooLarge
 		}
 		*budget -= entryCost
-		// Clean against the root: "../" cannot climb above it.
-		name := path.Clean("/" + hdr.Name)
+		// Clean against the root: "../" cannot climb above it. The
+		// relative form must then be local (no "..", not absolute); an
+		// entry that still is not cannot be placed under the root and is
+		// skipped. go-containerregistry v0.22+ already drops such entries.
+		rel := strings.TrimPrefix(path.Clean("/"+hdr.Name), "/")
+		if rel != "" && !filepath.IsLocal(rel) {
+			continue
+		}
+		name := "/" + rel
 		t.headers[name] = hdr
 		if hdr.Typeflag != tar.TypeReg {
 			continue // links and devices are never materialized here
@@ -213,7 +220,7 @@ func (t *tree) copyFile(src, dst string) error {
 // when name escapes the root or the copy fails.
 func (t *tree) write(name string, r io.Reader, size int64) error {
 	dst := filepath.Join(t.root, filepath.FromSlash(name))
-	if rel, err := filepath.Rel(t.root, dst); err != nil || strings.HasPrefix(rel, "..") {
+	if rel, err := filepath.Rel(t.root, dst); err != nil || !filepath.IsLocal(rel) {
 		return fmt.Errorf("image: %s escapes the extraction root", name)
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
