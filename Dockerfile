@@ -37,15 +37,24 @@ ARG LDFLAGS=""
 ENV CGO_ENABLED=0 GOTOOLCHAIN=local GOFLAGS=-trimpath
 WORKDIR /workspace
 
-# go.work lists ./api, so its go.mod/go.sum are part of the context (see
-# .dockerignore).
+# go.work lists ./api and ./test, so all three go.mod/go.sum pairs are needed
+# to resolve the workspace (see .dockerignore). They are copied alone and
+# the modules downloaded before the sources, so a source-only change reuses
+# this layer (from the layer cache locally, from the buildx cache in CI).
+# The download has no cache mount on purpose: a cache mount's content is
+# not part of the layer, so there would be nothing to cache.
+COPY go.work go.mod go.sum ./
+COPY api/go.mod api/go.sum ./api/
+COPY test/go.mod test/go.sum ./test/
+RUN go mod download
+
 COPY . .
 
-# Project-scoped cache ids: an id-less cache mount is shared with every other
-# build on the host that mounts the same target, and a corrupt module
-# extracted by another project breaks this one.
-RUN --mount=type=cache,id=captf-gomod,sharing=locked,target=/go/pkg/mod \
-    --mount=type=cache,id=captf-gobuild,sharing=locked,target=/root/.cache/go-build \
+# Project-scoped cache id: an id-less cache mount is shared with every other
+# build on the host that mounts the same target, and a corrupt object
+# written by another project breaks this one. The module cache needs no
+# mount: the layer above holds it.
+RUN --mount=type=cache,id=captf-gobuild,sharing=locked,target=/root/.cache/go-build \
     GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="${LDFLAGS}" -o /out/manager ./cmd/manager && \
     GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="${LDFLAGS}" -o /out/runner ./cmd/runner && \
     ./hack/verify-static.sh /out/manager /out/runner

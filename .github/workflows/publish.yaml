@@ -48,8 +48,11 @@
 # (github.com/orgs/captf-io/packages > cluster-api-provider-terraform >
 # Package settings): a new organization package may default to private.
 #
-# No build cache here: a cache shared with untrusted runs could poison a
-# published image.
+# The image build reads, and never writes, the buildx cache scope that the
+# security workflow fills on main: only trusted refs write it (security
+# builds the image on main, the weekly schedule and manual runs, never on a
+# PR), so an untrusted run cannot poison a published image. A miss only
+# costs time. The release job uses no module or build cache.
 name: publish
 
 on:
@@ -161,6 +164,7 @@ jobs:
           push: true
           provenance: false
           sbom: false
+          cache-from: type=gha,scope=manager
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
