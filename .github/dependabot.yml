@@ -30,9 +30,8 @@ updates:
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
       - dependency-name: "sigs.k8s.io/cluster-api*"
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
-      # This repository's own api module: the workspace (go.work) always
-      # builds it from ./api; the root go.mod's pseudo-version only lets
-      # tools that ignore go.work (Dependabot, `go mod tidy`) resolve it.
+      # This repository's own modules are resolved by go.work, never by a
+      # version; never propose bumping them.
       - dependency-name: "github.com/captf-io/cluster-api-provider-terraform/*"
     groups:
       # Cluster API and Kubernetes move together; bump them as one.
