@@ -5,9 +5,9 @@ go 1.26.0
 toolchain go1.26.8
 
 require (
-	k8s.io/api v0.36.3
-	k8s.io/apimachinery v0.36.3
-	k8s.io/client-go v0.36.3
+	k8s.io/api v0.36.5
+	k8s.io/apimachinery v0.36.5
+	k8s.io/client-go v0.36.5
 	sigs.k8s.io/kind v0.33.0
 	sigs.k8s.io/yaml v1.6.0
 )
