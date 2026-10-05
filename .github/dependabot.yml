@@ -10,7 +10,7 @@ version: 2
 
 updates:
   - package-ecosystem: gomod
-    directories: ["/", "/api"]
+    directories: ["/", "/api", "/test"]
     cooldown:
       default-days: 7
     schedule:
@@ -20,6 +20,20 @@ updates:
       prefix: "deps"
     labels: [dependencies]
     open-pull-requests-limit: 10
+    ignore:
+      # Kubernetes, controller-runtime and Cluster API minors move together
+      # with a CAPI release (hack/verify-modules.sh pins them); bump those by
+      # hand. Patch releases still come through.
+      - dependency-name: "k8s.io/*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "sigs.k8s.io/controller-runtime"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "sigs.k8s.io/cluster-api*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      # This repository's own api module: the workspace (go.work) always
+      # builds it from ./api; the root go.mod's pseudo-version only lets
+      # tools that ignore go.work (Dependabot, `go mod tidy`) resolve it.
+      - dependency-name: "github.com/captf-io/cluster-api-provider-terraform/*"
     groups:
       # Cluster API and Kubernetes move together; bump them as one.
       kubernetes:
