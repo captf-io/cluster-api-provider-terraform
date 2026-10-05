@@ -51,6 +51,11 @@ In short:
 Every `captf-io` repository is licensed under Apache-2.0. By opening a pull
 request you agree that your contribution is licensed under the same terms.
 
+Every source file starts with the Apache-2.0 license header, with the
+copyright held by The CAPTF Authors. `make check-headers` checks it, and CI
+runs the same check; `make fix-headers` adds the header to new files.
+`.licenserc.yaml` lists the files that don't need one.
+
 ## Conduct
 
 Everyone taking part is expected to follow the

@@ -1,3 +1,17 @@
+# Copyright 2026 The CAPTF Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # cluster-api-provider-terraform (CAPTF)
 #
 # Every tool is installed at a pinned version into hack/tools/bin as
@@ -437,7 +451,7 @@ release-github: release-notes ## Create the GitHub release for VERSION from out/
 ##@ Verify
 
 .PHONY: verify
-verify: verify-modules verify-schemas verify-components verify-metadata verify-version verify-gen check-licenses verify-templates verify-godoc verify-test-tiers promtool-check promtool-test verify-local-repository ## Run all verifications.
+verify: verify-modules verify-schemas verify-components verify-metadata verify-version verify-gen check-licenses check-headers verify-templates verify-godoc verify-test-tiers promtool-check promtool-test verify-local-repository ## Run all verifications.
 
 .PHONY: verify-test-tiers
 verify-test-tiers: ## Check that e2e code carries the e2e build tag and stays in test/e2e/ and test/env/lifecycle/.
@@ -459,6 +473,25 @@ verify-templates: $(CLUSTERCTL) ## Render templates/ with the pinned clusterctl 
 .PHONY: check-licenses
 check-licenses: ## Check that no MPL-2.0 dependency of tfcapi-lint applies Exhibit B (hack/check-licenses.sh).
 	@hack/check-licenses.sh
+
+# The Apache-2.0 license header check: .licenserc.yaml says which files need
+# the header. Runs as the host user, so fix-headers keeps file ownership.
+LICENSE_EYE_IMAGE := docker.io/apache/skywalking-eyes:0.9.0@sha256:cd89ccbbcba2e87d3fb0e34b156b1da208d6c5ac1ada4e2d335e920022c765b8
+ifeq ($(CONTAINER_TOOL),docker)
+LICENSE_EYE_USER := --user $(shell id -u):$(shell id -g)
+else
+LICENSE_EYE_USER := --userns=keep-id --user $(shell id -u):$(shell id -g)
+endif
+LICENSE_EYE = $(CONTAINER_TOOL) run --rm $(LICENSE_EYE_USER) --security-opt label=disable \
+	-v "$(CURDIR):/work" -w /work "$(LICENSE_EYE_IMAGE)"
+
+.PHONY: check-headers
+check-headers: ## Fail on any source file without the Apache-2.0 license header (.licenserc.yaml).
+	@$(LICENSE_EYE) header check
+
+.PHONY: fix-headers
+fix-headers: ## Add the Apache-2.0 license header to every source file missing it.
+	@$(LICENSE_EYE) header fix
 
 .PHONY: verify-components
 verify-components: $(KUSTOMIZE) ## Check the clusterctl components built from config/default.

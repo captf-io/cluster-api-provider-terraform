@@ -1,5 +1,19 @@
+# Copyright 2026 The CAPTF Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # Continuous integration: unit tests with a per-package coverage gate, lint,
-# the offline verify checks, and cross-platform builds. Security scanning
+# the offline verify checks, license headers, and cross-platform builds. Security scanning
 # lives in security.yaml; Scorecard in scorecard.yaml.
 #
 # Branch protection needs one required check: "ci / ok", which fails when
@@ -212,10 +226,28 @@ jobs:
           path: dist/
           retention-days: 7
 
+  license-headers:
+    name: license headers
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Every source file carries the Apache-2.0 license header;
+      # .licenserc.yaml says which files need it.
+      - name: Check license headers
+        run: make check-headers CONTAINER_TOOL=docker
+
   ok:
     name: ok
     if: ${{ always() }}
-    needs: [test, lint, verify, build, release-snapshot]
+    needs: [test, lint, verify, license-headers, build, release-snapshot]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}
