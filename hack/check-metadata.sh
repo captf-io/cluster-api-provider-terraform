@@ -6,7 +6,8 @@
 #
 # NEW defaults to metadata.yaml at the repo root. OLD is the previous
 # release's metadata.yaml; when omitted it is read from the newest v* git
-# tag, and when there is no git repository or no tag only NEW is validated.
+# tag before HEAD (a tag on HEAD itself is the release being checked), and
+# when there is no git repository or no earlier tag only NEW is validated.
 #
 # Checks on NEW (clusterctl >= 1.11 validates the first three strictly):
 #   - apiVersion clusterctl.cluster.x-k8s.io/v1alpha3, kind Metadata;
@@ -27,8 +28,15 @@ work="$(mktemp -d)"
 trap 'rm -rf -- "${work}"' EXIT
 
 if [[ -z "${old}" ]]; then
+  # The previous release: the newest v* tag before HEAD. When HEAD itself
+  # carries a v* tag (the release being cut), start from its parent, or the
+  # check would compare the release with itself and never fire.
+  from=HEAD
+  if [[ -n "$(git -C "${root}" tag --points-at HEAD --list 'v*' 2>/dev/null)" ]]; then
+    from=HEAD^
+  fi
   if git -C "${root}" rev-parse --is-inside-work-tree >/dev/null 2>&1 &&
-    tag="$(git -C "${root}" describe --tags --abbrev=0 --match 'v*' 2>/dev/null)"; then
+    tag="$(git -C "${root}" describe --tags --abbrev=0 --match 'v*' "${from}" 2>/dev/null)"; then
     git -C "${root}" show "${tag}:metadata.yaml" >"${work}/old.yaml"
     old="${work}/old.yaml"
     echo "check-metadata: comparing against ${tag}"
