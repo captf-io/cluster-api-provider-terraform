@@ -19,11 +19,16 @@
 # fork can be labeled. That is safe here only because this workflow never
 # checks out or runs the PR's code: actions/labeler reads the changed file
 # list through the API. Never add a checkout of the PR head to this file.
+#
+# It runs when a PR opens, reopens or leaves draft, not on every push: the
+# run is cheap but queues behind the org's job cap, and labels follow the
+# areas a PR touches, which rarely change after it opens. A label that goes
+# stale is fixed by closing and reopening the PR.
 name: labeler
 
 on:
   pull_request_target: # zizmor: ignore[dangerous-triggers] no PR code is checked out or run
-    types: [opened, synchronize, reopened]
+    types: [opened, reopened, ready_for_review]
 
 permissions: {}
 

@@ -17,21 +17,28 @@
 # repository's code scanning alerts (Security tab), so findings show up on
 # the PR diff and stay tracked on main.
 #
-#   codeql            semantic analysis of the Go code (security-and-quality)
-#   govulncheck       known Go vulnerabilities reachable from our code
-#   osv-scanner       known vulnerabilities in every lockfile (go.mod, go.sum)
-#   gitleaks          secrets in the full git history (.gitleaks.toml)
-#   gosec             Go security lint; reviewed findings carry #nosec
-#   trivy             rendered manifests (misconfig) and the repo (vulns,
-#                     secrets); exceptions in .trivyignore.yaml
-#   container         hadolint, a multi-arch buildx build of the manager
-#                     image, a Trivy image scan and an SPDX SBOM
-#   workflows         zizmor (Actions security) and actionlint
-#   dependency-review new dependencies in a PR (vulnerable or malicious)
+# Two tiers, so a PR queues two jobs rather than a dozen:
 #
-# Runs on pushes to main, on every PR, weekly (new advisories against
-# unchanged code), and on demand. SARIF uploads are skipped for PRs from
-# forks, whose token cannot write security events.
+#   every event (PRs, main, weekly, on demand): one job, "checks", that
+#   shares a checkout and a Go setup between its scanners:
+#     gitleaks          secrets in the full git history (.gitleaks.toml)
+#     govulncheck       known Go vulnerabilities reachable from our code
+#     trivy             rendered manifests (misconfig) and the repo (vulns,
+#                       secrets); exceptions in .trivyignore.yaml
+#     zizmor, actionlint  Actions security, workflow syntax and shell
+#     dependency review   new dependencies in a PR (vulnerable or malicious)
+#   plus osv-scanner: the PR variant reports only vulnerabilities the PR
+#   introduces, the full variant covers every lockfile (go.mod, go.sum).
+#
+#   push to main, weekly and on demand only (slow, and they scan what a PR
+#   cannot change on its own):
+#     codeql            semantic analysis of the Go code (security-and-quality)
+#     gosec             Go security lint; reviewed findings carry #nosec
+#     container         hadolint, a multi-arch buildx build of the manager
+#                       image, a Trivy image scan and an SPDX SBOM
+#
+# The weekly run finds new advisories against unchanged code. SARIF uploads
+# are skipped for PRs from forks, whose token cannot write security events.
 #
 # Code scanning (SARIF uploads, CodeQL) and dependency review need GitHub
 # Advanced Security on a private repository; on a public one they are
@@ -62,104 +69,13 @@ env:
   CAN_UPLOAD: ${{ vars.ADVANCED_SECURITY == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
 
 jobs:
-  codeql:
-    name: codeql
-    # CodeQL results exist only in code scanning.
-    if: ${{ vars.ADVANCED_SECURITY == 'true' }}
+  # The cheap scanners in one job. Every step after the first runs even when
+  # an earlier one failed, so one finding never hides another; the job still
+  # fails if any step did.
+  checks:
+    name: checks
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    permissions:
-      contents: read
-      actions: read # read this run's workflow metadata for the SARIF upload
-      security-events: write # upload SARIF to code scanning
-    steps:
-      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
-        with:
-          egress-policy: audit
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: |
-            go.sum
-            api/go.sum
-      - uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
-        with:
-          languages: go
-          build-mode: manual
-          queries: security-and-quality
-      # Both workspace modules, every binary and test package.
-      - name: Build
-        run: |
-          go build ./... ./api/...
-          go test -count=1 -run '^$' ./... ./api/... >/dev/null
-      - uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
-        with:
-          category: /language:go
-
-  govulncheck:
-    name: govulncheck
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    steps:
-      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
-        with:
-          egress-policy: audit
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      # go-version-file honors go.mod's toolchain directive: results depend
-      # on the exact Go patch release (standard library advisories).
-      - name: govulncheck (root module)
-        uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
-        with:
-          go-version-file: go.mod
-          go-package: ./...
-      - name: govulncheck (api module)
-        uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
-        with:
-          go-version-file: go.mod
-          work-dir: api
-          go-package: ./...
-
-  osv-scanner:
-    name: osv-scanner
-    # The reusable workflow uploads SARIF itself; the PR variant reports
-    # only vulnerabilities the PR introduces.
-    if: ${{ github.event_name != 'pull_request' }}
-    permissions:
-      contents: read
-      actions: read # read this run's workflow metadata for the SARIF upload
-      security-events: write # upload SARIF to code scanning
-    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@a345acffa64b0eaede81a3d9aae6141214d9c8fc # v2.6.0
-    with:
-      upload-sarif: ${{ vars.ADVANCED_SECURITY == 'true' }}
-      scan-args: |-
-        --recursive
-        ./
-
-  osv-scanner-pr:
-    name: osv-scanner (PR)
-    if: ${{ github.event_name == 'pull_request' }}
-    permissions:
-      contents: read
-      actions: read # read this run's workflow metadata for the SARIF upload
-      security-events: write # upload SARIF to code scanning
-    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@a345acffa64b0eaede81a3d9aae6141214d9c8fc # v2.6.0
-    with:
-      upload-sarif: ${{ vars.ADVANCED_SECURITY == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
-      scan-args: |-
-        --recursive
-        ./
-
-  gitleaks:
-    name: gitleaks
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
     permissions:
       contents: read
       security-events: write # upload SARIF to code scanning
@@ -168,14 +84,26 @@ jobs:
       # sha256 of gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz, from the
       # release's checksums file; bump both together.
       GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+      ACTIONLINT_VERSION: 1.7.12
+      # sha256 of actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz, from
+      # the release's checksums file; bump both together.
+      ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
+      # Full history for gitleaks.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            api/go.sum
+
       # The binary, not gitleaks-action: the action needs a paid license for
       # organization repositories.
       - name: Install gitleaks
@@ -187,85 +115,43 @@ jobs:
           tar -xzf "${RUNNER_TEMP}/${tarball}" -C "${RUNNER_TEMP}" gitleaks
           echo "${RUNNER_TEMP}" >>"${GITHUB_PATH}"
       # Every commit on every fetched ref; findings are redacted in the log.
-      - name: Scan the git history
+      - name: gitleaks (git history)
+        if: ${{ !cancelled() }}
         run: >-
           gitleaks git --config .gitleaks.toml --redact --verbose
           --log-opts=--all
           --report-format sarif --report-path gitleaks.sarif .
-      - name: Upload SARIF
-        if: ${{ !cancelled() && env.CAN_UPLOAD == 'true' }}
+      - name: Upload SARIF (gitleaks)
+        if: ${{ !cancelled() && env.CAN_UPLOAD == 'true' && hashFiles('gitleaks.sarif') != '' }}
         uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           sarif_file: gitleaks.sarif
           category: gitleaks
 
-  gosec:
-    name: gosec
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      security-events: write # upload SARIF to code scanning
-    env:
-      GOSEC_VERSION: v2.29.0
-    steps:
-      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
-        with:
-          egress-policy: audit
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: |
-            go.sum
-            api/go.sum
-      - name: Install gosec
-        run: go install "github.com/securego/gosec/v2/cmd/gosec@${GOSEC_VERSION}"
-      # hack/ holds developer tools that never ship. Reviewed findings in
-      # shipped code carry an inline "#nosec G<rule> -- reason".
-      - name: gosec
-        run: >-
-          gosec -exclude-dir=hack -exclude-generated
-          -fmt=sarif -out=gosec.sarif -stdout -verbose=text
-          ./... ./api/...
-      - name: Upload SARIF
-        if: ${{ !cancelled() && env.CAN_UPLOAD == 'true' }}
-        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
-        with:
-          sarif_file: gosec.sarif
-          category: gosec
+      # One install for both modules. The Go setup above honors go.mod's
+      # toolchain directive: results depend on the exact Go patch release
+      # (standard library advisories).
+      - name: Install govulncheck
+        if: ${{ !cancelled() }}
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+      - name: govulncheck (root module)
+        if: ${{ !cancelled() }}
+        run: govulncheck ./...
+      - name: govulncheck (api module)
+        if: ${{ !cancelled() }}
+        run: govulncheck -C api ./...
 
-  trivy:
-    name: trivy (manifests, repository)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: read
-      security-events: write # upload SARIF to code scanning
-    steps:
-      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
-        with:
-          egress-policy: audit
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: |
-            go.sum
-            api/go.sum
       # Scan what clusterctl installs, not the kustomize fragments under
       # config/: a strategic-merge patch alone lacks the securityContext
       # the base Deployment sets.
       - name: Render the infrastructure components
+        if: ${{ !cancelled() }}
         run: >-
           make manifests-release RELEASE_DIR=out/scan
           RELEASE_IMG=ghcr.io/captf-io/cluster-api-provider-terraform:v0.0.0-ci
       # SARIF holds every severity; the job fails on HIGH and CRITICAL.
       - name: Misconfigurations (rendered manifests)
+        if: ${{ !cancelled() && hashFiles('out/scan/infrastructure-components.yaml') != '' }}
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: config
@@ -303,8 +189,159 @@ jobs:
           sarif_file: trivy-fs.sarif
           category: trivy-fs
 
+      # Template injection, excessive permissions, unpinned actions,
+      # credential persistence and dangerous triggers.
+      - name: zizmor
+        if: ${{ !cancelled() }}
+        uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
+        with:
+          advanced-security: ${{ env.CAN_UPLOAD == 'true' }}
+      # Workflow syntax, expressions and (through the runner's shellcheck)
+      # the shell in run steps.
+      - name: actionlint
+        if: ${{ !cancelled() }}
+        run: |
+          tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSLo "${RUNNER_TEMP}/${tarball}" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
+          echo "${ACTIONLINT_SHA256}  ${RUNNER_TEMP}/${tarball}" | sha256sum -c -
+          tar -xzf "${RUNNER_TEMP}/${tarball}" -C "${RUNNER_TEMP}" actionlint
+          "${RUNNER_TEMP}/actionlint" -color
+
+      # Fails a PR that adds a dependency with a moderate or worse advisory,
+      # or a known-malicious package; the summary lists every change.
+      - name: Dependency review
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && vars.ADVANCED_SECURITY == 'true' }}
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: moderate
+          comment-summary-in-pr: never
+          show-openssf-scorecard: true
+
+  osv-scanner:
+    name: osv-scanner
+    # The reusable workflow uploads SARIF itself; the PR variant reports
+    # only vulnerabilities the PR introduces.
+    if: ${{ github.event_name != 'pull_request' }}
+    permissions:
+      contents: read
+      actions: read # read this run's workflow metadata for the SARIF upload
+      security-events: write # upload SARIF to code scanning
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@a345acffa64b0eaede81a3d9aae6141214d9c8fc # v2.6.0
+    with:
+      upload-sarif: ${{ vars.ADVANCED_SECURITY == 'true' }}
+      scan-args: |-
+        --recursive
+        ./
+
+  osv-scanner-pr:
+    name: osv-scanner (PR)
+    if: ${{ github.event_name == 'pull_request' }}
+    permissions:
+      contents: read
+      actions: read # read this run's workflow metadata for the SARIF upload
+      security-events: write # upload SARIF to code scanning
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@a345acffa64b0eaede81a3d9aae6141214d9c8fc # v2.6.0
+    with:
+      upload-sarif: ${{ vars.ADVANCED_SECURITY == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
+      scan-args: |-
+        --recursive
+        ./
+
+  codeql:
+    name: codeql
+    # CodeQL results exist only in code scanning. Not on PRs: the build and
+    # analysis take minutes, and main and the weekly run cover every change.
+    if: ${{ github.event_name != 'pull_request' && vars.ADVANCED_SECURITY == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read # read this run's workflow metadata for the SARIF upload
+      security-events: write # upload SARIF to code scanning
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            api/go.sum
+      - uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          languages: go
+          # Go has no build-mode "none" in the pinned action (v4.38.2,
+          # bundle 2.27.1): the extractor needs the build.
+          build-mode: manual
+          queries: security-and-quality
+      # Both workspace modules and every binary, then every test package
+      # (compiled, not run) so the extractor sees _test.go code too. This job
+      # runs on main and weekly only, so the cost is off the PR path.
+      - name: Build
+        run: |
+          go build ./... ./api/...
+          go test -count=1 -run '^$' ./... ./api/... >/dev/null
+      - uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          category: /language:go
+
+  gosec:
+    name: gosec
+    if: ${{ github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write # upload SARIF to code scanning
+    env:
+      GOSEC_VERSION: 2.29.0
+      # sha256 of gosec_${GOSEC_VERSION}_linux_amd64.tar.gz, from the
+      # release's checksums file; bump both together.
+      GOSEC_SHA256: 6431b119741c1f4a50fdfcf94e782e16b9e642afc8c7fa9b5d39d48bf3003095
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            api/go.sum
+      # The release binary, not `go install`: no source build of gosec.
+      - name: Install gosec
+        run: |
+          tarball="gosec_${GOSEC_VERSION}_linux_amd64.tar.gz"
+          curl -fsSLo "${RUNNER_TEMP}/${tarball}" \
+            "https://github.com/securego/gosec/releases/download/v${GOSEC_VERSION}/${tarball}"
+          echo "${GOSEC_SHA256}  ${RUNNER_TEMP}/${tarball}" | sha256sum -c -
+          tar -xzf "${RUNNER_TEMP}/${tarball}" -C "${RUNNER_TEMP}" gosec
+          echo "${RUNNER_TEMP}" >>"${GITHUB_PATH}"
+      # hack/ holds developer tools that never ship. Reviewed findings in
+      # shipped code carry an inline "#nosec G<rule> -- reason".
+      - name: gosec
+        run: >-
+          gosec -exclude-dir=hack -exclude-generated
+          -fmt=sarif -out=gosec.sarif -stdout -verbose=text
+          ./... ./api/...
+      - name: Upload SARIF
+        if: ${{ !cancelled() && env.CAN_UPLOAD == 'true' }}
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          sarif_file: gosec.sarif
+          category: gosec
+
   container:
     name: container image
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -327,7 +364,11 @@ jobs:
           config: .hadolint.yaml
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       # Both release platforms: the build stage cross-compiles, so arm64
-      # needs no emulation. Nothing is pushed.
+      # needs no emulation. Nothing is pushed. The cache scope is shared
+      # with publish.yaml, which only reads it: this job runs on trusted
+      # refs only, never on a PR, so nothing untrusted writes the cache.
+      # mode=max, because the layer worth caching (the module download) is
+      # in the build stage, which mode=min leaves out.
       - name: Build (linux/amd64, linux/arm64)
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -363,6 +404,7 @@ jobs:
           sarif_file: trivy-image.sarif
           category: trivy-image
       - name: SBOM (SPDX)
+        if: ${{ !cancelled() }}
         uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           image: ${{ env.IMAGE }}
@@ -370,71 +412,17 @@ jobs:
           artifact-name: manager-image.spdx.json
           upload-release-assets: false
 
-  workflows:
-    name: workflows (zizmor, actionlint)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      security-events: write # upload SARIF to code scanning
-    env:
-      ACTIONLINT_VERSION: 1.7.12
-      # sha256 of actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz, from
-      # the release's checksums file; bump both together.
-      ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
-    steps:
-      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
-        with:
-          egress-policy: audit
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      # Template injection, excessive permissions, unpinned actions,
-      # credential persistence and dangerous triggers.
-      - name: zizmor
-        uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
-        with:
-          advanced-security: ${{ env.CAN_UPLOAD == 'true' }}
-      # Workflow syntax, expressions and (through the runner's shellcheck)
-      # the shell in run steps.
-      - name: actionlint
-        run: |
-          tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
-          curl -fsSLo "${RUNNER_TEMP}/${tarball}" \
-            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
-          echo "${ACTIONLINT_SHA256}  ${RUNNER_TEMP}/${tarball}" | sha256sum -c -
-          tar -xzf "${RUNNER_TEMP}/${tarball}" -C "${RUNNER_TEMP}" actionlint
-          "${RUNNER_TEMP}/actionlint" -color
-
-  dependency-review:
-    name: dependency review
-    if: ${{ github.event_name == 'pull_request' && vars.ADVANCED_SECURITY == 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
-        with:
-          egress-policy: audit
-      # Fails a PR that adds a dependency with a moderate or worse advisory,
-      # or a known-malicious package; the summary lists every change.
-      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
-        with:
-          fail-on-severity: moderate
-          comment-summary-in-pr: never
-          show-openssf-scorecard: true
-
   ok:
     name: ok
     if: ${{ always() }}
-    needs: [codeql, govulncheck, osv-scanner, osv-scanner-pr, gitleaks, gosec, trivy, container, workflows, dependency-review]
+    needs: [checks, osv-scanner, osv-scanner-pr, codeql, gosec, container]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}
     steps:
-      # A job skipped by its event filter (the PR-only and non-PR variants)
-      # or by ADVANCED_SECURITY being unset counts as passing.
+      # A job skipped by its event filter (the PR-only, push-only and
+      # non-PR variants) or by ADVANCED_SECURITY being unset counts as
+      # passing.
       - name: Check every job passed
         env:
           RESULTS: ${{ join(needs.*.result, ' ') }}

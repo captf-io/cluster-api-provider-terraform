@@ -23,11 +23,12 @@
 # Scorecard cannot read a private repository with the workflow token, so
 # the job runs only when the repository variable SCORECARD is "true": set
 # it once the repository is public.
+#
+# It runs weekly, on demand and when branch protection changes, not on every
+# push: the posture it scores moves slowly, and each run queues a job.
 name: scorecard
 
 on:
-  push:
-    branches: [main]
   schedule:
     - cron: "43 4 * * 1"
   branch_protection_rule:
