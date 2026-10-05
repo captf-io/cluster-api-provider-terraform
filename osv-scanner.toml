@@ -1,0 +1,8 @@
+# osv-scanner exceptions for the Go modules in this repository. Every entry
+# says why the advisory does not apply and expires, so it is looked at
+# again.
+
+[[IgnoredVulns]]
+id = "GO-2026-5932"
+ignoreUntil = 2027-01-05T00:00:00Z
+reason = "golang.org/x/crypto/openpgp has no fixed version; no module in this repository imports that package (go list -deps shows no openpgp), and govulncheck reports no reachable call"
