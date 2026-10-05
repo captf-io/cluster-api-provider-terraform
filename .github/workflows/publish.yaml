@@ -1,0 +1,228 @@
+# Publishing: the manager image (manager and runner, one image) to GHCR,
+# and GitHub Releases.
+#
+#   push to main      ghcr.io/captf-io/cluster-api-provider-terraform:edge
+#                     and :sha-<7-char commit>
+#   push tag v*.*.*   :vX.Y.Z, then a GitHub Release (a pre-release for
+#                     vX.Y.Z-rc.N) with the clusterctl assets
+#                     (infrastructure-components.yaml, metadata.yaml,
+#                     templates) and the tfcapi-lint binaries and checksums
+#
+# Images are linux/amd64 and linux/arm64; the Dockerfile cross-compiles, so
+# no emulation. A tag must pass `make release-preflight` (vX.Y.Z or
+# vX.Y.Z-rc.N, metadata.yaml append-only) before anything is pushed for it.
+# workflow_dispatch republishes :edge from main; tags are published only by
+# their push, so a released image tag never moves.
+#
+# Every pushed image digest gets a keyless cosign signature (GitHub OIDC),
+# a SLSA build-provenance attestation and an SPDX SBOM attestation, both
+# pushed to the registry. Every release asset gets a provenance attestation,
+# whose bundle is also uploaded as provenance.intoto.jsonl (OpenSSF
+# Scorecard's Signed-Releases check). Verify:
+#
+#   cosign verify ghcr.io/captf-io/cluster-api-provider-terraform:edge \
+#     --certificate-identity-regexp '^https://github.com/captf-io/cluster-api-provider-terraform/' \
+#     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+#   gh attestation verify oci://ghcr.io/captf-io/cluster-api-provider-terraform:edge \
+#     -R captf-io/cluster-api-provider-terraform
+#   gh attestation verify infrastructure-components.yaml \
+#     -R captf-io/cluster-api-provider-terraform
+#
+# (add --predicate-type https://spdx.dev/Document/v2.3 for the SBOM).
+#
+# After the first push, set the GHCR package's visibility to public once
+# (github.com/orgs/captf-io/packages > cluster-api-provider-terraform >
+# Package settings): a new organization package may default to private.
+#
+# No build cache here: a cache shared with untrusted runs could poison a
+# published image.
+name: publish
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+permissions: {}
+
+# Never cancel a publish halfway: a pushed but unsigned image, or a tag
+# without its release, is worse than a late one.
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GOTOOLCHAIN: auto
+  # The Makefile's RELEASE_REPO.
+  IMAGE: ghcr.io/captf-io/cluster-api-provider-terraform
+
+jobs:
+  image:
+    name: image
+    # Never from a fork; main, or a pushed tag only.
+    if: >-
+      github.repository == 'captf-io/cluster-api-provider-terraform' &&
+      (github.ref == 'refs/heads/main' ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write # push the image to GHCR
+      id-token: write # keyless cosign signing and attestations (OIDC)
+      attestations: write # store the provenance and SBOM attestations
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      # Full history and tags: hack/version.sh describes HEAD from the
+      # newest tag, and release-preflight reads the previous metadata.yaml.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # check-metadata.sh needs PyYAML (hack/ci/requirements.txt).
+      - if: ${{ github.ref_type == 'tag' }}
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Release preflight
+        if: ${{ github.ref_type == 'tag' }}
+        run: |
+          python3 -m pip install --require-hashes -r hack/ci/requirements.txt
+          make release-preflight VERSION="${GITHUB_REF_NAME}"
+      # The same GO_VERSION and LDFLAGS as `make docker-build`; a tag build
+      # is stamped with the tag itself.
+      - name: Build arguments
+        id: args
+        run: |
+          version=()
+          if [[ "${GITHUB_REF_TYPE}" == tag ]]; then
+            version=("VERSION=${GITHUB_REF_NAME}")
+          fi
+          {
+            echo "go-version=$(make -s --no-print-directory print-GO_VERSION)"
+            echo "ldflags=$(make -s --no-print-directory print-LDFLAGS "${version[@]}")"
+          } >>"${GITHUB_OUTPUT}"
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # edge and sha-<7> from main, the tag itself from a tag; never
+      # "latest". The OCI labels and annotations (source, revision,
+      # version, licenses) link the GHCR package to this repository.
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=edge,branch=main
+            type=sha,format=short,enable={{is_default_branch}}
+            type=ref,event=tag
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      # buildx's own provenance and SBOM are off: both are attested below,
+      # signed and stored with GitHub's attestations.
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          sbom: false
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          build-args: |
+            GO_VERSION=${{ steps.args.outputs.go-version }}
+            LDFLAGS=${{ steps.args.outputs.ldflags }}
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Sign
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+      # The storage record would need artifact-metadata: write; the
+      # attestation alone is what verification reads.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+      - name: SBOM (SPDX)
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: manager-image.spdx.json
+          artifact-name: manager-image.spdx.json
+          upload-release-assets: false
+      - name: Attest SBOM
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          sbom-path: manager-image.spdx.json
+          push-to-registry: true
+
+  release:
+    name: release
+    needs: image
+    if: >-
+      github.repository == 'captf-io/cluster-api-provider-terraform' &&
+      github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write # create the GitHub Release and upload its assets
+      id-token: write # sign the provenance attestation (OIDC)
+      attestations: write # store the provenance attestation
+    env:
+      VERSION: ${{ github.ref_name }}
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      # Full history and tags: GoReleaser builds from the tag, and
+      # release-notes lists the commits since the previous one.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # No module or build cache in a publishing job.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      # The components pin the image by the digest just pushed, as
+      # `make release` does, so they never follow a moved tag. GoReleaser
+      # (pinned in the Makefile) builds tfcapi-lint from the tag.
+      - name: Build the release assets
+        env:
+          DIGEST: ${{ needs.image.outputs.digest }}
+        run: make release-assets VERSION="${VERSION}" RELEASE_IMG="${IMAGE}@${DIGEST}"
+      - name: Attest the release assets
+        id: attest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: out/release/*
+      # Uploaded with the assets, for verifiers without the attestations API.
+      - name: Add the provenance bundle
+        env:
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: cp -- "${BUNDLE}" out/release/provenance.intoto.jsonl
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: make release-github VERSION="${VERSION}"

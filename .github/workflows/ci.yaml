@@ -12,7 +12,8 @@
 #     which validates them.
 #   - e2e and any kind or cluster based tests: need live infrastructure, and
 #     are deferred until the software is near stable.
-#   - release, release-*: operator-only, publish artifacts.
+#   - release, release-*: publish artifacts; publish.yaml runs them on a
+#     tag push (release-snapshot below is the dry run).
 name: ci
 
 on:

@@ -381,7 +381,10 @@ manifests-release: $(KUSTOMIZE) ## Build out/infrastructure-components.yaml (REL
 
 # Release (https://captf.io/docs/developer-guide/releasing.html). VERSION must be the tag on a
 # clean HEAD; nothing is ever force-pushed and tags never move: a bad rc gets
-# a new rc. The assets land in out/release/.
+# a new rc. The assets land in out/release/. Pushing the tag is the release:
+# .github/workflows/publish.yaml runs release-preflight, pushes the signed
+# image, then release-assets and release-github. `make release` is the
+# manual fallback for when CI cannot run; never run both for one tag.
 RELEASE_ASSETS := $(RELEASE_DIR)/release
 
 .PHONY: release-preflight
@@ -424,9 +427,11 @@ release-notes: ## Write out/release/notes.md from the commits since the previous
 	{ echo "## $(VERSION)"; echo; git log --no-merges --format='- %s' $${prev:+$$prev..}"$(VERSION)"; } >"$(RELEASE_ASSETS)/notes.md"; \
 	echo "$@: $(RELEASE_ASSETS)/notes.md (since $${prev:-the first commit})"
 
+# A VERSION with a prerelease part (vX.Y.Z-rc.N) is marked as a pre-release.
 .PHONY: release-github
-release-github: release-notes ## Create the GitHub release for VERSION from out/release (publishes: operator only).
+release-github: release-notes ## Create the GitHub release for VERSION from out/release (publishes; publish.yaml runs it on a tag push).
 	gh release create "$(VERSION)" --verify-tag --notes-file "$(RELEASE_ASSETS)/notes.md" \
+		$(if $(findstring -,$(VERSION)),--prerelease) \
 		$$(find "$(RELEASE_ASSETS)" -maxdepth 1 -type f ! -name notes.md | sort)
 
 ##@ Verify

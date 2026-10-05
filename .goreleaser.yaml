@@ -1,7 +1,7 @@
 # GoReleaser v2 config (GoReleaser v2.17.1, pinned in Makefile).
 # Builds only the tfcapi-lint release binaries (tfcapi-lint-<os>-<arch>).
-# The manager/runner image is built by
-# the podman targets (make docker-build / docker-buildx), not here.
+# The manager/runner image is built by publish.yaml (buildx) and by the
+# podman targets (make docker-build / docker-buildx), not here.
 # Local dry run: make release-lint-snapshot (release --snapshot --clean:
 # named assets and checksums); goreleaser build --snapshot --clean builds
 # the bare binaries only.
@@ -58,5 +58,6 @@ changelog:
   disable: true
 
 release:
-  # Release publishing (with the clusterctl assets) is not wired up here.
+  # make release-github publishes the release, with the clusterctl assets
+  # (publish.yaml on a tag push); GoReleaser only builds.
   disable: true
