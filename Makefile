@@ -131,6 +131,13 @@ endef
 help: ## Display this help.
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
 
+# Print a variable's value, e.g. `make -s print-LDFLAGS`: publish.yaml reads
+# GO_VERSION and LDFLAGS this way, so the published image is stamped exactly
+# as `make docker-build` stamps it. $(info) prints the value verbatim, with
+# no shell quoting in the way.
+print-%:
+	@:$(info $($*))
+
 ##@ Development
 
 .PHONY: generate
