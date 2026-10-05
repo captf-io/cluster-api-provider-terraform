@@ -35,6 +35,7 @@ import (
 	"k8s.io/component-base/metrics/testutil"
 	testingclock "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/cluster-api/util/conditions"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
@@ -57,13 +58,28 @@ type clientRunner struct {
 	stale     []batchv1.Job
 	createErr error
 	created   atomic.Int32
+	// now, when set, is the API server's clock: Create stamps
+	// creationTimestamp with it, as the API server does and the fake
+	// client does not.
+	now func() time.Time
 }
 
-// Create stores job in r's client using ctx, or returns r.createErr when
-// set.
+// apiNow returns the time of e's clock, the one its API server stamps
+// objects with.
+func (e *env) apiNow() time.Time {
+	return e.d.Clock.Now()
+}
+
+// Create stores job in r's client using ctx, stamped with r.now when set,
+// or returns r.createErr when set. Without the stamp a just-created Job
+// reads as created in year 1, older than StuckJobAge, so a concurrent pass
+// could delete it as stuck before its per-run Secret exists.
 func (r *clientRunner) Create(ctx context.Context, _ client.Object, job *batchv1.Job) error {
 	if r.createErr != nil {
 		return r.createErr
+	}
+	if r.now != nil {
+		job.CreationTimestamp = metav1.NewTime(r.now())
 	}
 	if err := r.c.Create(ctx, job); err != nil {
 		return err
@@ -118,7 +134,7 @@ func leaseEnv(t *testing.T, gate bool, funcs interceptor.Funcs, extra ...client.
 		machine(withFinalizer, notPaused, named("tc")),
 	)
 	e := newEnvWith(t, funcs, append(objs, extra...)...)
-	jr := &clientRunner{c: e.c}
+	jr := &clientRunner{c: e.c, now: e.apiNow}
 	e.d.Jobs = jr
 	e.d.ClusterOperationGate = gate
 	return e, jr
@@ -365,7 +381,7 @@ func TestRunLeaseRace(t *testing.T) {
 		t.Parallel()
 		e, _ := leaseEnv(t, false, interceptor.Funcs{})
 		b := e.d
-		b.Jobs = &clientRunner{c: e.c, stale: []batchv1.Job{staleFailed}}
+		b.Jobs = &clientRunner{c: e.c, stale: []batchv1.Job{staleFailed}, now: e.apiNow}
 		if requeue, _ := e.reconcileNamed(t, e.d, testName); requeue != ActiveJobRequeue {
 			t.Fatalf("first manager: requeue %s", requeue)
 		}
@@ -384,12 +400,45 @@ func TestRunLeaseRace(t *testing.T) {
 			t.Errorf("second manager: %d Jobs, requeue %s, reason %s", n, requeue, applyReason(m))
 		}
 	})
+	t.Run("between the create and the per-run Secret", func(t *testing.T) {
+		t.Parallel()
+		// The stale manager creates its Job; the other manager reconciles
+		// before the stale one creates the Job's per-run Secret. The Job is
+		// moments old, so it is not stuck: both report it running.
+		var (
+			e     *env
+			once  sync.Once
+			inner time.Duration
+			err   error
+		)
+		e, _ = leaseEnv(t, false, interceptor.Funcs{
+			Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				if s, ok := obj.(*corev1.Secret); ok && strings.HasPrefix(s.Name, inputs.RunName("")) {
+					once.Do(func() {
+						var res ctrl.Result
+						res, err = Reconcile(ctx, e.d, e.kindNamed(t, testName))
+						inner = res.RequeueAfter
+					})
+				}
+				return c.Create(ctx, obj, opts...)
+			},
+		})
+		b := e.d
+		b.Jobs = &clientRunner{c: e.c, stale: []batchv1.Job{staleFailed}, now: e.apiNow}
+		res, outerErr := Reconcile(t.Context(), b, e.kindNamed(t, testName))
+		if err != nil || outerErr != nil {
+			t.Fatalf("Reconcile errors: %v, %v", err, outerErr)
+		}
+		if n := len(e.jobsOf(t)); n != 1 || inner != ActiveJobRequeue || res.RequeueAfter != ActiveJobRequeue {
+			t.Errorf("%d Jobs, requeues %s (fresh cache) and %s (stale); want 1 Job, both %s", n, inner, res.RequeueAfter, ActiveJobRequeue)
+		}
+	})
 	t.Run("concurrent", func(t *testing.T) {
 		t.Parallel()
 		for range 5 {
 			e, _ := leaseEnv(t, false, interceptor.Funcs{})
 			b := e.d
-			b.Jobs = &clientRunner{c: e.c, stale: []batchv1.Job{staleFailed}}
+			b.Jobs = &clientRunner{c: e.c, stale: []batchv1.Job{staleFailed}, now: e.apiNow}
 			ka, kb := e.kindNamed(t, testName), e.kindNamed(t, testName)
 			var wg sync.WaitGroup
 			results := make([]time.Duration, 2)
