@@ -42,6 +42,26 @@ clusterctl generate cluster my-cluster --infrastructure terraform --target-names
 The [quick start](https://captf.io/docs/getting-started/quick-start.html)
 walks through each step, including building and pushing module images.
 
+## Images
+
+The manager image (manager and runner) is published to
+`ghcr.io/captf-io/cluster-api-provider-terraform` for linux/amd64 and
+linux/arm64 by [publish.yaml](.github/workflows/publish.yaml): `:edge` and
+`:sha-<commit>` on every push to `main`, and `:vX.Y.Z` on every release tag,
+whose GitHub Release carries the clusterctl assets and the `tfcapi-lint`
+binaries. Each image is signed with keyless cosign and carries SLSA build
+provenance and an SPDX SBOM attestation; each release asset carries
+provenance:
+
+```sh
+cosign verify ghcr.io/captf-io/cluster-api-provider-terraform:edge \
+  --certificate-identity-regexp '^https://github.com/captf-io/cluster-api-provider-terraform/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+gh attestation verify oci://ghcr.io/captf-io/cluster-api-provider-terraform:edge \
+  -R captf-io/cluster-api-provider-terraform
+gh attestation verify infrastructure-components.yaml -R captf-io/cluster-api-provider-terraform
+```
+
 ## Documentation
 
 The book at [captf.io/docs](https://captf.io/docs/) (source:
