@@ -1,11 +1,13 @@
-<!-- captf:header -->
 <h1 align="center">
-  <a href="https://captf.io/docs/"><img
-    src="https://raw.githubusercontent.com/captf-io/.github/refs/heads/main/readme/banners/cluster-api-provider-terraform.svg"
-    width="100%"
-    alt="cluster-api-provider-terraform: Run Terraform and OpenTofu modules as
-    Cluster API providers"></a>
+  <a href="https://captf.io/"><img
+    src="https://captf.io/assets/readme/mark.svg"
+    width="72" height="72" alt="CAPTF"></a>
+  <br>
+  cluster-api-provider-terraform
 </h1>
+
+<p align="center">Run Terraform and OpenTofu modules as Cluster API providers</p>
+
 <p align="center">
   <a href="https://github.com/captf-io/cluster-api-provider-terraform/actions/workflows/ci.yaml"><img
     src="https://img.shields.io/github/actions/workflow/status/captf-io/cluster-api-provider-terraform/ci.yaml?branch=main&amp;label=build&amp;labelColor=161B3A&amp;style=flat-square"
@@ -16,18 +18,15 @@
   <a href="https://captf.io/docs/"><img
     src="https://img.shields.io/static/v1?label=docs&amp;message=captf.io&amp;color=5B8CFF&amp;labelColor=161B3A&amp;style=flat-square"
     alt="docs captf.io"></a>
-  <a href="LICENSE.md"><img
+  <a href="https://github.com/captf-io/cluster-api-provider-terraform/blob/main/LICENSE.md"><img
     src="https://img.shields.io/static/v1?label=license&amp;message=Apache-2.0&amp;color=FFD84D&amp;labelColor=161B3A&amp;style=flat-square"
     alt="license Apache-2.0"></a>
 </p>
-<!-- /captf:header -->
 
-<!-- captf:status -->
 > [!NOTE]
 > **Pre-release.** CAPTF is `v1alpha1`: its API and its
 > [module contract](https://captf.io/docs/module-author/contract/index.html)
-> may still change before the first release.
-<!-- /captf:status -->
+> may still change between releases.
 
 CAPTF is a [Cluster API](https://cluster-api.sigs.k8s.io/) infrastructure
 provider that uses Terraform/OpenTofu modules as its infrastructure: one for
@@ -35,9 +34,8 @@ the cluster, and one for each machine or machine pool. Each module ships as an
 OCI image and runs as a Kubernetes Job, so CAPTF works with any platform a
 Terraform provider covers, without a Go SDK integration. This repository holds
 the provider itself: the manager, the in-Job runner and the `tfcapi-lint`
-linter. It is pre-alpha and nothing has been released yet, so the
-`infrastructure.cluster.x-k8s.io/v1alpha1` API and the module contract will
-change. Unit tests cover the controllers, runner, webhooks and linter; there is
+linter. It is pre-alpha: the `infrastructure.cluster.x-k8s.io/v1alpha1` API
+and the module contract will still change between releases. Unit tests cover the controllers, runner, webhooks and linter; there is
 no end-to-end run against a live management cluster yet. See
 [Project status](https://captf.io/docs/introduction.html#project-status) for
 what is implemented.
@@ -124,16 +122,15 @@ privately through
 see [`SECURITY.md`](SECURITY.md) for the policy. Maintainers are listed in
 [`SECURITY_CONTACTS`](SECURITY_CONTACTS).
 
-<!-- captf:footer -->
 <br>
 <p align="center">
   <img
-    src="https://raw.githubusercontent.com/captf-io/.github/refs/heads/main/readme/assets/divider.svg"
+    src="https://captf.io/assets/readme/divider.svg"
     width="100%" height="4" alt="">
 </p>
 <p align="center">
   <a href="https://captf.io/"><img
-    src="https://raw.githubusercontent.com/captf-io/.github/refs/heads/main/readme/assets/mark.svg"
+    src="https://captf.io/assets/readme/mark.svg"
     width="40" height="40" alt="CAPTF"></a>
   <br>
   <a href="https://captf.io/docs/"
@@ -147,6 +144,6 @@ see [`SECURITY.md`](SECURITY.md) for the policy. Maintainers are listed in
   <br>
   <sub>Built for
     <a href="https://cluster-api.sigs.k8s.io/">Cluster API</a>.
-    <a href="LICENSE.md">Apache 2.0</a>.</sub>
+    <a href="https://github.com/captf-io/cluster-api-provider-terraform/blob/main/LICENSE.md"
+    >Apache 2.0</a>.</sub>
 </p>
-<!-- /captf:footer -->
