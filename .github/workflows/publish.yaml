@@ -127,6 +127,14 @@ jobs:
             type=edge,branch=main
             type=sha,format=short,enable={{is_default_branch}}
             type=ref,event=tag
+          # GitHub reads LICENSE.md's styled Markdown as "Other", so the
+          # repository metadata would give NOASSERTION and no description.
+          labels: |
+            org.opencontainers.image.licenses=Apache-2.0
+            org.opencontainers.image.description=Cluster API Provider Terraform manager and Job runner
+          annotations: |
+            org.opencontainers.image.licenses=Apache-2.0
+            org.opencontainers.image.description=Cluster API Provider Terraform manager and Job runner
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       # buildx's own provenance and SBOM are off: both are attested below,
       # signed and stored with GitHub's attestations.
