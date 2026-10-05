@@ -203,7 +203,11 @@ func (t *tree) materializeLinks(budget *int64) error {
 // paths under /captf/module. It returns an error when src cannot be read or
 // dst cannot be written.
 func (t *tree) copyFile(src, dst string) error {
-	f, err := os.Open(filepath.Join(t.root, filepath.FromSlash(src)))
+	from, err := t.hostPath(src)
+	if err != nil {
+		return err
+	}
+	f, err := os.Open(from) // #nosec G304 -- from is checked by hostPath to stay below t.root
 	if err != nil {
 		return fmt.Errorf("image: %w", err)
 	}
@@ -215,13 +219,25 @@ func (t *tree) copyFile(src, dst string) error {
 	return t.write(dst, f, info.Size())
 }
 
+// hostPath returns the host path of the image path name below t.root. It
+// returns an error when name would resolve outside t.root (".." or an
+// absolute path after cleaning), the one check every file read and write
+// of the extraction goes through.
+func (t *tree) hostPath(name string) (string, error) {
+	rel := strings.TrimPrefix(path.Clean("/"+name), "/")
+	if !filepath.IsLocal(filepath.FromSlash(rel)) {
+		return "", fmt.Errorf("image: %s escapes the extraction root", name)
+	}
+	return filepath.Join(t.root, filepath.FromSlash(rel)), nil
+}
+
 // write copies size bytes of r into t.root at name, one module file,
 // refusing a path that would land outside t.root. It returns an error
 // when name escapes the root or the copy fails.
 func (t *tree) write(name string, r io.Reader, size int64) error {
-	dst := filepath.Join(t.root, filepath.FromSlash(name))
-	if rel, err := filepath.Rel(t.root, dst); err != nil || !filepath.IsLocal(rel) {
-		return fmt.Errorf("image: %s escapes the extraction root", name)
+	dst, err := t.hostPath(name)
+	if err != nil {
+		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return fmt.Errorf("image: %w", err)
