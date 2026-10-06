@@ -24,7 +24,8 @@
 #   Images    both images with :VERSION and their digests
 #   Verify    cosign and `gh attestation verify`
 #   Changes   the commit subjects since the previous tag, without merge
-#             commits and Dependabot's dependency bumps
+#             commits and Dependabot's dependency bumps ("First release."
+#             when there is no previous tag)
 #
 # Image digests come from MANAGER_DIGEST and LINT_DIGEST (publish.yaml
 # passes the ones it just pushed), else from the registry through
@@ -161,10 +162,14 @@ printf '\n### Changes\n\n'
 prev="$(git describe --tags --abbrev=0 --match 'v[0-9]*' "${version}^" 2>/dev/null || true)"
 # Dependabot's bumps are filtered by author, so a maintainer's own deps:
 # commit stays. -P is for the negative lookahead.
-range="${version}"
-[[ -z "${prev}" ]] || range="${prev}..${version}"
-changes="$(git log --no-merges --perl-regexp --author='^(?!dependabot)' --format='- %s' "${range}")"
-if [[ -n "${changes}" ]]; then
+# The first release has no previous tag: its whole history is not a
+# changelog.
+changes=""
+[[ -z "${prev}" ]] ||
+	changes="$(git log --no-merges --perl-regexp --author='^(?!dependabot)' --format='- %s' "${prev}..${version}")"
+if [[ -z "${prev}" ]]; then
+	printf -- '- First release.\n'
+elif [[ -n "${changes}" ]]; then
 	printf '%s\n' "${changes}"
 else
 	printf -- '- No changes besides dependency updates.\n'
