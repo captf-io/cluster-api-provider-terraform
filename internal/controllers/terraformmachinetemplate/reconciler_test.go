@@ -278,6 +278,28 @@ func TestReconcileInspectFailed(t *testing.T) {
 	}
 }
 
+// TestReconcileSpecCapacityInspectFailed proves spec.capacity is applied
+// when the image cannot be inspected: source Spec, no image recorded, the
+// last known nodeInfo kept, CapacityResolved True with a message noting the
+// image was not inspected, and a retry scheduled for the image.
+func TestReconcileSpecCapacityInspectFailed(t *testing.T) {
+	t.Parallel()
+	tpl := template(func(tpl *infrav1.TerraformMachineTemplate) {
+		tpl.Spec.Capacity = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2")}
+		tpl.Status.NodeInfo = infrav1.NodeInfo{Architecture: infrav1.ArchitectureArm64}
+	})
+	got, res := run(t, tpl, &fakeInspector{err: &transport.Error{StatusCode: http.StatusNotFound}})
+	c := conditions.Get(got, infrav1.CapacityResolvedCondition)
+	if c == nil || c.Status != metav1.ConditionTrue || c.Reason != infrav1.CapacityResolvedReason || !strings.HasPrefix(c.Message, notInspected) ||
+		!got.Status.Capacity.Cpu().Equal(resource.MustParse("2")) || got.Status.CapacitySource.Source != infrav1.CapacitySourceSpec ||
+		got.Status.CapacitySource.Image != "" || got.Status.NodeInfo.Architecture != infrav1.ArchitectureArm64 || res.RequeueAfter != RetryFloor {
+		t.Errorf("condition %+v, status %+v, result %+v", c, got.Status, res)
+	}
+	if Resolved(got) {
+		t.Error("a template whose image was not inspected counts as resolved")
+	}
+}
+
 // TestInspectFailure: the condition message names the image and a class
 // of failure, never the registry's or the network's error text.
 func TestInspectFailure(t *testing.T) {

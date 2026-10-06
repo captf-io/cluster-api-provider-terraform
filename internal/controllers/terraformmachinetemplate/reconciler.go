@@ -54,6 +54,10 @@ const (
 	RetryCeiling = 10 * time.Minute
 )
 
+// notInspected starts the CapacityResolved message of a template whose
+// spec.capacity was applied while its image could not be inspected.
+const notInspected = "image not inspected"
+
 // Reconciler reconciles TerraformMachineTemplates. The manager's RBAC
 // markers are in internal/controllers/rbac.go.
 type Reconciler struct {
@@ -134,9 +138,26 @@ func (r *Reconciler) resolve(ctx context.Context, t *infrav1.TerraformMachineTem
 		}
 		// The raw error goes to the log only: registry responses can carry
 		// arbitrary bodies that do not belong in a condition or an event.
-		klog.FromContext(ctx).V(shared.LogFlow).Info("Image inspection failed; keeping the previous capacity", "image", spec.Source.Image, "error", err.Error())
+		klog.FromContext(ctx).V(shared.LogFlow).Info("Image inspection failed", "image", spec.Source.Image, "error", err.Error())
 		retry := failedRetry(t, r.Deps.Clock.Now())
-		if prev := conditions.Get(t, infrav1.CapacityResolvedCondition); prev == nil || prev.Reason != infrav1.ImageInspectFailedReason {
+		prev := conditions.Get(t, infrav1.CapacityResolvedCondition)
+		firstFailure := prev == nil || (prev.Reason != infrav1.ImageInspectFailedReason && !strings.HasPrefix(prev.Message, notInspected))
+		if len(t.Spec.Capacity) > 0 {
+			// The override does not depend on the registry: apply it, keep
+			// the last known nodeInfo, and keep retrying for the image.
+			t.Status.Capacity = t.Spec.Capacity.DeepCopy()
+			t.Status.CapacitySource = infrav1.CapacitySource{Source: infrav1.CapacitySourceSpec}
+			msg = notInspected + ": " + msg
+			if firstFailure {
+				r.Deps.Emit(t, corev1.EventTypeWarning, shared.EventImageInspectFailed, "Inspect", "%s", msg)
+				r.Deps.Metrics.ImageInspectError(infrav1.ImageInspectFailedReason)
+			}
+			conditions.Set(t, metav1.Condition{
+				Type: infrav1.CapacityResolvedCondition, Status: metav1.ConditionTrue, Reason: infrav1.CapacityResolvedReason, Message: msg,
+			})
+			return ctrl.Result{RequeueAfter: retry}, nil
+		}
+		if firstFailure {
 			r.Deps.Emit(t, corev1.EventTypeWarning, shared.EventImageInspectFailed, "Inspect", "%s", msg)
 			r.Deps.Metrics.ImageInspectError(infrav1.ImageInspectFailedReason)
 		}
@@ -225,7 +246,7 @@ func InspectFailure(image string, err error) string {
 // now, clamped to [RetryFloor, RetryCeiling].
 func failedRetry(t *infrav1.TerraformMachineTemplate, now time.Time) time.Duration {
 	c := conditions.Get(t, infrav1.CapacityResolvedCondition)
-	if c == nil || c.Reason != infrav1.ImageInspectFailedReason {
+	if c == nil || (c.Reason != infrav1.ImageInspectFailedReason && !strings.HasPrefix(c.Message, notInspected)) {
 		return RetryFloor
 	}
 	return min(max(now.Sub(c.LastTransitionTime.Time), RetryFloor), RetryCeiling)

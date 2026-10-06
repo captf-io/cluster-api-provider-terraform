@@ -1094,11 +1094,13 @@ spec:
                 description: |-
                   capacitySource is the spec image reference capacity and nodeInfo were
                   resolved from; they are re-resolved when the spec image changes.
+                minProperties: 1
                 properties:
                   image:
                     description: |-
                       image is the spec image reference last resolved. The image always
-                      supplies nodeInfo, even when spec.capacity supplies the capacity.
+                      supplies nodeInfo, even when spec.capacity supplies the capacity. It
+                      is unset when source is Spec and the image could not be inspected.
                     maxLength: 512
                     minLength: 1
                     type: string
@@ -1110,9 +1112,10 @@ spec:
                     - Spec
                     - Image
                     type: string
-                required:
-                - image
                 type: object
+                x-kubernetes-validations:
+                - message: image is required when source is Image
+                  rule: '!has(self.source) || self.source != ''Image'' || has(self.image)'
               conditions:
                 description: conditions of the TerraformMachineTemplate (CapacityResolved).
                 items:

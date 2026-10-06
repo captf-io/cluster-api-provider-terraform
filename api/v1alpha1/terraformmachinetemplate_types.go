@@ -94,6 +94,8 @@ const (
 )
 
 // CapacitySource records where the capacity was resolved from.
+// +kubebuilder:validation:MinProperties=1
+// +kubebuilder:validation:XValidation:rule="!has(self.source) || self.source != 'Image' || has(self.image)",message="image is required when source is Image"
 type CapacitySource struct {
 	// source is Spec when status.capacity is spec.capacity, and Image when
 	// it comes from the image label io.captf.capacity.
@@ -101,8 +103,9 @@ type CapacitySource struct {
 	Source CapacitySourceKind `json:"source,omitempty"`
 
 	// image is the spec image reference last resolved. The image always
-	// supplies nodeInfo, even when spec.capacity supplies the capacity.
-	// +required
+	// supplies nodeInfo, even when spec.capacity supplies the capacity. It
+	// is unset when source is Spec and the image could not be inspected.
+	// +optional
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=512
 	Image string `json:"image,omitempty"`
