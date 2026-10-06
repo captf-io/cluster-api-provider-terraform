@@ -67,14 +67,21 @@
 # whose bundle is also uploaded as provenance.intoto.jsonl (OpenSSF
 # Scorecard's Signed-Releases check). Verify:
 #
-#   cosign verify ghcr.io/captf-io/cluster-api-provider-terraform:edge \
-#     --certificate-identity-regexp '^https://github.com/captf-io/cluster-api-provider-terraform/' \
+#   cosign verify ghcr.io/captf-io/cluster-api-provider-terraform:vX.Y.Z \
+#     --certificate-identity https://github.com/captf-io/cluster-api-provider-terraform/.github/workflows/publish.yaml@refs/tags/vX.Y.Z \
 #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
-#   gh attestation verify oci://ghcr.io/captf-io/cluster-api-provider-terraform:edge \
+#   gh attestation verify oci://ghcr.io/captf-io/cluster-api-provider-terraform:vX.Y.Z \
 #     -R captf-io/cluster-api-provider-terraform
-#   (the same for ghcr.io/captf-io/tfcapi-lint, still -R this repository)
+#   (the same for ghcr.io/captf-io/tfcapi-lint, still -R this repository;
+#   its first release tag is v0.1.1)
+#   gh release download vX.Y.Z -R captf-io/cluster-api-provider-terraform \
+#     -p infrastructure-components.yaml
 #   gh attestation verify infrastructure-components.yaml \
 #     -R captf-io/cluster-api-provider-terraform
+#
+# Prefer a version tag to :edge, and deploy the digest. For :edge and
+# :sha-<7>, signed on refs/heads/main, use --certificate-identity-regexp
+# '^https://github.com/captf-io/cluster-api-provider-terraform/' instead.
 #
 # (add --predicate-type https://spdx.dev/Document/v2.3 for the SBOM).
 #

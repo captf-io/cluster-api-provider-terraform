@@ -56,14 +56,15 @@ walks through each step, including building and pushing module images.
 
 Two images are published for linux/amd64 and linux/arm64 by
 [publish.yaml](.github/workflows/publish.yaml): `:edge` and
-`:sha-<commit>` on every push to `main`, and `:vX.Y.Z` on every release tag,
-whose GitHub Release carries the clusterctl assets and the `tfcapi-lint`
-binaries.
+`:sha-<commit>` for every commit on `main` whose CI passed, and `:vX.Y.Z` on
+every release tag, whose GitHub Release carries the clusterctl assets and the
+`tfcapi-lint` binaries. `:edge` moves; use a version tag, and pin the digest
+in anything you deploy.
 
 | Image | Contents |
 | --- | --- |
 | `ghcr.io/captf-io/cluster-api-provider-terraform` | The manager and the in-Job runner |
-| `ghcr.io/captf-io/tfcapi-lint` | `tfcapi-lint` alone, run by the [tfcapi-lint GitHub Action](actions/tfcapi-lint/) |
+| `ghcr.io/captf-io/tfcapi-lint` | `tfcapi-lint` alone, run by the [tfcapi-lint GitHub Action](actions/tfcapi-lint/); its first release tag is `v0.1.1` (there is no `v0.1.0`) |
 
 Module repositories lint in CI with the action, which runs the linter
 image that matches the pinned commit (see
@@ -80,16 +81,26 @@ image that matches the pinned commit (see
 
 Each image is signed with keyless cosign and carries SLSA build
 provenance and an SPDX SBOM attestation; each release asset carries
-provenance:
+provenance. Verify a release by its version tag (the same, with
+`ghcr.io/captf-io/tfcapi-lint`, for the linter image, still with `-R` this
+repository):
 
 ```sh
-cosign verify ghcr.io/captf-io/cluster-api-provider-terraform:edge \
-  --certificate-identity-regexp '^https://github.com/captf-io/cluster-api-provider-terraform/' \
+cosign verify ghcr.io/captf-io/cluster-api-provider-terraform:vX.Y.Z \
+  --certificate-identity https://github.com/captf-io/cluster-api-provider-terraform/.github/workflows/publish.yaml@refs/tags/vX.Y.Z \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
-gh attestation verify oci://ghcr.io/captf-io/cluster-api-provider-terraform:edge \
+gh attestation verify oci://ghcr.io/captf-io/cluster-api-provider-terraform:vX.Y.Z \
   -R captf-io/cluster-api-provider-terraform
+gh release download vX.Y.Z -R captf-io/cluster-api-provider-terraform -p infrastructure-components.yaml
 gh attestation verify infrastructure-components.yaml -R captf-io/cluster-api-provider-terraform
 ```
+
+Resolve the tag once and deploy the digest (`ghcr.io/captf-io/cluster-api-provider-terraform@sha256:...`,
+printed in the release notes): the digest cannot change underneath you, and
+`cosign verify` and `gh attestation verify` accept it in place of the tag.
+Images built from `main` (`:edge`, `:sha-<commit>`) are signed by the publish
+workflow on `refs/heads/main`: for those, use
+`--certificate-identity-regexp '^https://github.com/captf-io/cluster-api-provider-terraform/'`.
 
 ## Documentation
 
