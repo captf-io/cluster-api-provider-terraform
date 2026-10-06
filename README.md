@@ -63,10 +63,11 @@ binaries.
 | Image | Contents |
 | --- | --- |
 | `ghcr.io/captf-io/cluster-api-provider-terraform` | The manager and the in-Job runner |
-| `ghcr.io/captf-io/tfcapi-lint` | `tfcapi-lint` alone, run by the [tfcapi-lint GitHub Action](actions/tfcapi-lint/action.yml) |
+| `ghcr.io/captf-io/tfcapi-lint` | `tfcapi-lint` alone, run by the [tfcapi-lint GitHub Action](actions/tfcapi-lint/) |
 
 Module repositories lint in CI with the action, which runs the linter
-image that matches the pinned commit:
+image that matches the pinned commit (see
+[tfcapi-lint in CI](https://captf.io/docs/module-author/tfcapi-lint-ci.html)):
 
 ```yaml
 - uses: captf-io/cluster-api-provider-terraform/actions/tfcapi-lint@<commit> # vX.Y.Z
