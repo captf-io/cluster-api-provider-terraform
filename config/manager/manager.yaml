@@ -36,7 +36,19 @@ spec:
     matchLabels:
       control-plane: controller-manager
       app.kubernetes.io/name: cluster-api-provider-terraform
-  replicas: 1
+  # Two replicas: every validating webhook is failurePolicy: Fail, so a
+  # restart or a node drain of a lone manager would block CAPI's writes to
+  # every Terraform* object. The webhook server does not need leader
+  # election (controller-runtime's DefaultServer.NeedLeaderElection is
+  # false), so the standby serves admission while the leader reconciles and
+  # takes over when the leader releases the Lease on shutdown.
+  replicas: 2
+  # Never drop below the desired count during a rollout.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   template:
     metadata:
       annotations:
@@ -51,6 +63,16 @@ spec:
         runAsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
+      # Prefer, never require, a separate node per replica, so a single-node
+      # (kind) cluster still schedules both.
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            control-plane: controller-manager
+            app.kubernetes.io/name: cluster-api-provider-terraform
       containers:
       - name: manager
         command:
@@ -74,6 +96,15 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
+        # The Go runtime's soft memory limit follows the container limit
+        # (resources.limits.memory, in bytes), so a patched limit carries
+        # over: the garbage collector works harder near the limit instead of
+        # the kernel killing the pod.
+        - name: GOMEMLIMIT
+          valueFrom:
+            resourceFieldRef:
+              containerName: manager
+              resource: limits.memory
         - name: SERVICE_ACCOUNT_NAME
           valueFrom:
             fieldRef:
@@ -104,16 +135,36 @@ spec:
             port: healthz
           initialDelaySeconds: 5
           periodSeconds: 10
+        # Memory, an estimate to be revised with measurements. The informers
+        # hold Secrets without their data, so the steady state is the Go
+        # runtime, the CAPI and CAPTF objects and the Job informer: about
+        # 50-80Mi. A reconcile can read a whole state: up to 32 chunks and
+        # 64Mi decompressed (state.MaxChunks, MaxStateBytes), held while it
+        # is decoded, about 100-200Mi for that worst case on one reconcile;
+        # real states are 1-5Mi, and there are 10 reconciles per controller
+        # (--*-concurrency). 512Mi covers the steady state, one worst-case
+        # read and a typical concurrent load (~200Mi); request enough for
+        # the steady state with headroom, so the scheduler is not told
+        # to reserve the burst.
         resources:
           limits:
             cpu: 500m
-            memory: 256Mi
+            memory: 512Mi
           requests:
             cpu: 10m
-            memory: 64Mi
+            memory: 128Mi
+        # The endpoint is removed from the webhook Service while the pod
+        # terminates, but kube-proxy and the API server learn that a moment
+        # after SIGTERM; waiting keeps admission requests off a pod that has
+        # stopped listening. 5s of the 30s grace period, then up to the
+        # manager's 20s graceful shutdown (options.GracefulShutdownTimeout).
+        lifecycle:
+          preStop:
+            sleep:
+              seconds: 5
         terminationMessagePolicy: FallbackToLogsOnError
       serviceAccountName: controller-manager
-      terminationGracePeriodSeconds: 10
+      terminationGracePeriodSeconds: 30
       tolerations:
       - effect: NoSchedule
         key: node-role.kubernetes.io/control-plane

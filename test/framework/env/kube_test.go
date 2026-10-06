@@ -218,6 +218,9 @@ func TestKubeManagerImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if d.Spec.Replicas == nil || *d.Spec.Replicas != 1 {
+		t.Errorf("patched replicas = %v, want 1", d.Spec.Replicas)
+	}
 	ctr := d.Spec.Template.Spec.Containers[0]
 	wantEnv := []corev1.EnvVar{{Name: managerImageEnv, Value: "localhost/captf/manager:new"}, {Name: "POD_NAMESPACE", Value: "x"}}
 	if ctr.Image != "localhost/captf/manager:new" || !slices.Equal(ctr.Env, wantEnv) {
