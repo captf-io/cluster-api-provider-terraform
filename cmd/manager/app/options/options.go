@@ -43,6 +43,13 @@ const (
 	// LeaderElectionID is the Lease name, in the manager namespace.
 	LeaderElectionID = "controller-leader-election-captf"
 
+	// GracefulShutdownTimeout is how long the manager gives its runnables to
+	// stop after SIGTERM before it returns. The Deployment's
+	// terminationGracePeriodSeconds is 30s, of which the container's
+	// preStop sleep takes 5s, so this leaves 5s of slack before the kubelet
+	// sends SIGKILL. controller-runtime's default, 30s, would be cut short.
+	GracefulShutdownTimeout = 20 * time.Second
+
 	// ManagerImageEnv names the environment variable, set by the
 	// Deployment, that carries the manager's own image reference; it is the
 	// default of --runner-image.
@@ -261,6 +268,7 @@ func (o *Options) ManagerOptions(scheme *runtime.Scheme) (ctrl.Options, error) {
 	cacheOpts := captfmanager.CacheOptions(o.Namespace)
 	syncPeriod := o.SyncPeriod
 	cacheOpts.SyncPeriod = &syncPeriod
+	gracefulShutdown := GracefulShutdownTimeout
 	lease, renew, retry := o.LeaderElectionLeaseDuration, o.LeaderElectionRenewDeadline, o.LeaderElectionRetryPeriod
 
 	return ctrl.Options{
@@ -268,6 +276,11 @@ func (o *Options) ManagerOptions(scheme *runtime.Scheme) (ctrl.Options, error) {
 		LeaderElection:             o.LeaderElect,
 		LeaderElectionID:           LeaderElectionID,
 		LeaderElectionResourceLock: resourcelock.LeasesResourceLock,
+		// The leader gives up the Lease on shutdown, so the standby takes
+		// over at once instead of after LeaseDuration. Safe because Run
+		// returns, and the process exits, as soon as the manager stops.
+		LeaderElectionReleaseOnCancel: true,
+		GracefulShutdownTimeout:       &gracefulShutdown,
 		LeaseDuration:              &lease,
 		RenewDeadline:              &renew,
 		RetryPeriod:                &retry,

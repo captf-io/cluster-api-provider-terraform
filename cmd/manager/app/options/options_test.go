@@ -199,6 +199,9 @@ func TestManagerOptions(t *testing.T) {
 	if m.Scheme != scheme || !m.LeaderElection || m.LeaderElectionID != LeaderElectionID || m.LeaderElectionResourceLock != "leases" {
 		t.Errorf("leader election/scheme not wired: %+v", m)
 	}
+	if !m.LeaderElectionReleaseOnCancel || m.GracefulShutdownTimeout == nil || *m.GracefulShutdownTimeout != GracefulShutdownTimeout {
+		t.Errorf("shutdown not wired: releaseOnCancel=%v gracefulShutdown=%v", m.LeaderElectionReleaseOnCancel, m.GracefulShutdownTimeout)
+	}
 	if m.HealthProbeBindAddress != ":9440" || m.Metrics.BindAddress != ":8443" || !m.Metrics.SecureServing || m.Metrics.FilterProvider == nil {
 		t.Errorf("diagnostics not secured by default: health=%q metrics=%+v", m.HealthProbeBindAddress, m.Metrics)
 	}
