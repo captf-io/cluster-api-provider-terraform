@@ -21,10 +21,12 @@
 #                actions/tfcapi-lint GitHub Action runs it)
 #
 #   ci passed on main both images :edge and :sha-<7-char commit>
-#   push tag v*.*.*   both images :vX.Y.Z, then a GitHub Release (a
+#   push tag v*.*.*   both images :vX.Y.Z, a check that both tags exist at
+#                     the pushed digests, then a GitHub Release (a
 #                     pre-release for vX.Y.Z-rc.N) with the clusterctl
 #                     assets (infrastructure-components.yaml, metadata.yaml,
-#                     templates) and the tfcapi-lint binaries and checksums
+#                     templates) and the tfcapi-lint binaries and checksums;
+#                     its notes come from hack/release-notes.sh
 #
 # Nothing is published from a commit whose ci failed:
 #
@@ -211,6 +213,7 @@ jobs:
     # manager's.
     outputs:
       manager-digest: ${{ steps.digest.outputs.manager }}
+      lint-digest: ${{ steps.digest.outputs.tfcapi-lint }}
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
@@ -346,18 +349,32 @@ jobs:
       contents: write # create the GitHub Release and upload its assets
       id-token: write # sign the provenance attestation (OIDC)
       attestations: write # store the provenance attestation
+      packages: read # read the pushed image tags back
     env:
       VERSION: ${{ github.ref_name }}
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       # Full history and tags: GoReleaser builds from the tag, and
       # release-notes lists the commits since the previous one.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
+      # Both images must carry :vX.Y.Z, and exactly the digests the image
+      # job pushed and signed (v0.1.0 had no tfcapi-lint image). Nothing is
+      # released until they do.
+      - name: Check the image tags
+        env:
+          MANAGER_DIGEST: ${{ needs.image.outputs.manager-digest }}
+          LINT_DIGEST: ${{ needs.image.outputs.lint-digest }}
+        run: make release-check-images VERSION="${VERSION}"
       # No module or build cache in a publishing job.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -387,8 +404,11 @@ jobs:
         env:
           BUNDLE: ${{ steps.attest.outputs.bundle-path }}
         run: cp -- "${BUNDLE}" out/release/provenance.intoto.jsonl
+      # The notes quote the image digests the image job pushed.
       - name: Create the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          MANAGER_DIGEST: ${{ needs.image.outputs.manager-digest }}
+          LINT_DIGEST: ${{ needs.image.outputs.lint-digest }}
         run: make release-github VERSION="${VERSION}"

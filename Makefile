@@ -411,6 +411,7 @@ release: release-preflight ## Build and push the manager and tfcapi-lint images,
 	$(MAKE) docker-build docker-push IMG=$(RELEASE_REPO):$(VERSION)
 	$(MAKE) docker-build-lint LINT_IMG=$(RELEASE_LINT_REPO):$(VERSION)
 	$(MAKE) docker-push IMG=$(RELEASE_LINT_REPO):$(VERSION)
+	$(MAKE) release-check-images VERSION=$(VERSION)
 	@digest="$$($(MAKE) --no-print-directory -s release-image-digest VERSION=$(VERSION))" || exit 1; \
 	$(MAKE) release-assets VERSION=$(VERSION) RELEASE_IMG="$(RELEASE_REPO)@$$digest"
 
@@ -434,11 +435,16 @@ release-assets: $(GORELEASER) ## Build every release asset for VERSION into out/
 	@ls -1 "$(RELEASE_ASSETS)"
 
 .PHONY: release-notes
-release-notes: ## Write out/release/notes.md from the commits since the previous tag.
+release-notes: ## Write out/release/notes.md (summary, install, images, verify, changes) for VERSION (hack/release-notes.sh).
 	@mkdir -p "$(RELEASE_ASSETS)"
-	@prev="$$(git describe --tags --abbrev=0 --match 'v*' "$(VERSION)^" 2>/dev/null || true)"; \
-	{ echo "## $(VERSION)"; echo; git log --no-merges --format='- %s' $${prev:+$$prev..}"$(VERSION)"; } >"$(RELEASE_ASSETS)/notes.md"; \
-	echo "$@: $(RELEASE_ASSETS)/notes.md (since $${prev:-the first commit})"
+	@MANAGER_REPO="$(RELEASE_REPO)" LINT_REPO="$(RELEASE_LINT_REPO)" hack/release-notes.sh "$(VERSION)" >"$(RELEASE_ASSETS)/notes.md"
+	@echo "$@: $(RELEASE_ASSETS)/notes.md"
+
+# Both images must carry :VERSION (set MANAGER_DIGEST and LINT_DIGEST to also
+# pin them to what was just pushed). publish.yaml runs it before the release.
+.PHONY: release-check-images
+release-check-images: ## Fail unless the manager and tfcapi-lint images both carry :VERSION.
+	@MANAGER_REPO="$(RELEASE_REPO)" LINT_REPO="$(RELEASE_LINT_REPO)" hack/check-release-images.sh "$(VERSION)"
 
 # A VERSION with a prerelease part (vX.Y.Z-rc.N) is marked as a pre-release.
 .PHONY: release-github
