@@ -204,9 +204,10 @@ func run(ctx context.Context, o Options) (Result, int) {
 		}
 		res := Exec(ctx, o.Bin, s, prep.Env, prep.RootDir, stdout, stderr, o.StopTimeout)
 		var diags []Diagnostic
+		var errored []string
 		if ui != nil {
 			ui.Flush()
-			diags = ui.Diagnostics()
+			diags, errored = ui.Diagnostics(), ui.Errored()
 		}
 		logger.Info("Step finished", "step", s.Name, "exit", res.Exit, "seconds", res.Seconds)
 		r.Steps = append(r.Steps, Step{Name: s.Name, Exit: res.Exit, Seconds: round(res.Seconds)})
@@ -234,7 +235,7 @@ func run(ctx context.Context, o Options) (Result, int) {
 			// failure. Passing a runtime's code through would make a
 			// Terraform panic (exit 2) look like ExitUsage.
 			r = o.fail(r, kind, s.Name, summary)
-			r.Error.Resources = failedResources(o.red, diags)
+			r.Error.Resources = failedResources(o.red, diags, errored)
 			return r, ExitFailure
 		}
 		if s.Name == StepShowJSON {

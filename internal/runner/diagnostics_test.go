@@ -19,6 +19,7 @@ package runner
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -69,7 +70,7 @@ func TestUIRenderer(t *testing.T) {
 func TestFailedResources(t *testing.T) {
 	t.Parallel()
 	ds := []Diagnostic{{Summary: "no address"}, {Address: "a.b", Summary: "boom hunter2hunter2\nmore"}, {Address: "a.b", Summary: "boom hunter2hunter2"}}
-	got := failedResources(NewRedactor("hunter2hunter2"), ds)
+	got := failedResources(NewRedactor("hunter2hunter2"), ds, nil)
 	if len(got) != 1 || strings.Contains(got[0], "hunter2") || !strings.HasPrefix(got[0], "a.b: boom ") {
 		t.Errorf("got %q", got)
 	}
@@ -77,11 +78,11 @@ func TestFailedResources(t *testing.T) {
 	for i := range 30 {
 		many = append(many, Diagnostic{Address: "r.x" + strings.Repeat("y", i), Summary: strings.Repeat("s", 600)})
 	}
-	got = failedResources(nil, many)
+	got = failedResources(nil, many, nil)
 	if len(got) != MaxErrorResources || len(got[0]) != MaxResourceBytes {
 		t.Errorf("got %d resources, first %d bytes", len(got), len(got[0]))
 	}
-	if failedResources(nil, nil) != nil {
+	if failedResources(nil, nil, nil) != nil {
 		t.Error("no diagnostics gave resources")
 	}
 }
@@ -146,5 +147,60 @@ func TestRunApplyChangesFromJSON(t *testing.T) {
 	r, code := Run(t.Context(), f.opts)
 	if code != ExitOK || r.Changes == nil || *r.Changes != (Changes{Add: 1, Change: 2, Destroy: 3}) {
 		t.Fatalf("code %d, changes %+v", code, r.Changes)
+	}
+}
+
+// TestFailedResourcesFromRealOutput feeds failedResources the captured
+// `tofu apply -json` output (OpenTofu 1.11.5, testdata/ui) of a failed
+// postcondition, whose diagnostic has no address and is tied to its
+// resource by its snippet, and of a failing provisioner, whose diagnostic
+// names it, after an apply_errored message for the same resource.
+func TestFailedResourcesFromRealOutput(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct{ file, want string }{
+		{"postcondition.json", "terraform_data.a: Resource postcondition failed"},
+		{"provisioner.json", "terraform_data.b: local-exec provisioner error"},
+	} {
+		raw, err := os.ReadFile("testdata/ui/" + tt.file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out, errOut bytes.Buffer
+		u := newUIRenderer(&out, &errOut, nil)
+		_, _ = u.Write(raw)
+		u.Flush()
+		got := failedResources(nil, u.Diagnostics(), u.Errored())
+		if len(got) != 1 || got[0] != tt.want {
+			t.Errorf("%s: resources = %q, want %q", tt.file, got, tt.want)
+		}
+		if !strings.Contains(errOut.String(), "Error: ") || strings.Contains(out.String(), `"@level"`) {
+			t.Errorf("%s: out %q, errOut %q", tt.file, out.String(), errOut.String())
+		}
+	}
+}
+
+// TestFailedResourcesOrder checks the priority of the sources: an own
+// address, then apply_errored addresses in order (a module path kept), then
+// the snippet; a data source snippet and an unrelated context.
+func TestFailedResourcesOrder(t *testing.T) {
+	t.Parallel()
+	snip := func(c string) *struct {
+		Context string `json:"context"`
+	} {
+		return &struct {
+			Context string `json:"context"`
+		}{c}
+	}
+	ds := []Diagnostic{
+		{Summary: "one"},
+		{Summary: "two", Address: "module.m.a.y"},
+		{Summary: "three", Snippet: snip(`data "d" "n"`)},
+		{Summary: "four", Snippet: snip(`module "m"`)},
+		{Summary: "five", Snippet: snip(`resource "r" "s"`)},
+	}
+	got := failedResources(nil, ds, []string{"module.m.a.x", "module.m.a.y"})
+	want := []string{"module.m.a.x: one", "module.m.a.y: two", "data.d.n: three", "r.s: five"}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }

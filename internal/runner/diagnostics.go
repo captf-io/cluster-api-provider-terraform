@@ -24,6 +24,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -48,19 +49,38 @@ const maxUILine = 1 << 20
 // the `diagnostic` object of a message whose type is "diagnostic" (the
 // machine-readable UI of Terraform and of OpenTofu, which share the
 // format: severity, summary, detail and, for a resource-related error,
-// address).
+// address, which is often null, even for a failure of one resource, such
+// as a failed postcondition; verified with OpenTofu 1.11.5, Terraform
+// documents the same fields). Snippet is the source excerpt, whose
+// context names the block the diagnostic is about.
 type Diagnostic struct {
 	Severity string `json:"severity"`
 	Summary  string `json:"summary"`
 	Detail   string `json:"detail"`
 	Address  string `json:"address"`
+	Snippet  *struct {
+		Context string `json:"context"`
+	} `json:"snippet"`
 }
+
+// uiHook is the hook of an "apply_errored" message: the resource whose
+// create, update or delete failed. Its address carries the module path.
+type uiHook struct {
+	Resource struct {
+		Addr string `json:"addr"`
+	} `json:"resource"`
+}
+
+// snippetResource matches the context of a diagnostic about a resource or
+// data source block: `resource "TYPE" "NAME"` or `data "TYPE" "NAME"`.
+var snippetResource = regexp.MustCompile(`^(resource|data) "([^"]+)" "([^"]+)"$`)
 
 // uiMessage is one line of the JSON UI.
 type uiMessage struct {
 	Message    string      `json:"@message"`
 	Type       string      `json:"type"`
 	Diagnostic *Diagnostic `json:"diagnostic"`
+	Hook       *uiHook     `json:"hook"`
 }
 
 // uiRenderer is an io.Writer for the stdout of a `-json` step. It renders
@@ -78,6 +98,8 @@ type uiRenderer struct {
 	line  []byte
 	skip  bool
 	diags []Diagnostic
+	// errored are the addresses of "apply_errored" messages, in order.
+	errored []string
 }
 
 // newUIRenderer returns a uiRenderer writing messages to out and
@@ -149,6 +171,14 @@ func (u *uiRenderer) Diagnostics() []Diagnostic {
 	return append([]Diagnostic(nil), u.diags...)
 }
 
+// Errored returns the addresses of the resources whose apply failed
+// ("apply_errored" messages), in order.
+func (u *uiRenderer) Errored() []string {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return append([]string(nil), u.errored...)
+}
+
 // render writes line, one JSON UI message or other text, to the log.
 func (u *uiRenderer) render(line []byte) {
 	var m uiMessage
@@ -168,6 +198,9 @@ func (u *uiRenderer) render(line []byte) {
 			u.write(u.out, m.Message)
 		}
 		return
+	}
+	if m.Type == "apply_errored" && m.Hook != nil && m.Hook.Resource.Addr != "" {
+		u.errored = append(u.errored, m.Hook.Resource.Addr)
 	}
 	if m.Message != "" {
 		u.write(u.out, m.Message)
@@ -224,16 +257,32 @@ func errorLines(ds []Diagnostic) []string {
 }
 
 // failedResources returns the "<address>: <summary>" entries of ds's
-// diagnostics that name a resource, redacted with red and capped: at most
-// MaxErrorResources of at most MaxResourceBytes bytes each, without
-// repeats. nil when none names a resource.
-func failedResources(red *Redactor, ds []Diagnostic) []string {
+// diagnostics, redacted with red and capped: at most MaxErrorResources of
+// at most MaxResourceBytes bytes each, without repeats. nil when no
+// diagnostic can be tied to a resource. A diagnostic's resource is, in
+// this order: its own address (often null); else the next address in
+// errored, the "apply_errored" addresses in the runtime's order (one is
+// used up by a diagnostic naming it); else, from its source snippet's
+// context `resource "T" "N"` or `data "T" "N"`, "T.N" or "data.T.N". That
+// last form has no module path: the snippet does not carry one.
+func failedResources(red *Redactor, ds []Diagnostic, errored []string) []string {
+	queue := slices.Clone(errored)
 	var out []string
 	for _, d := range ds {
-		if d.Address == "" {
+		addr := d.Address
+		if addr != "" {
+			if i := slices.Index(queue, addr); i >= 0 {
+				queue = slices.Delete(queue, i, i+1)
+			}
+		} else if len(queue) > 0 {
+			addr, queue = queue[0], queue[1:]
+		} else {
+			addr = snippetAddress(d)
+		}
+		if addr == "" {
 			continue
 		}
-		entry := strutil.Truncate(red.Redact(d.Address+": "+firstLine(d.Summary)), MaxResourceBytes)
+		entry := strutil.Truncate(red.Redact(addr+": "+firstLine(d.Summary)), MaxResourceBytes)
 		if slices.Contains(out, entry) {
 			continue
 		}
@@ -243,6 +292,22 @@ func failedResources(red *Redactor, ds []Diagnostic) []string {
 		}
 	}
 	return out
+}
+
+// snippetAddress returns the resource address d's snippet context names
+// ("T.N", "data.T.N"), or "".
+func snippetAddress(d Diagnostic) string {
+	if d.Snippet == nil {
+		return ""
+	}
+	m := snippetResource.FindStringSubmatch(d.Snippet.Context)
+	switch {
+	case m == nil:
+		return ""
+	case m[1] == "data":
+		return "data." + m[2] + "." + m[3]
+	}
+	return m[2] + "." + m[3]
 }
 
 // firstLine returns s up to its first newline.
