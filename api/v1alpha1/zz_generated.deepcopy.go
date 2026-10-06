@@ -697,6 +697,11 @@ func (in *TerraformClusterIdentityList) DeepCopyObject() runtime.Object {
 func (in *TerraformClusterIdentitySpec) DeepCopyInto(out *TerraformClusterIdentitySpec) {
 	*out = *in
 	out.SecretRef = in.SecretRef
+	if in.RequiredKeys != nil {
+		in, out := &in.RequiredKeys, &out.RequiredKeys
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.AllowedNamespaces != nil {
 		in, out := &in.AllowedNamespaces, &out.AllowedNamespaces
 		*out = new(AllowedNamespaces)

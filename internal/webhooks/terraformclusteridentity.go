@@ -184,6 +184,10 @@ func (w *TerraformClusterIdentity) authorizeSecretRead(ctx context.Context, obj 
 func validateIdentitySpec(spec *infrav1.TerraformClusterIdentitySpec) field.ErrorList {
 	var errs field.ErrorList
 	refPath := field.NewPath("spec", "secretRef")
+	// An unset type is Secret: the CRD defaults it, and tests may omit it.
+	if spec.Type != "" && spec.Type != infrav1.IdentityTypeSecret {
+		errs = append(errs, field.NotSupported(field.NewPath("spec", "type"), spec.Type, []infrav1.IdentityType{infrav1.IdentityTypeSecret}))
+	}
 	if spec.SecretRef.Name == "" {
 		errs = append(errs, field.Required(refPath.Child("name"), "the credentials Secret name is required"))
 	}

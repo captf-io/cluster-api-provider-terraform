@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -147,6 +148,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		if err := identity.EnsureSourceOwnerRef(ctx, r.Client, id, src); err != nil {
 			return ctrl.Result{}, err
 		}
+		if missing := identity.MissingKeys(id, src); len(missing) > 0 {
+			ready.Status, ready.Reason = metav1.ConditionFalse, infrav1.CredentialsIncompleteReason
+			ready.Message = fmt.Sprintf("Secret %s/%s lacks required key(s): %s", src.Namespace, src.Name, strings.Join(missing, ", "))
+		}
 	}
 	namespaces, err := r.mirrorNamespaces(ctx, id.Name)
 	if err != nil {
@@ -183,6 +188,9 @@ func (r *Reconciler) emitReady(id *infrav1.TerraformClusterIdentity, prev *metav
 	}
 	secret := id.Spec.SecretRef.Namespace + "/" + id.Spec.SecretRef.Name
 	switch {
+	case ready.Status == metav1.ConditionFalse && ready.Reason == infrav1.CredentialsIncompleteReason:
+		r.Recorder.Eventf(id, nil, corev1.EventTypeWarning, shared.EventIdentitySecretNotFound, "Reconcile",
+			"Credentials Secret %s is incomplete: %s; objects using this identity start no Job", secret, ready.Message)
 	case ready.Status == metav1.ConditionFalse:
 		r.Recorder.Eventf(id, nil, corev1.EventTypeWarning, shared.EventIdentitySecretNotFound, "Reconcile",
 			"Credentials Secret %s not found; objects using this identity start no Job", secret)

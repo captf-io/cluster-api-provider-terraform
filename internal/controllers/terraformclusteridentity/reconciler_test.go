@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -226,6 +227,47 @@ func TestReconcileSecretNotFound(t *testing.T) {
 	}
 	if len(got.Status.Namespaces) != 0 {
 		t.Errorf("namespaces = %v, want none", got.Status.Namespaces)
+	}
+}
+
+// TestReconcileRequiredKeys proves a Secret lacking a required key makes
+// Ready False/CredentialsIncomplete naming the missing keys, and that it is
+// True once every key is present. Only key names matter, never values.
+func TestReconcileRequiredKeys(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name       string
+		data       map[string][]byte
+		wantStatus metav1.ConditionStatus
+		wantReason string
+		wantMsg    string
+	}{
+		{"all present", map[string][]byte{"A": nil, "B": []byte("")}, metav1.ConditionTrue, infrav1.SecretFoundReason, ""},
+		{"one missing", map[string][]byte{"A": []byte("x")}, metav1.ConditionFalse, infrav1.CredentialsIncompleteReason, "B"},
+		{"all missing", nil, metav1.ConditionFalse, infrav1.CredentialsIncompleteReason, "A, B"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			src := sourceSecret()
+			src.Data = tc.data
+			e := newEnv(t, src)
+			id := &infrav1.TerraformClusterIdentity{}
+			if err := e.c.Get(t.Context(), client.ObjectKey{Name: idName}, id); err != nil {
+				t.Fatal(err)
+			}
+			id.Spec.RequiredKeys = []string{"B", "A"}
+			if err := e.c.Update(t.Context(), id); err != nil {
+				t.Fatal(err)
+			}
+			_, got := e.reconcile(t)
+			c := meta.FindStatusCondition(got.Status.Conditions, infrav1.ReadyCondition)
+			if c == nil || c.Status != tc.wantStatus || c.Reason != tc.wantReason {
+				t.Fatalf("Ready = %+v, want %s/%s", c, tc.wantStatus, tc.wantReason)
+			}
+			if tc.wantMsg != "" && !strings.Contains(c.Message, tc.wantMsg) {
+				t.Errorf("message %q does not name %q", c.Message, tc.wantMsg)
+			}
+		})
 	}
 }
 

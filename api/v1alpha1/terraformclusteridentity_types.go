@@ -20,15 +20,44 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// IdentityType discriminates how a TerraformClusterIdentity supplies
+// credentials. It is a union discriminator: each value selects the fields
+// that must be set.
+// +kubebuilder:validation:Enum=Secret
+type IdentityType string
+
+const (
+	// IdentityTypeSecret takes the credentials from a Secret (secretRef).
+	IdentityTypeSecret IdentityType = "Secret"
+)
+
 // TerraformClusterIdentitySpec is the desired state of a
 // TerraformClusterIdentity: cloud credentials and who may use them.
 // +kubebuilder:validation:MinProperties=1
+// +kubebuilder:validation:XValidation:rule="(has(self.type) && self.type != 'Secret') || has(self.secretRef)",message="secretRef is required when type is Secret"
 type TerraformClusterIdentitySpec struct {
+	// type selects how the credentials are supplied. Secret, the only type
+	// and the default when unset, reads them from secretRef.
+	// +optional
+	Type IdentityType `json:"type,omitempty"`
+
 	// secretRef names the Secret holding the credentials. It is mirrored into
 	// each allowed namespace that uses this identity and delivered to Jobs as
-	// environment variables and files.
-	// +required
+	// environment variables and files. Required when type is Secret.
+	// +optional
 	SecretRef SecretReference `json:"secretRef,omitempty,omitzero"`
+
+	// requiredKeys lists the keys the credentials Secret must hold. A Secret
+	// missing any of them makes the identity not Ready (CredentialsIncomplete)
+	// and objects using it start no Job. Only key names are checked, never
+	// values, so the check is the same for every cloud. Unset checks nothing.
+	// +optional
+	// +listType=set
+	// +kubebuilder:validation:MaxItems=64
+	// +kubebuilder:validation:items:MinLength=1
+	// +kubebuilder:validation:items:MaxLength=253
+	// +kubebuilder:validation:items:Pattern=`^[-._a-zA-Z0-9]+$`
+	RequiredKeys []string `json:"requiredKeys,omitempty"`
 
 	// allowedNamespaces restricts which namespaces may reference this
 	// identity. Unset allows no namespace; `selector: {}` allows every
@@ -63,8 +92,9 @@ type AllowedNamespaces struct {
 // +kubebuilder:validation:MinProperties=1
 type TerraformClusterIdentityStatus struct {
 	// conditions of the TerraformClusterIdentity. Ready is True when the
-	// credentials Secret exists (SecretFound), False when it does not
-	// (SecretNotFound).
+	// credentials Secret exists and holds every required key (SecretFound),
+	// False when it does not exist (SecretNotFound) or lacks a required key
+	// (CredentialsIncomplete).
 	// +optional
 	// +listType=map
 	// +listMapKey=type

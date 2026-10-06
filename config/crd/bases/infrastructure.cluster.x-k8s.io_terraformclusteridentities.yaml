@@ -132,11 +132,25 @@ spec:
                 - message: 'allowedNamespaces {} is ambiguous and rejected: set list,
                     or write selector: {} to allow every namespace'
                   rule: has(self.list) || has(self.selector)
+              requiredKeys:
+                description: |-
+                  requiredKeys lists the keys the credentials Secret must hold. A Secret
+                  missing any of them makes the identity not Ready (CredentialsIncomplete)
+                  and objects using it start no Job. Only key names are checked, never
+                  values, so the check is the same for every cloud. Unset checks nothing.
+                items:
+                  maxLength: 253
+                  minLength: 1
+                  pattern: ^[-._a-zA-Z0-9]+$
+                  type: string
+                maxItems: 64
+                type: array
+                x-kubernetes-list-type: set
               secretRef:
                 description: |-
                   secretRef names the Secret holding the credentials. It is mirrored into
                   each allowed namespace that uses this identity and delivered to Jobs as
-                  environment variables and files.
+                  environment variables and files. Required when type is Secret.
                 properties:
                   name:
                     description: name of the Secret.
@@ -154,9 +168,17 @@ spec:
                 - name
                 - namespace
                 type: object
-            required:
-            - secretRef
+              type:
+                description: |-
+                  type selects how the credentials are supplied. Secret, the only type
+                  and the default when unset, reads them from secretRef.
+                enum:
+                - Secret
+                type: string
             type: object
+            x-kubernetes-validations:
+            - message: secretRef is required when type is Secret
+              rule: (has(self.type) && self.type != 'Secret') || has(self.secretRef)
           status:
             description: status is the observed state of the TerraformClusterIdentity.
             minProperties: 1
@@ -164,8 +186,9 @@ spec:
               conditions:
                 description: |-
                   conditions of the TerraformClusterIdentity. Ready is True when the
-                  credentials Secret exists (SecretFound), False when it does not
-                  (SecretNotFound).
+                  credentials Secret exists and holds every required key (SecretFound),
+                  False when it does not exist (SecretNotFound) or lacks a required key
+                  (CredentialsIncomplete).
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.

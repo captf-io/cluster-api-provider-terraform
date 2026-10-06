@@ -867,6 +867,14 @@ func TestReconcileIdentityFailures(t *testing.T) {
 	}{
 		{"identity object missing", without[*infrav1.TerraformClusterIdentity], infrav1.IdentityNotFoundReason},
 		{"identity Secret missing", without[*corev1.Secret], infrav1.SecretNotFoundReason},
+		{"identity Secret lacks a required key", func(o []client.Object) []client.Object {
+			for _, x := range o {
+				if id, ok := x.(*infrav1.TerraformClusterIdentity); ok {
+					id.Spec.RequiredKeys = []string{"never-there"}
+				}
+			}
+			return o
+		}, infrav1.CredentialsIncompleteReason},
 		{"no identityRef at all", func(o []client.Object) []client.Object {
 			o[len(o)-1].(*infrav1.TerraformMachine).Spec.IdentityRef = infrav1.IdentityReference{}
 			return o

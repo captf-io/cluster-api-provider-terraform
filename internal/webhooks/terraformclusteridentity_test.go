@@ -70,3 +70,24 @@ func TestTerraformClusterIdentityWidening(t *testing.T) {
 		}
 	})
 }
+
+// TestValidateIdentitySpecType: an unset type is Secret, Secret needs
+// secretRef, and any other type is refused.
+func TestValidateIdentitySpecType(t *testing.T) {
+	t.Parallel()
+	ref := infrav1.SecretReference{Name: "creds", Namespace: "captf-system"}
+	for _, tc := range []struct {
+		name string
+		spec infrav1.TerraformClusterIdentitySpec
+		want int
+	}{
+		{"unset type", infrav1.TerraformClusterIdentitySpec{SecretRef: ref}, 0},
+		{"secret type", infrav1.TerraformClusterIdentitySpec{Type: infrav1.IdentityTypeSecret, SecretRef: ref}, 0},
+		{"secret without ref", infrav1.TerraformClusterIdentitySpec{Type: infrav1.IdentityTypeSecret}, 2},
+		{"unknown type", infrav1.TerraformClusterIdentitySpec{Type: "Vault", SecretRef: ref}, 1},
+	} {
+		if got := len(validateIdentitySpec(&tc.spec)); got != tc.want {
+			t.Errorf("%s: %d errors, want %d", tc.name, got, tc.want)
+		}
+	}
+}

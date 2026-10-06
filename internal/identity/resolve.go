@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -60,6 +61,20 @@ func MachineFallbackName(cluster *infrav1.TerraformCluster) string {
 		return d.IdentityRef.Name
 	}
 	return cluster.Spec.IdentityRef.Name
+}
+
+// MissingKeys returns the keys of id.Spec.RequiredKeys that src's data does
+// not hold, sorted; nil when none is missing or none is required. Only key
+// names are compared, never values.
+func MissingKeys(id *infrav1.TerraformClusterIdentity, src *corev1.Secret) []string {
+	var missing []string
+	for _, k := range id.Spec.RequiredKeys {
+		if _, ok := src.Data[k]; !ok {
+			missing = append(missing, k)
+		}
+	}
+	slices.Sort(missing)
+	return slices.Compact(missing)
 }
 
 // Get reads the identity called name, bounded by ctx, through reader. It

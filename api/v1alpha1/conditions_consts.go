@@ -121,6 +121,9 @@ const (
 	// SecretNotFoundReason is the False reason when the identity's Secret does
 	// not exist.
 	SecretNotFoundReason = "SecretNotFound"
+	// CredentialsIncompleteReason is the False reason when the identity's
+	// Secret lacks a key listed in requiredKeys.
+	CredentialsIncompleteReason = "CredentialsIncomplete"
 	// IdentityCheckFailedReason is the Unknown reason when the check could not
 	// be completed.
 	IdentityCheckFailedReason = "IdentityCheckFailed"
@@ -546,6 +549,8 @@ const (
 	SecretFoundReason = "SecretFound"
 	// SecretNotFoundReason (IdentityAllowed) is also the False reason when the
 	// identity's credentials Secret does not exist.
+	// CredentialsIncompleteReason is the False reason, on Ready and on
+	// IdentityAllowed, when the Secret lacks a required key.
 )
 
 // Ready summary inputs; the slices are passed to
@@ -632,7 +637,7 @@ func ConditionReasons() map[string]map[metav1.ConditionStatus][]string {
 	return map[string]map[metav1.ConditionStatus][]string{
 		ReadyCondition: {
 			metav1.ConditionTrue:    {ReadyReason, SecretFoundReason, PlanPendingReason, PlanApprovedReason, PlanAppliedReason},
-			metav1.ConditionFalse:   {NotReadyReason, SecretNotFoundReason, PlanSupersededReason, PlanFailedReason},
+			metav1.ConditionFalse:   {NotReadyReason, SecretNotFoundReason, PlanSupersededReason, PlanFailedReason, CredentialsIncompleteReason},
 			metav1.ConditionUnknown: {ReadyUnknownReason},
 		},
 		clusterv1.PausedCondition: {
@@ -646,7 +651,7 @@ func ConditionReasons() map[string]map[metav1.ConditionStatus][]string {
 		},
 		IdentityAllowedCondition: {
 			metav1.ConditionTrue:    {IdentityAllowedReason},
-			metav1.ConditionFalse:   {IdentityNotFoundReason, NamespaceNotAllowedReason, SecretNotFoundReason},
+			metav1.ConditionFalse:   {IdentityNotFoundReason, NamespaceNotAllowedReason, SecretNotFoundReason, CredentialsIncompleteReason},
 			metav1.ConditionUnknown: {IdentityCheckFailedReason},
 		},
 		CredentialsMirroredCondition: {

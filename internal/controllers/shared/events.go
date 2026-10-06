@@ -199,7 +199,7 @@ const (
 	// Secret appeared.
 	EventIdentitySecretFound = "IdentitySecretFound"
 	// EventIdentitySecretNotFound: a TerraformClusterIdentity's credentials
-	// Secret went missing.
+	// Secret went missing, or lacks a key listed in requiredKeys.
 	EventIdentitySecretNotFound = "IdentitySecretNotFound"
 	// EventMirrorCreated: the credential mirror of the namespace was
 	// created on behalf of this object.
@@ -359,7 +359,7 @@ var negativePolarity = sets.New(
 // the condition before (nil when it was not set). Ready is only bad when
 // it leaves True: before provisioning it is False or Unknown by design.
 func bad(prev *metav1.Condition, c metav1.Condition) bool {
-	if c.Type == infrav1.ReadyCondition && c.Reason != infrav1.SecretNotFoundReason {
+	if c.Type == infrav1.ReadyCondition && c.Reason != infrav1.SecretNotFoundReason && c.Reason != infrav1.CredentialsIncompleteReason {
 		return c.Status != metav1.ConditionTrue && prev != nil && prev.Status == metav1.ConditionTrue
 	}
 	if informationalReasons.Has(c.Reason) {

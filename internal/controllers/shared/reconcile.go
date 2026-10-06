@@ -23,6 +23,7 @@ import (
 	"maps"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -1151,6 +1152,12 @@ func (r *reconciler) identity(ctx context.Context) (bool, error) {
 	if err != nil {
 		set(metav1.ConditionUnknown, infrav1.IdentityCheckFailedReason, err.Error())
 		return false, err
+	}
+	if missing := identity.MissingKeys(id, src); len(missing) > 0 {
+		set(metav1.ConditionFalse, infrav1.CredentialsIncompleteReason,
+			fmt.Sprintf("Secret %s/%s lacks required key(s): %s", src.Namespace, src.Name, strings.Join(missing, ", ")))
+		pending("Identity Secret incomplete")
+		return false, nil
 	}
 	set(metav1.ConditionTrue, infrav1.IdentityAllowedReason, "")
 	r.identityAllowed = true

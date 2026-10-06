@@ -225,6 +225,9 @@ func recordTransition(d Deps, kind string, c *metav1.Condition) {
 		if c.Reason == infrav1.IdentityNotFoundReason || c.Reason == infrav1.SecretNotFoundReason {
 			reason = "notfound"
 		}
+		if c.Reason == infrav1.CredentialsIncompleteReason {
+			reason = "incomplete"
+		}
 		d.Metrics.IdentityDenied(reason)
 	}
 }
