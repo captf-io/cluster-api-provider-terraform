@@ -53,6 +53,23 @@ spec:
           spec:
             description: spec is the desired state of the TerraformMachineTemplate.
             properties:
+              capacity:
+                additionalProperties:
+                  anyOf:
+                  - type: integer
+                  - type: string
+                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                  x-kubernetes-int-or-string: true
+                description: |-
+                  capacity of the nodes the template creates, as resource quantities
+                  (e.g. cpu: "4", memory: 16Gi), reported for Cluster Autoscaler scale
+                  from zero. It overrides the image label io.captf.capacity entirely: no
+                  per-resource merge. Unlike spec.template, it can change after
+                  creation, and it is never copied to the TerraformMachines. The
+                  capacity.cluster-autoscaler.kubernetes.io/* annotations on a
+                  MachineDeployment or MachineSet still take precedence over it.
+                  CAPTF never writes a node count from it.
+                type: object
               template:
                 description: template is the TerraformMachine created from this template.
                 minProperties: 1
@@ -1069,8 +1086,9 @@ spec:
                   pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                   x-kubernetes-int-or-string: true
                 description: |-
-                  capacity of the nodes the template creates, from the image label
-                  io.captf.capacity. Unset when the image declares none.
+                  capacity of the nodes the template creates: spec.capacity when set,
+                  else the image label io.captf.capacity (capacitySource.source says
+                  which). Unset when neither declares any.
                 type: object
               capacitySource:
                 description: |-
@@ -1078,9 +1096,19 @@ spec:
                   resolved from; they are re-resolved when the spec image changes.
                 properties:
                   image:
-                    description: image is the spec image reference last resolved.
+                    description: |-
+                      image is the spec image reference last resolved. The image always
+                      supplies nodeInfo, even when spec.capacity supplies the capacity.
                     maxLength: 512
                     minLength: 1
+                    type: string
+                  source:
+                    description: |-
+                      source is Spec when status.capacity is spec.capacity, and Image when
+                      it comes from the image label io.captf.capacity.
+                    enum:
+                    - Spec
+                    - Image
                     type: string
                 required:
                 - image

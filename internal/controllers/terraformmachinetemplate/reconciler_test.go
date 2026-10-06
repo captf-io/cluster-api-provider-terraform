@@ -181,7 +181,8 @@ func TestReconcileResolved(t *testing.T) {
 	}}}
 	got, res := run(t, template(), insp)
 	if reasonOf(got) != infrav1.CapacityResolvedReason || !got.Status.Capacity.Memory().Equal(resource.MustParse("16Gi")) ||
-		got.Status.NodeInfo.Architecture != infrav1.ArchitectureAmd64 || got.Status.CapacitySource.Image != image || res.RequeueAfter != 0 {
+		got.Status.NodeInfo.Architecture != infrav1.ArchitectureAmd64 || got.Status.CapacitySource.Image != image ||
+		got.Status.CapacitySource.Source != infrav1.CapacitySourceImage || res.RequeueAfter != 0 {
 		t.Errorf("status = %+v, result %+v", got.Status, res)
 	}
 
@@ -189,6 +190,40 @@ func TestReconcileResolved(t *testing.T) {
 	insp.calls = 0
 	if _, _ = run(t, got, insp); insp.calls != 0 {
 		t.Error("a resolved template was inspected again")
+	}
+}
+
+// TestReconcileSpecCapacity proves spec.capacity wins entirely over the
+// image's capacity label (even an invalid one), records source Spec, keeps
+// node info from the image, and is re-resolved when it changes.
+func TestReconcileSpecCapacity(t *testing.T) {
+	t.Parallel()
+	insp := &fakeInspector{cfg: &imageinspect.Config{Labels: map[string]string{
+		imageinspect.CapacityLabel: `{"cpu":"lots"}`,
+		imageinspect.NodeInfoLabel: `{"architecture":"arm64"}`,
+	}}}
+	tpl := template(func(tpl *infrav1.TerraformMachineTemplate) {
+		tpl.Spec.Capacity = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2")}
+	})
+	got, _ := run(t, tpl, insp)
+	if reasonOf(got) != infrav1.CapacityResolvedReason || len(got.Status.Capacity) != 1 || !got.Status.Capacity.Cpu().Equal(resource.MustParse("2")) ||
+		got.Status.CapacitySource.Source != infrav1.CapacitySourceSpec || got.Status.NodeInfo.Architecture != infrav1.ArchitectureArm64 {
+		t.Errorf("status = %+v", got.Status)
+	}
+
+	insp.calls = 0
+	if _, _ = run(t, got, insp); insp.calls != 0 {
+		t.Error("a resolved template was inspected again")
+	}
+	got.Spec.Capacity = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("8")}
+	got, _ = run(t, got, insp)
+	if insp.calls != 1 || !got.Status.Capacity.Cpu().Equal(resource.MustParse("8")) {
+		t.Errorf("changed spec.capacity not re-resolved: calls %d, status %+v", insp.calls, got.Status)
+	}
+	got.Spec.Capacity = nil
+	got, _ = run(t, got, insp)
+	if reasonOf(got) != infrav1.CapacityLabelInvalidReason || got.Status.CapacitySource.Source != infrav1.CapacitySourceImage || len(got.Status.Capacity) != 0 {
+		t.Errorf("removing the override did not fall back to the image: %+v", got.Status)
 	}
 }
 

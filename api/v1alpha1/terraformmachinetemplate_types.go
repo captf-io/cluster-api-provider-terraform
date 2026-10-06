@@ -27,6 +27,17 @@ type TerraformMachineTemplateSpec struct {
 	// template is the TerraformMachine created from this template.
 	// +required
 	Template TerraformMachineTemplateResource `json:"template,omitempty,omitzero"`
+
+	// capacity of the nodes the template creates, as resource quantities
+	// (e.g. cpu: "4", memory: 16Gi), reported for Cluster Autoscaler scale
+	// from zero. It overrides the image label io.captf.capacity entirely: no
+	// per-resource merge. Unlike spec.template, it can change after
+	// creation, and it is never copied to the TerraformMachines. The
+	// capacity.cluster-autoscaler.kubernetes.io/* annotations on a
+	// MachineDeployment or MachineSet still take precedence over it.
+	// CAPTF never writes a node count from it.
+	// +optional
+	Capacity corev1.ResourceList `json:"capacity,omitempty"`
 }
 
 // TerraformMachineTemplateResource describes the TerraformMachine created from
@@ -70,9 +81,27 @@ type NodeInfo struct {
 	OperatingSystem string `json:"operatingSystem,omitempty"`
 }
 
-// CapacitySource records which image the capacity was resolved from.
+// CapacitySourceKind says where a template's status.capacity came from.
+// +kubebuilder:validation:Enum=Spec;Image
+type CapacitySourceKind string
+
+const (
+	// CapacitySourceSpec means status.capacity is spec.capacity.
+	CapacitySourceSpec CapacitySourceKind = "Spec"
+	// CapacitySourceImage means status.capacity is the image label
+	// io.captf.capacity (or unset, when the image declares none).
+	CapacitySourceImage CapacitySourceKind = "Image"
+)
+
+// CapacitySource records where the capacity was resolved from.
 type CapacitySource struct {
-	// image is the spec image reference last resolved.
+	// source is Spec when status.capacity is spec.capacity, and Image when
+	// it comes from the image label io.captf.capacity.
+	// +optional
+	Source CapacitySourceKind `json:"source,omitempty"`
+
+	// image is the spec image reference last resolved. The image always
+	// supplies nodeInfo, even when spec.capacity supplies the capacity.
 	// +required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=512
@@ -91,8 +120,9 @@ type TerraformMachineTemplateStatus struct {
 	// +kubebuilder:validation:MaxItems=32
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
-	// capacity of the nodes the template creates, from the image label
-	// io.captf.capacity. Unset when the image declares none.
+	// capacity of the nodes the template creates: spec.capacity when set,
+	// else the image label io.captf.capacity (capacitySource.source says
+	// which). Unset when neither declares any.
 	// +optional
 	Capacity corev1.ResourceList `json:"capacity,omitempty"`
 

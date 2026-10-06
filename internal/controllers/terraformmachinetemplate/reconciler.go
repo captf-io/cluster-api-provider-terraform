@@ -87,11 +87,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 	return r.resolve(ctx, t)
 }
 
-// Resolved reports whether t's status already describes its spec image:
-// resolved or not declared, or a label invalid for that same image (the
-// tag is not re-polled, so a retry cannot change it).
+// Resolved reports whether t's status already describes its spec: the same
+// image, and the capacity from the same origin (spec.capacity as it stands,
+// or the image), resolved or not declared, or a label invalid for that same
+// image (the tag is not re-polled, so a retry cannot change it).
 func Resolved(t *infrav1.TerraformMachineTemplate) bool {
 	if t.Status.CapacitySource.Image != t.Spec.Template.Spec.Source.Image {
+		return false
+	}
+	if len(t.Spec.Capacity) > 0 {
+		if t.Status.CapacitySource.Source != infrav1.CapacitySourceSpec || !equality.Semantic.DeepEqual(t.Status.Capacity, t.Spec.Capacity) {
+			return false
+		}
+	} else if t.Status.CapacitySource.Source != infrav1.CapacitySourceImage {
 		return false
 	}
 	c := conditions.Get(t, infrav1.CapacityResolvedCondition)
@@ -138,18 +146,39 @@ func (r *Reconciler) resolve(ctx context.Context, t *infrav1.TerraformMachineTem
 		return ctrl.Result{RequeueAfter: retry}, nil
 	}
 
-	res := imageinspect.Resolve(cfg.Labels)
+	// spec.capacity wins entirely: the image's capacity label is not read
+	// (so an invalid one cannot fail the condition), while node-info still
+	// comes from the image.
+	imageLabels, source := cfg.Labels, infrav1.CapacitySourceImage
+	if len(t.Spec.Capacity) > 0 {
+		imageLabels = maps.Clone(cfg.Labels)
+		delete(imageLabels, imageinspect.CapacityLabel)
+		source = infrav1.CapacitySourceSpec
+	}
+	res := imageinspect.Resolve(imageLabels)
+	if source == infrav1.CapacitySourceSpec {
+		res.Capacity = t.Spec.Capacity.DeepCopy()
+	}
 	if !equality.Semantic.DeepEqual(t.Status.Capacity, res.Capacity) || !equality.Semantic.DeepEqual(t.Status.NodeInfo, res.NodeInfo) {
-		r.Deps.Emit(t, corev1.EventTypeNormal, shared.EventCapacityResolved, "Inspect", "Capacity from image %s: %s", spec.Source.Image, capacityNote(res.Capacity))
+		r.Deps.Emit(t, corev1.EventTypeNormal, shared.EventCapacityResolved, "Inspect", "Capacity from %s: %s", capacityOrigin(source, spec.Source.Image), capacityNote(res.Capacity))
 	}
 	t.Status.Capacity, t.Status.NodeInfo = res.Capacity, res.NodeInfo
-	t.Status.CapacitySource.Image = spec.Source.Image
+	t.Status.CapacitySource = infrav1.CapacitySource{Source: source, Image: spec.Source.Image}
 	if prev := conditions.Get(t, infrav1.CapacityResolvedCondition); res.Condition.Reason == infrav1.CapacityLabelInvalidReason &&
 		(prev == nil || prev.Reason != infrav1.CapacityLabelInvalidReason) {
 		r.Deps.Metrics.ImageInspectError(infrav1.CapacityLabelInvalidReason)
 	}
 	conditions.Set(t, res.Condition)
 	return ctrl.Result{}, nil
+}
+
+// capacityOrigin returns where a capacity of the given source came from, for
+// an event message: "spec.capacity", or "image <image>" for the image.
+func capacityOrigin(source infrav1.CapacitySourceKind, image string) string {
+	if source == infrav1.CapacitySourceSpec {
+		return "spec.capacity"
+	}
+	return "image " + image
 }
 
 // capacityNote lists resource list c as "cpu=4, memory=16Gi", sorted by
@@ -203,8 +232,9 @@ func failedRetry(t *infrav1.TerraformMachineTemplate, now time.Time) time.Durati
 }
 
 // SetupWithManager registers the controller with mgr, applying opts to the
-// underlying controller: the template and its generation only (the spec is
-// immutable, so a fixed pull Secret is picked up by the retry). It returns
+// underlying controller: the template and its generation only (a fixed pull
+// Secret is picked up by the retry; a spec.capacity change bumps the
+// generation). It returns
 // an error if the controller could not be built.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager, opts controller.Options) error {
 	err := ctrl.NewControllerManagedBy(mgr).
