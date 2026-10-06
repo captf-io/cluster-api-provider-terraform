@@ -74,7 +74,7 @@ func NewLintCommand(remoteOpts []remote.Option) *cobra.Command {
 		return usageErr(cmd, err.Error())
 	})
 	verflag.AddFlags(root.PersistentFlags())
-	root.AddCommand(newModuleCommand(), newImageCommand(remoteOpts), newVersionCommand())
+	root.AddCommand(newModuleCommand(), newImageCommand(remoteOpts), newSchemaCommand(), newVersionCommand())
 	return root
 }
 

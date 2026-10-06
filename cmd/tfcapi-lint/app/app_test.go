@@ -249,3 +249,29 @@ func TestRunRemoteOpts(t *testing.T) {
 		t.Errorf("exit %d: %s", code, stdout.String())
 	}
 }
+
+// TestSchemaCommand: the schema subcommand prints one line of compact JSON
+// for a good module and exits 3 on a bad command line.
+func TestSchemaCommand(t *testing.T) {
+	good := filepath.Join(fixtures, "good", "machine")
+	var out, errb bytes.Buffer
+	if code := Run(context.Background(), []string{"schema", "--role", "machine", good}, &out, &errb); code != ExitOK {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if line := strings.TrimSuffix(out.String(), "\n"); strings.Contains(line, "\n") || !strings.HasPrefix(line, `{"type":"object"`) || !strings.Contains(line, `"additionalProperties":false`) {
+		t.Errorf("output %q", out.String())
+	}
+	for _, args := range [][]string{
+		{"schema", good},
+		{"schema", "--role", "machine"},
+		{"schema", "--role", "worker", good},
+		{"schema", "--role", "machine", "--contract", "v9", good},
+	} {
+		if code := Run(context.Background(), args, io.Discard, io.Discard); code != ExitUsage {
+			t.Errorf("%v: exit %d, want %d", args, code, ExitUsage)
+		}
+	}
+	if code := Run(context.Background(), []string{"schema", "--role", "machine", t.TempDir() + "/missing"}, io.Discard, io.Discard); code == ExitOK {
+		t.Error("a missing module directory must fail")
+	}
+}
