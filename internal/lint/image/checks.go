@@ -45,6 +45,7 @@ const (
 	IDLabelRole         = "image/label-role"
 	IDLabelContract     = "image/label-contract"
 	IDLabelCapacity     = "image/label-capacity"
+	IDCapacitySizeVar   = "image/capacity-size-variable"
 	IDUserRoot          = "image/user-root"
 	IDModuleReadable    = "image/module-readable"
 	IDModuleLink        = "image/module-link"
@@ -83,7 +84,7 @@ func (c imageChecks) run() []lint.Finding {
 	var out []lint.Finding
 	for _, check := range []func() []lint.Finding{
 		c.modulePresent, c.runtimePresent, c.runtimeVersion, c.providers, c.reserved,
-		c.labelRole, c.labelContract, c.labelCapacity, c.userRoot, c.userUnresolved, c.moduleReadable,
+		c.labelRole, c.labelContract, c.labelCapacity, c.capacitySizeVar, c.userRoot, c.userUnresolved, c.moduleReadable,
 		c.moduleLinks, c.entrypoint,
 	} {
 		out = append(out, check()...)
@@ -394,6 +395,40 @@ func (c imageChecks) labelCapacity() []lint.Finding {
 		}
 	}
 	return out
+}
+
+// sizeVariables are the module variable names that usually pick a node's
+// size, which makes an image's io.captf.capacity label a copy that can
+// drift from the real size.
+var sizeVariables = []string{
+	"instance_type", "vm_size", "machine_type", "shape", "flavor", "flavor_name",
+	"ocpus", "memory_gib", "memory_in_gbs",
+}
+
+// capacitySizeVar warns, for the machine role, when the image declares
+// io.captf.capacity and the module also has a size variable: a user can
+// change the size without the label following. It returns the
+// IDCapacitySizeVar warning finding, or nil. The fix is to drop the label
+// and set spec.capacity on the TerraformMachineTemplate.
+func (c imageChecks) capacitySizeVar() []lint.Finding {
+	if c.role != contract.RoleMachine || c.module == nil || c.module.Config == nil {
+		return nil
+	}
+	if _, ok := c.cfg.Config.Labels[labels.CapacityLabel]; !ok {
+		return nil
+	}
+	var found []string
+	for _, name := range sizeVariables {
+		if _, ok := c.module.Config.Variables[name]; ok {
+			found = append(found, name)
+		}
+	}
+	if len(found) == 0 {
+		return nil
+	}
+	return []lint.Finding{finding(IDCapacitySizeVar, lint.SeverityWarning, "",
+		fmt.Sprintf("the image declares %s but the module has the size variable(s) %s: the label cannot follow a changed size; drop the label and set spec.capacity on the TerraformMachineTemplate",
+			labels.CapacityLabel, strings.Join(found, ", ")))}
 }
 
 // userRoot checks c.cfg.Config.User and returns an IDUserRoot warning

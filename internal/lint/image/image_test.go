@@ -596,3 +596,39 @@ func TestLintIndex(t *testing.T) {
 		t.Errorf("--platform linux/s390x: %+v, %v", res.Report.Findings, err)
 	}
 }
+
+// TestCapacitySizeVar proves a machine image that declares the capacity
+// label warns when its module has a size variable, and stays quiet without
+// the label or the variable.
+func TestCapacitySizeVar(t *testing.T) {
+	t.Parallel()
+	machine := func(extra string, labels ...string) v1.Image {
+		es := append(goodEntries(t, "machine"), file("captf/module/size.tf", extra))
+		return build(t, "amd64", func(cf *v1.ConfigFile) {
+			cf.Config.Labels[labelRole] = "machine"
+			for i := 0; i < len(labels); i += 2 {
+				cf.Config.Labels[labels[i]] = labels[i+1]
+			}
+		}, es)
+	}
+	const size = "variable \"instance_type\" {\n  type    = string\n  default = \"m5.large\"\n}\n"
+	for _, tt := range []struct {
+		name string
+		img  v1.Image
+		want bool
+	}{
+		{"label and size variable", machine(size, "io.captf.capacity", `{"cpu":"2"}`), true},
+		{"size variable, no label", machine(size), false},
+		{"label, no size variable", machine("", "io.captf.capacity", `{"cpu":"2"}`), false},
+	} {
+		var warned bool
+		for _, f := range check(t, tt.img, contract.RoleMachine) {
+			if f.ID == IDCapacitySizeVar {
+				warned = f.Severity == lint.SeverityWarning
+			}
+		}
+		if warned != tt.want {
+			t.Errorf("%s: warned = %v, want %v", tt.name, warned, tt.want)
+		}
+	}
+}
