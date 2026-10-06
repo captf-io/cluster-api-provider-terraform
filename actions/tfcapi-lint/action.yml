@@ -1,0 +1,120 @@
+# Copyright 2026 The CAPTF Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# tfcapi-lint as a GitHub Action: lints a module directory or a module
+# image against the CAPTF contract by running the tfcapi-lint image
+# (ghcr.io/captf-io/tfcapi-lint) with docker, so it needs a Linux runner
+# with docker (GitHub's ubuntu runners have it). Pin it by commit; the
+# linter image follows the action's ref (see tfcapi-lint.sh):
+#
+#   - uses: captf-io/cluster-api-provider-terraform/actions/tfcapi-lint@<sha> # vX.Y.Z
+#     with:
+#       command: module
+#       target: .
+#       role: machine
+#       strict: true
+#
+# The step fails with tfcapi-lint's exit code: 1 findings (or warnings
+# under strict), 2 unparsable or unpullable, 3 usage.
+# Docs: https://captf.io/docs/module-author/tfcapi-lint.html
+name: tfcapi-lint
+description: Lint a CAPTF module directory or module image against the CAPTF module contract.
+author: The CAPTF Authors
+branding:
+  icon: check-circle
+  color: purple
+
+inputs:
+  command:
+    description: "What to lint: module (a module directory) or image (a module image)."
+    required: true
+  target:
+    description: >-
+      The module directory, relative to the workspace, for command module; an
+      image reference, or oci:<dir> for a local OCI layout, for command image.
+      Local paths must be inside the workspace or the runner's temp directory.
+    required: true
+  role:
+    description: "The module's role: cluster, machine or machinepool."
+    required: true
+  strict:
+    description: "Fail on warnings too (--strict)."
+    required: false
+    default: "false"
+  allow-warnings:
+    description: "Check IDs whose warnings are downgraded to info (--allow-warning), separated by spaces or newlines."
+    required: false
+    default: ""
+  contract:
+    description: "Contract version (--contract); empty for tfcapi-lint's default."
+    required: false
+    default: ""
+  platform:
+    description: "image only: the platform to check (--platform), e.g. linux/arm64; empty for linux/amd64."
+    required: false
+    default: ""
+  all-platforms:
+    description: "image only: check every platform of a multi-platform image (--all-platforms)."
+    required: false
+    default: "false"
+  insecure:
+    description: "image only: allow a plain-HTTP registry (--insecure)."
+    required: false
+    default: "false"
+  json:
+    description: "Print the report as JSON (--json)."
+    required: false
+    default: "false"
+  args:
+    description: "Extra tfcapi-lint flags, separated by spaces or newlines (no quoting)."
+    required: false
+    default: ""
+  version:
+    description: >-
+      The tfcapi-lint image tag (vX.Y.Z, edge or sha-<7>). Empty: the tag that
+      matches this action's ref.
+    required: false
+    default: ""
+  image:
+    description: >-
+      The full tfcapi-lint image to run, e.g. one pinned by digest; overrides
+      version. Used as is when present locally, pulled otherwise.
+    required: false
+    default: ""
+
+outputs:
+  image:
+    description: The tfcapi-lint image that ran.
+    value: ${{ steps.lint.outputs.image }}
+
+runs:
+  using: composite
+  steps:
+    - id: lint
+      shell: bash
+      env:
+        INPUT_COMMAND: ${{ inputs.command }}
+        INPUT_TARGET: ${{ inputs.target }}
+        INPUT_ROLE: ${{ inputs.role }}
+        INPUT_STRICT: ${{ inputs.strict }}
+        INPUT_ALLOW_WARNINGS: ${{ inputs.allow-warnings }}
+        INPUT_CONTRACT: ${{ inputs.contract }}
+        INPUT_PLATFORM: ${{ inputs.platform }}
+        INPUT_ALL_PLATFORMS: ${{ inputs.all-platforms }}
+        INPUT_INSECURE: ${{ inputs.insecure }}
+        INPUT_JSON: ${{ inputs.json }}
+        INPUT_ARGS: ${{ inputs.args }}
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_IMAGE: ${{ inputs.image }}
+      run: '"${GITHUB_ACTION_PATH}/tfcapi-lint.sh"'

@@ -54,12 +54,30 @@ walks through each step, including building and pushing module images.
 
 ## Images
 
-The manager image (manager and runner) is published to
-`ghcr.io/captf-io/cluster-api-provider-terraform` for linux/amd64 and
-linux/arm64 by [publish.yaml](.github/workflows/publish.yaml): `:edge` and
+Two images are published for linux/amd64 and linux/arm64 by
+[publish.yaml](.github/workflows/publish.yaml): `:edge` and
 `:sha-<commit>` on every push to `main`, and `:vX.Y.Z` on every release tag,
 whose GitHub Release carries the clusterctl assets and the `tfcapi-lint`
-binaries. Each image is signed with keyless cosign and carries SLSA build
+binaries.
+
+| Image | Contents |
+| --- | --- |
+| `ghcr.io/captf-io/cluster-api-provider-terraform` | The manager and the in-Job runner |
+| `ghcr.io/captf-io/tfcapi-lint` | `tfcapi-lint` alone, run by the [tfcapi-lint GitHub Action](actions/tfcapi-lint/action.yml) |
+
+Module repositories lint in CI with the action, which runs the linter
+image that matches the pinned commit:
+
+```yaml
+- uses: captf-io/cluster-api-provider-terraform/actions/tfcapi-lint@<commit> # vX.Y.Z
+  with:
+    command: module
+    target: .
+    role: machine
+    strict: true
+```
+
+Each image is signed with keyless cosign and carries SLSA build
 provenance and an SPDX SBOM attestation; each release asset carries
 provenance:
 

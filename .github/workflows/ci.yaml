@@ -25,12 +25,14 @@
 # the repository inside its cache quota),
 # the license-header and amd64 build checks share the verify job's runner, and
 # the slow, rarely-breaking checks (arm64 cross-build, release snapshot) run on
-# main, weekly and on demand. A pull request runs the snapshot only when a
+# main, weekly and on demand. A pull request runs the snapshot, and the
+# tfcapi-lint image and action test that share its job, only when a
 # release-relevant path changed.
 #
 # Checks NOT run here, and why:
-#   - docker-build with podman: the manager image is built (and scanned)
-#     with buildx in security.yaml.
+#   - docker-build with podman: both images are built (and scanned) with
+#     buildx in security.yaml; the tfcapi-lint image is also built here for
+#     the action test.
 #   - The noop reference modules: they live in the terraform-noop-<role>
 #     repositories, which validate them; captf-io/module-images builds and
 #     smoke-tests their images.
@@ -446,7 +448,7 @@ jobs:
         run: make build
 
   release-snapshot:
-    name: tfcapi-lint release snapshot
+    name: tfcapi-lint release snapshot and action
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -462,8 +464,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       # Pushes to main, the weekly run and manual runs always build the
-      # snapshot; a pull request builds it only when a file that feeds
-      # tfcapi-lint or its release changed. publish.yaml runs GoReleaser on tags.
+      # snapshot and test the action; a pull request does only when a file
+      # that feeds tfcapi-lint, its release, its image or the action
+      # changed. publish.yaml runs GoReleaser on tags.
       - name: Detect release-relevant changes
         id: rel
         env:
@@ -474,7 +477,7 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          pattern='^(\.goreleaser\.yaml|Makefile|go\.mod|go\.sum|go\.work|hack/tools/versions\.mk|api/|cmd/tfcapi-lint/|internal/(contract|lint|imageinspect)/)'
+          pattern='^(\.goreleaser\.yaml|Makefile|Dockerfile|\.dockerignore|go\.mod|go\.sum|go\.work|hack/tools/versions\.mk|hack/verify-static\.sh|api/|cmd/tfcapi-lint/|internal/(contract|lint|imageinspect)/|actions/tfcapi-lint/)'
           if git diff --name-only "${BASE_SHA}" HEAD | grep -Eq "${pattern}"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
@@ -554,6 +557,53 @@ jobs:
           name: tfcapi-lint-snapshot
           path: dist/
           retention-days: 7
+      # The tfcapi-lint image (linux/amd64, into the local daemon) and the
+      # action that runs it, from this checkout: a conforming module must
+      # pass and a non-conforming one fail. The buildx cache is only read;
+      # security.yaml fills it on trusted refs. Nothing is pushed. The
+      # action is used by path: actionlint (v1.7.12) does not parse the
+      # self-repository form ($/actions/...) that zizmor prefers yet.
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        if: ${{ steps.rel.outputs.run == 'true' }}
+      - name: Build the tfcapi-lint image
+        if: ${{ steps.rel.outputs.run == 'true' }}
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: tfcapi-lint
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: tfcapi-lint:ci
+          cache-from: type=gha,scope=tfcapi-lint
+      - name: Action on a conforming module
+        if: ${{ steps.rel.outputs.run == 'true' }}
+        uses: ./actions/tfcapi-lint # zizmor: ignore[self-repository]
+        with:
+          image: tfcapi-lint:ci
+          command: module
+          target: cmd/tfcapi-lint/testdata/good/machine
+          role: machine
+          strict: true
+      - name: Action on a non-conforming module
+        id: bad
+        if: ${{ steps.rel.outputs.run == 'true' }}
+        continue-on-error: true
+        uses: ./actions/tfcapi-lint # zizmor: ignore[self-repository]
+        with:
+          image: tfcapi-lint:ci
+          command: module
+          target: cmd/tfcapi-lint/testdata/bad/missing-output
+          role: machine
+      - name: Check the non-conforming module failed
+        if: ${{ steps.rel.outputs.run == 'true' }}
+        env:
+          OUTCOME: ${{ steps.bad.outcome }}
+        run: |
+          if [[ "${OUTCOME}" != failure ]]; then
+            echo "::error::the action passed a module that breaks the contract (outcome: ${OUTCOME})"
+            exit 1
+          fi
 
   ok:
     name: ok

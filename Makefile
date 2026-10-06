@@ -437,7 +437,7 @@ release-github: release-notes ## Create the GitHub release for VERSION from out/
 ##@ Verify
 
 .PHONY: verify
-verify: verify-modules verify-schemas verify-components verify-metadata verify-version verify-gen check-licenses check-headers verify-templates verify-godoc verify-test-tiers promtool-check promtool-test verify-local-repository ## Run all verifications.
+verify: verify-modules verify-schemas verify-components verify-metadata verify-version verify-gen check-licenses check-headers verify-templates verify-godoc verify-test-tiers verify-action promtool-check promtool-test verify-local-repository ## Run all verifications.
 
 .PHONY: verify-test-tiers
 verify-test-tiers: ## Check that e2e code carries the e2e build tag and stays in test/e2e/ and test/env/lifecycle/.
@@ -487,6 +487,10 @@ verify-components: $(KUSTOMIZE) ## Check the clusterctl components built from co
 verify-metadata: ## Validate metadata.yaml and check releaseSeries is append-only against the previous tag.
 	@hack/check-metadata_test.sh
 	@hack/check-metadata.sh
+
+.PHONY: verify-action
+verify-action: ## Check that the tfcapi-lint GitHub Action picks the right image for every input and action ref.
+	@actions/tfcapi-lint/tfcapi-lint_test.sh >/dev/null
 
 .PHONY: verify-version
 verify-version: ## Check that hack/version.sh prints a valid semantic version for every checkout state.
