@@ -38,7 +38,11 @@ const missingIdentityWarning = "spec.template.spec sets no identityRef; " +
 
 // TerraformClusterTemplate validates TerraformClusterTemplates.
 // +kubebuilder:object:generate=false
-type TerraformClusterTemplate struct{}
+type TerraformClusterTemplate struct {
+	// Schemas is the variables schemas known so far; nil checks no
+	// variables against one.
+	Schemas SchemaLookup
+}
 
 // SetupWebhookWithManager registers the webhook with mgr. It returns an
 // error when registration fails.
@@ -56,8 +60,12 @@ var _ admission.Validator[*infrav1.TerraformClusterTemplate] = &TerraformCluster
 // policies, and warns without an identity. It returns those warnings and an
 // Invalid error listing every violation found, or a nil error when obj is
 // valid. ctx supplies the logger and requesting user of the denial log.
-func (*TerraformClusterTemplate) ValidateCreate(ctx context.Context, obj *infrav1.TerraformClusterTemplate) (admission.Warnings, error) {
-	return clusterTemplateWarnings(obj), invalid(ctx, terraformClusterTemplateKind, obj.Name, validateClusterTemplate(obj, nil))
+func (w *TerraformClusterTemplate) ValidateCreate(ctx context.Context, obj *infrav1.TerraformClusterTemplate) (admission.Warnings, error) {
+	errs := validateClusterTemplate(obj, nil)
+	if len(errs) == 0 {
+		errs = schemaErrors(w.Schemas, templateSpecPath, &obj.Spec.Template.Spec.WorkspaceSpec, nil)
+	}
+	return clusterTemplateWarnings(obj), invalid(ctx, terraformClusterTemplateKind, obj.Name, errs)
 }
 
 // ValidateUpdate applies the create rules to newObj and also rejects any
@@ -66,14 +74,18 @@ func (*TerraformClusterTemplate) ValidateCreate(ctx context.Context, obj *infrav
 // skipImmutability inspects for a ClusterClass dry-run. It returns the same
 // warnings as ValidateCreate and an Invalid error listing every violation
 // found, or a nil error when the update is valid.
-func (*TerraformClusterTemplate) ValidateUpdate(ctx context.Context, oldObj, newObj *infrav1.TerraformClusterTemplate) (admission.Warnings, error) {
-	errs := validateClusterTemplate(newObj, priorSpec(&oldObj.Spec.Template.Spec, &newObj.Spec.Template.Spec, !newObj.DeletionTimestamp.IsZero()))
+func (w *TerraformClusterTemplate) ValidateUpdate(ctx context.Context, oldObj, newObj *infrav1.TerraformClusterTemplate) (admission.Warnings, error) {
+	prior := priorSpec(&oldObj.Spec.Template.Spec, &newObj.Spec.Template.Spec, !newObj.DeletionTimestamp.IsZero())
+	errs := validateClusterTemplate(newObj, prior)
 	skip, err := skipImmutability(ctx, newObj)
 	if err != nil {
 		return nil, err
 	}
 	if !skip && !equality.Semantic.DeepEqual(oldObj.Spec.Template.Spec, newObj.Spec.Template.Spec) {
 		errs = append(errs, immutable(templateSpecPath, terraformClusterTemplateKind))
+	}
+	if len(errs) == 0 {
+		errs = schemaErrors(w.Schemas, templateSpecPath, &newObj.Spec.Template.Spec.WorkspaceSpec, &prior.WorkspaceSpec)
 	}
 	return clusterTemplateWarnings(newObj), invalid(ctx, terraformClusterTemplateKind, newObj.Name, errs)
 }

@@ -33,7 +33,11 @@ const terraformMachinePoolKind = "TerraformMachinePool"
 
 // TerraformMachinePool validates TerraformMachinePools.
 // +kubebuilder:object:generate=false
-type TerraformMachinePool struct{}
+type TerraformMachinePool struct {
+	// Schemas is the variables schemas known so far; nil checks no
+	// variables against one.
+	Schemas SchemaLookup
+}
 
 // SetupWebhookWithManager registers the webhook with mgr. It returns an
 // error when registration fails.
@@ -51,8 +55,13 @@ var _ admission.Validator[*infrav1.TerraformMachinePool] = &TerraformMachinePool
 // returns no warnings and an Invalid error listing every violation found,
 // or a nil error when obj is valid. ctx supplies the logger and requesting
 // user of the denial log.
-func (*TerraformMachinePool) ValidateCreate(ctx context.Context, obj *infrav1.TerraformMachinePool) (admission.Warnings, error) {
-	return nil, invalid(ctx, terraformMachinePoolKind, obj.Name, validatePoolSpec(field.NewPath("spec"), &obj.Spec, nil))
+func (w *TerraformMachinePool) ValidateCreate(ctx context.Context, obj *infrav1.TerraformMachinePool) (admission.Warnings, error) {
+	specPath := field.NewPath("spec")
+	errs := validatePoolSpec(specPath, &obj.Spec, nil)
+	if len(errs) == 0 {
+		errs = schemaErrors(w.Schemas, specPath, &obj.Spec.WorkspaceSpec, nil)
+	}
+	return nil, invalid(ctx, terraformMachinePoolKind, obj.Name, errs)
 }
 
 // ValidateUpdate applies the create rules to newObj. Unlike a
@@ -68,9 +77,14 @@ func (*TerraformMachinePool) ValidateCreate(ctx context.Context, obj *infrav1.Te
 // warnings and an Invalid error listing every violation found, or a nil
 // error when the update is valid. ctx supplies the logger and requesting
 // user of the denial log.
-func (*TerraformMachinePool) ValidateUpdate(ctx context.Context, oldObj, newObj *infrav1.TerraformMachinePool) (admission.Warnings, error) {
+func (w *TerraformMachinePool) ValidateUpdate(ctx context.Context, oldObj, newObj *infrav1.TerraformMachinePool) (admission.Warnings, error) {
 	prior := priorSpec(&oldObj.Spec, &newObj.Spec, !newObj.DeletionTimestamp.IsZero())
-	return nil, invalid(ctx, terraformMachinePoolKind, newObj.Name, validatePoolSpec(field.NewPath("spec"), &newObj.Spec, prior))
+	specPath := field.NewPath("spec")
+	errs := validatePoolSpec(specPath, &newObj.Spec, prior)
+	if len(errs) == 0 {
+		errs = schemaErrors(w.Schemas, specPath, &newObj.Spec.WorkspaceSpec, &prior.WorkspaceSpec)
+	}
+	return nil, invalid(ctx, terraformMachinePoolKind, newObj.Name, errs)
 }
 
 // ValidateDelete allows every delete. It always returns no warnings and a

@@ -44,7 +44,7 @@ func TestSetupWebhooks(t *testing.T) {
 		t.Fatalf("scheme: %v", err)
 	}
 	mgr, server := newTestManager(t, scheme)
-	if err := SetupWebhooks(mgr, ""); err != nil {
+	if err := SetupWebhooks(mgr, "", nil); err != nil {
 		t.Fatalf("SetupWebhooks: %v", err)
 	}
 	mux := server.WebhookMux()
@@ -91,7 +91,7 @@ func TestSetupWebhooksNeedsCAPIScheme(t *testing.T) {
 		t.Fatalf("scheme: %v", err)
 	}
 	mgr, _ := newTestManager(t, scheme)
-	if err := SetupWebhooks(mgr, ""); err == nil || !strings.Contains(err.Error(), "lacks cluster.x-k8s.io Machine") {
+	if err := SetupWebhooks(mgr, "", nil); err == nil || !strings.Contains(err.Error(), "lacks cluster.x-k8s.io Machine") {
 		t.Fatalf("SetupWebhooks error = %v, want the missing-Machine error", err)
 	}
 }

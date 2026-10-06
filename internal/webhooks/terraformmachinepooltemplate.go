@@ -33,7 +33,11 @@ const terraformMachinePoolTemplateKind = "TerraformMachinePoolTemplate"
 
 // TerraformMachinePoolTemplate validates TerraformMachinePoolTemplates.
 // +kubebuilder:object:generate=false
-type TerraformMachinePoolTemplate struct{}
+type TerraformMachinePoolTemplate struct {
+	// Schemas is the variables schemas known so far; nil checks no
+	// variables against one.
+	Schemas SchemaLookup
+}
 
 // SetupWebhookWithManager registers the webhook with mgr. It returns an
 // error when registration fails.
@@ -51,8 +55,12 @@ var _ admission.Validator[*infrav1.TerraformMachinePoolTemplate] = &TerraformMac
 // policy. It returns no warnings and an Invalid error listing every
 // violation found, or a nil error when obj is valid. ctx supplies the
 // logger and requesting user of the denial log.
-func (*TerraformMachinePoolTemplate) ValidateCreate(ctx context.Context, obj *infrav1.TerraformMachinePoolTemplate) (admission.Warnings, error) {
-	return nil, invalid(ctx, terraformMachinePoolTemplateKind, obj.Name, validatePoolTemplate(obj, nil))
+func (w *TerraformMachinePoolTemplate) ValidateCreate(ctx context.Context, obj *infrav1.TerraformMachinePoolTemplate) (admission.Warnings, error) {
+	errs := validatePoolTemplate(obj, nil)
+	if len(errs) == 0 {
+		errs = schemaErrors(w.Schemas, templateSpecPath, &obj.Spec.Template.Spec.WorkspaceSpec, nil)
+	}
+	return nil, invalid(ctx, terraformMachinePoolTemplateKind, obj.Name, errs)
 }
 
 // ValidateUpdate applies the create rules to newObj and also rejects any
@@ -63,14 +71,18 @@ func (*TerraformMachinePoolTemplate) ValidateCreate(ctx context.Context, obj *in
 // admission request skipImmutability inspects for a ClusterClass dry-run.
 // It returns no warnings and an Invalid error listing every violation
 // found, or a nil error when the update is valid.
-func (*TerraformMachinePoolTemplate) ValidateUpdate(ctx context.Context, oldObj, newObj *infrav1.TerraformMachinePoolTemplate) (admission.Warnings, error) {
-	errs := validatePoolTemplate(newObj, priorSpec(&oldObj.Spec.Template.Spec, &newObj.Spec.Template.Spec, !newObj.DeletionTimestamp.IsZero()))
+func (w *TerraformMachinePoolTemplate) ValidateUpdate(ctx context.Context, oldObj, newObj *infrav1.TerraformMachinePoolTemplate) (admission.Warnings, error) {
+	prior := priorSpec(&oldObj.Spec.Template.Spec, &newObj.Spec.Template.Spec, !newObj.DeletionTimestamp.IsZero())
+	errs := validatePoolTemplate(newObj, prior)
 	skip, err := skipImmutability(ctx, newObj)
 	if err != nil {
 		return nil, err
 	}
 	if !skip && !equality.Semantic.DeepEqual(oldObj.Spec.Template.Spec, newObj.Spec.Template.Spec) {
 		errs = append(errs, immutable(templateSpecPath, terraformMachinePoolTemplateKind))
+	}
+	if len(errs) == 0 {
+		errs = schemaErrors(w.Schemas, templateSpecPath, &newObj.Spec.Template.Spec.WorkspaceSpec, &prior.WorkspaceSpec)
 	}
 	return nil, invalid(ctx, terraformMachinePoolTemplateKind, newObj.Name, errs)
 }

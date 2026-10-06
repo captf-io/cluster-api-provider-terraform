@@ -35,9 +35,12 @@ import (
 // managerUser is the manager's ServiceAccount username
 // (system:serviceaccount:<namespace>:<name>), the only caller that may set
 // providerID on an existing TerraformMachine and change the plan-phase label
-// of a TerraformPlan; empty refuses those updates for everyone. It returns nil once every webhook is registered, or an error
+// of a TerraformPlan; empty refuses those updates for everyone. schemas is
+// where the workload webhooks look up the variables schema of an image they
+// have already seen (nil checks none); they never contact a registry. It
+// returns nil once every webhook is registered, or an error
 // from the first registration or scheme check that fails.
-func SetupWebhooks(mgr ctrl.Manager, managerUser string) error {
+func SetupWebhooks(mgr ctrl.Manager, managerUser string, schemas SchemaLookup) error {
 	// Without CAPI core types every owned TerraformMachine delete would fail
 	// with a 500; fail at startup instead.
 	if !mgr.GetScheme().Recognizes(clusterv1.GroupVersion.WithKind("Machine")) {
@@ -47,12 +50,12 @@ func SetupWebhooks(mgr ctrl.Manager, managerUser string) error {
 		kind  string
 		setup func(ctrl.Manager) error
 	}{
-		{terraformClusterKind, (&TerraformCluster{}).SetupWebhookWithManager},
-		{terraformClusterTemplateKind, (&TerraformClusterTemplate{}).SetupWebhookWithManager},
-		{terraformMachineKind, (&TerraformMachine{Reader: mgr.GetAPIReader(), ManagerUser: managerUser}).SetupWebhookWithManager},
-		{terraformMachineTemplateKind, (&TerraformMachineTemplate{}).SetupWebhookWithManager},
-		{terraformMachinePoolKind, (&TerraformMachinePool{}).SetupWebhookWithManager},
-		{terraformMachinePoolTemplateKind, (&TerraformMachinePoolTemplate{}).SetupWebhookWithManager},
+		{terraformClusterKind, (&TerraformCluster{Schemas: schemas}).SetupWebhookWithManager},
+		{terraformClusterTemplateKind, (&TerraformClusterTemplate{Schemas: schemas}).SetupWebhookWithManager},
+		{terraformMachineKind, (&TerraformMachine{Schemas: schemas, Reader: mgr.GetAPIReader(), ManagerUser: managerUser}).SetupWebhookWithManager},
+		{terraformMachineTemplateKind, (&TerraformMachineTemplate{Schemas: schemas}).SetupWebhookWithManager},
+		{terraformMachinePoolKind, (&TerraformMachinePool{Schemas: schemas}).SetupWebhookWithManager},
+		{terraformMachinePoolTemplateKind, (&TerraformMachinePoolTemplate{Schemas: schemas}).SetupWebhookWithManager},
 		{terraformClusterIdentityKind, (&TerraformClusterIdentity{Client: mgr.GetClient(), Reader: mgr.GetAPIReader()}).SetupWebhookWithManager},
 		{terraformPlanKind, (&TerraformPlan{ManagerUser: managerUser}).SetupWebhookWithManager},
 	}

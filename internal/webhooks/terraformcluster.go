@@ -34,7 +34,11 @@ const terraformClusterKind = "TerraformCluster"
 
 // TerraformCluster validates TerraformClusters.
 // +kubebuilder:object:generate=false
-type TerraformCluster struct{}
+type TerraformCluster struct {
+	// Schemas is the variables schemas known so far; nil checks no
+	// variables against one.
+	Schemas SchemaLookup
+}
 
 // SetupWebhookWithManager registers the webhook with mgr. It returns an
 // error when registration fails.
@@ -52,10 +56,13 @@ var _ admission.Validator[*infrav1.TerraformCluster] = &TerraformCluster{}
 // jobs policies. It returns no warnings and an Invalid error listing every
 // violation found, or a nil error when obj is valid. ctx supplies the
 // logger and requesting user of the denial log.
-func (*TerraformCluster) ValidateCreate(ctx context.Context, obj *infrav1.TerraformCluster) (admission.Warnings, error) {
+func (w *TerraformCluster) ValidateCreate(ctx context.Context, obj *infrav1.TerraformCluster) (admission.Warnings, error) {
 	specPath := field.NewPath("spec")
 	errs := validateCluster(specPath, &obj.Spec, nil)
 	errs = append(errs, validateEndpointComplete(specPath.Child("controlPlaneEndpoint"), obj.Spec.ControlPlaneEndpoint)...)
+	if len(errs) == 0 {
+		errs = schemaErrors(w.Schemas, specPath, &obj.Spec.WorkspaceSpec, nil)
+	}
 	return nil, invalid(ctx, terraformClusterKind, obj.Name, errs)
 }
 
@@ -67,9 +74,10 @@ func (*TerraformCluster) ValidateCreate(ctx context.Context, obj *infrav1.Terraf
 // returns no warnings and an Invalid error listing every violation found,
 // or a nil error when the update is valid. ctx supplies the logger and
 // requesting user of the denial log.
-func (*TerraformCluster) ValidateUpdate(ctx context.Context, oldObj, newObj *infrav1.TerraformCluster) (admission.Warnings, error) {
+func (w *TerraformCluster) ValidateUpdate(ctx context.Context, oldObj, newObj *infrav1.TerraformCluster) (admission.Warnings, error) {
 	specPath := field.NewPath("spec")
-	errs := validateCluster(specPath, &newObj.Spec, priorSpec(&oldObj.Spec, &newObj.Spec, !newObj.DeletionTimestamp.IsZero()))
+	prior := priorSpec(&oldObj.Spec, &newObj.Spec, !newObj.DeletionTimestamp.IsZero())
+	errs := validateCluster(specPath, &newObj.Spec, prior)
 	epPath := specPath.Child("controlPlaneEndpoint")
 	old, cur := oldObj.Spec.ControlPlaneEndpoint, newObj.Spec.ControlPlaneEndpoint
 	if old != nil && old.IsValid() {
@@ -79,6 +87,9 @@ func (*TerraformCluster) ValidateUpdate(ctx context.Context, oldObj, newObj *inf
 		}
 	} else if cur != nil && (old == nil || *cur != *old) {
 		errs = append(errs, validateEndpointComplete(epPath, cur)...)
+	}
+	if len(errs) == 0 {
+		errs = schemaErrors(w.Schemas, specPath, &newObj.Spec.WorkspaceSpec, &prior.WorkspaceSpec)
 	}
 	return nil, invalid(ctx, terraformClusterKind, newObj.Name, errs)
 }

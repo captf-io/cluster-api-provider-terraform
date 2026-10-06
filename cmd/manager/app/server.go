@@ -229,13 +229,17 @@ func setup(ctx context.Context, getConfig func() *rest.Config, opts *options.Opt
 	}
 	rec.ActiveJobs().Bind(mgr.GetCache())
 	warnManagerUserUnset(klog.FromContext(ctx), opts.ManagerUser)
-	if err := webhooks.SetupWebhooks(mgr, opts.ManagerUser); err != nil {
+	// One schema cache: the controllers fill it as they inspect images, and
+	// the webhooks read it without ever contacting a registry.
+	schemas := imageinspect.NewSchemaCache()
+	if err := webhooks.SetupWebhooks(mgr, opts.ManagerUser, schemas); err != nil {
 		return nil, err
 	}
 	if err := shared.SetupIndexes(ctx, mgr); err != nil {
 		return nil, err
 	}
 	deps := newDeps(mgr, opts, rec)
+	deps.Schemas = schemas
 	// The spec.variablesFrom watches need their own label-scoped cache.
 	varCache, err := ctrlcache.New(mgr.GetConfig(),
 		captfmanager.VariablesCacheOptions(opts.Namespace, scheme, mgr.GetRESTMapper(), mgr.GetHTTPClient()))

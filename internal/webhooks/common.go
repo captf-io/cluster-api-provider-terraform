@@ -37,6 +37,7 @@ import (
 	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/contract"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/jobs"
+	"github.com/captf-io/cluster-api-provider-terraform/internal/varschema"
 )
 
 // validateSource checks src's image reference syntax, with fldPath rooted
@@ -275,4 +276,48 @@ func requestUser(ctx context.Context) string {
 // fldPath of an object of the given kind. It returns that field.Error.
 func immutable(fldPath *field.Path, kind string) *field.Error {
 	return field.Forbidden(fldPath, fmt.Sprintf("%s %s is immutable; create a new %s instead", kind, fldPath.String(), kind))
+}
+
+// SchemaLookup is what the webhooks need of imageinspect.SchemaCache: the
+// variables schema an image is already known to declare. It never
+// contacts a registry.
+type SchemaLookup interface {
+	// Cached returns the schema of ref's image (nil when it declares none)
+	// and true, or false when the image has not been inspected.
+	Cached(ref string) (*varschema.Schema, bool)
+}
+
+// schemaErrors checks ws's inline variables against the variables schema
+// lookup already holds for ws's image; it returns nil when lookup is nil,
+// the image is unknown or declares no schema, there are no inline
+// variables, or old (the stored spec on an update, nil on create) has the
+// same image and variables. variablesFrom sources are not readable at
+// admission, so a required variable is not reported here: the controller
+// checks the merged variables before the Job. specPath is rooted at the
+// spec holding ws. No error carries a value. It returns the field errors
+// found.
+func schemaErrors(lookup SchemaLookup, specPath *field.Path, ws, old *infrav1.WorkspaceSpec) field.ErrorList {
+	if lookup == nil || len(ws.Variables.Raw) == 0 {
+		return nil
+	}
+	if old != nil && old.Source.Image == ws.Source.Image && equalVariables(old.Variables, ws.Variables) {
+		return nil
+	}
+	schema, ok := lookup.Cached(ws.Source.Image)
+	if !ok || schema == nil {
+		return nil
+	}
+	raw, err := contract.ParseVariables(ws.Variables.Raw)
+	if err != nil {
+		return nil
+	}
+	vars := make(map[string]varschema.Value, len(raw))
+	for name, v := range raw {
+		vars[name] = varschema.Value{JSON: v}
+	}
+	var errs field.ErrorList
+	for _, msg := range schema.ValidatePartial(vars) {
+		errs = append(errs, field.Invalid(specPath.Child("variables"), "(value omitted)", "the module image's "+varschema.Label+" rejects it: "+msg))
+	}
+	return errs
 }

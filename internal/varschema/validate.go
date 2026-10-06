@@ -42,6 +42,20 @@ type Value struct {
 // number or bool where a string is wanted, and a string that parses where
 // a number or bool is wanted.
 func (s *Schema) Validate(vars map[string]Value) []string {
+	out := s.ValidatePartial(vars)
+	for _, name := range s.Required {
+		if _, ok := vars[name]; !ok {
+			out = append(out, fmt.Sprintf("variable %q is required by the module image and is not set", name))
+		}
+	}
+	return out
+}
+
+// ValidatePartial is Validate without the check that every required
+// variable is set, for a caller that sees only some of the variables (the
+// admission webhook cannot read variablesFrom sources). It returns the
+// problems found in vars, as Validate does, or nil.
+func (s *Schema) ValidatePartial(vars map[string]Value) []string {
 	var out []string
 	for _, name := range slices.Sorted(maps.Keys(vars)) {
 		v := vars[name]
@@ -59,11 +73,6 @@ func (s *Schema) Validate(vars map[string]Value) []string {
 			continue
 		}
 		out = append(out, check(prop, val, fmt.Sprintf("variable %q", name), v.Lenient)...)
-	}
-	for _, name := range s.Required {
-		if _, ok := vars[name]; !ok {
-			out = append(out, fmt.Sprintf("variable %q is required by the module image and is not set", name))
-		}
 	}
 	return out
 }
@@ -167,7 +176,8 @@ func article(t string) string {
 	return "a " + t
 }
 
-// kind names the JSON type of v, a decoded JSON value.
+// kind names the JSON type of v, a decoded JSON value. It returns the name
+// with an indefinite article.
 func kind(v any) string {
 	switch v.(type) {
 	case string:

@@ -40,6 +40,10 @@ const terraformMachineKind = "TerraformMachine"
 // TerraformMachine validates TerraformMachines.
 // +kubebuilder:object:generate=false
 type TerraformMachine struct {
+	// Schemas is the variables schemas known so far; nil checks no
+	// variables against one.
+	Schemas SchemaLookup
+
 	// Reader lists the Machines that reference the object on delete. It
 	// should be uncached (manager.GetAPIReader) so a Machine whose deletion
 	// just started is seen.
@@ -67,8 +71,13 @@ var _ admission.Validator[*infrav1.TerraformMachine] = &TerraformMachine{}
 // warnings and an Invalid error listing every violation found, or a nil
 // error when obj is valid. ctx supplies the logger and requesting user of
 // the denial log.
-func (*TerraformMachine) ValidateCreate(ctx context.Context, obj *infrav1.TerraformMachine) (admission.Warnings, error) {
-	return nil, invalid(ctx, terraformMachineKind, obj.Name, validateMachineSpec(field.NewPath("spec"), &obj.Spec, nil))
+func (w *TerraformMachine) ValidateCreate(ctx context.Context, obj *infrav1.TerraformMachine) (admission.Warnings, error) {
+	specPath := field.NewPath("spec")
+	errs := validateMachineSpec(specPath, &obj.Spec, nil)
+	if len(errs) == 0 {
+		errs = schemaErrors(w.Schemas, specPath, &obj.Spec.WorkspaceSpec, nil)
+	}
+	return nil, invalid(ctx, terraformMachineKind, obj.Name, errs)
 }
 
 // ValidateUpdate applies the create rules and rejects a change to source,
@@ -86,7 +95,8 @@ func (*TerraformMachine) ValidateCreate(ctx context.Context, obj *infrav1.Terraf
 // or a nil error when the update is valid.
 func (w *TerraformMachine) ValidateUpdate(ctx context.Context, oldObj, newObj *infrav1.TerraformMachine) (admission.Warnings, error) {
 	specPath := field.NewPath("spec")
-	errs := validateMachineSpec(specPath, &newObj.Spec, priorSpec(&oldObj.Spec, &newObj.Spec, !newObj.DeletionTimestamp.IsZero()))
+	prior := priorSpec(&oldObj.Spec, &newObj.Spec, !newObj.DeletionTimestamp.IsZero())
+	errs := validateMachineSpec(specPath, &newObj.Spec, prior)
 
 	oldProviderID, newProviderID := oldObj.Spec.ProviderID, newObj.Spec.ProviderID
 	if oldProviderID != "" && oldProviderID != newProviderID {
@@ -114,6 +124,9 @@ func (w *TerraformMachine) ValidateUpdate(ctx context.Context, oldObj, newObj *i
 	}
 	if !equality.Semantic.DeepEqual(oldObj.Spec.VariablesFrom, newObj.Spec.VariablesFrom) {
 		errs = append(errs, immutable(specPath.Child("variablesFrom"), terraformMachineKind))
+	}
+	if len(errs) == 0 {
+		errs = schemaErrors(w.Schemas, specPath, &newObj.Spec.WorkspaceSpec, &prior.WorkspaceSpec)
 	}
 	return nil, invalid(ctx, terraformMachineKind, newObj.Name, errs)
 }
