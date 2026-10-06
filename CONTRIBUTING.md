@@ -31,9 +31,11 @@ In short:
    | Repository | Checks |
    | --- | --- |
    | `cluster-api-provider-terraform` | `make lint test verify` |
-   | `*-modules` (cloud) | `make verify`, then `make test` |
-   | `noop-modules`, `*-base` | `make test` |
+   | `terraform-<provider>-<role>` | `make verify` |
+   | `module-images` | `make verify`, then `make test` |
+   | `opentofu-base`, `terraform-base` | `make test` |
    | `captf-io.github.io` | `make gen && make build` |
+   | `.github` | `make check-headers` |
 
 4. Open a pull request against `main` and fill in the template.
 
