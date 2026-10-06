@@ -20,23 +20,44 @@
 #   tfcapi-lint  ghcr.io/captf-io/tfcapi-lint (the linter alone; the
 #                actions/tfcapi-lint GitHub Action runs it)
 #
-#   push to main      both images :edge and :sha-<7-char commit>
+#   ci passed on main both images :edge and :sha-<7-char commit>
 #   push tag v*.*.*   both images :vX.Y.Z, then a GitHub Release (a
 #                     pre-release for vX.Y.Z-rc.N) with the clusterctl
 #                     assets (infrastructure-components.yaml, metadata.yaml,
 #                     templates) and the tfcapi-lint binaries and checksums
 #
+# Nothing is published from a commit whose ci failed:
+#
+#   main      the workflow_run trigger fires when ci completes; the gate job
+#             accepts only a successful ci run caused by a push to main of
+#             this repository, and everything below builds that run's
+#             head_sha, not whatever main has moved to. :edge moves only
+#             while that commit is still main HEAD, so a slow ci cannot
+#             move :edge backwards; :sha-<7> is always published.
+#   tag       the gate job requires a successful ci push run on main for
+#             the tagged commit (hack/require-ci.sh), waiting up to 30
+#             minutes for one that is still running. So a release tag goes
+#             on a commit that was main HEAD and green.
+#   dispatch  republishes :edge and :sha-<7> from main HEAD, after the same
+#             ci check as a tag.
+#
+# `make release-ci-check` runs that check locally.
+#
 # The action's image follows its ref (actions/tfcapi-lint/tfcapi-lint.sh):
 # a release tag runs :vX.Y.Z, a commit on main :sha-<7>, main :edge. A
-# commit that was never a pushed main HEAD, or whose run failed or has not
-# finished, has no :sha-<7>; the action's version and image inputs are the
-# way around that.
+# commit that was never a pushed main HEAD with a green ci run has no
+# :sha-<7>; the action's version and image inputs are the way around that.
 #
 # Images are linux/amd64 and linux/arm64; the Dockerfile cross-compiles, so
 # no emulation. A tag must pass `make release-preflight` (vX.Y.Z or
 # vX.Y.Z-rc.N, metadata.yaml append-only) before anything is pushed for it.
 # workflow_dispatch republishes :edge from main; tags are published only by
 # their push, so a released image tag never moves.
+#
+# The keyless signature and the attestations name this workflow at
+# refs/heads/main (a workflow_run job runs the default branch's workflow),
+# not the built commit; the image's org.opencontainers.image.revision label
+# and its :sha-<7> tag carry the commit.
 #
 # Every pushed image digest gets a keyless cosign signature (GitHub OIDC),
 # a SLSA build-provenance attestation and an SPDX SBOM attestation, both
@@ -68,8 +89,15 @@ name: publish
 
 on:
   push:
-    branches: [main]
     tags: ["v*.*.*"]
+  # Safe despite zizmor's dangerous-triggers rule: the gate job accepts only a
+  # successful ci run caused by a push to main of this repository (never a
+  # pull request, a fork or a schedule), the code built is that run's
+  # head_sha, and no value from the event reaches a shell unquoted.
+  workflow_run: # zizmor: ignore[dangerous-triggers] only successful push-to-main ci runs are accepted, see the gate job
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
 
 permissions: {}
@@ -86,13 +114,76 @@ env:
   IMAGE: ghcr.io/captf-io/cluster-api-provider-terraform
 
 jobs:
-  image:
-    name: image (${{ matrix.name }})
-    # Never from a fork; main, or a pushed tag only.
+  # Decides whether to publish, and which commit. Never from a fork; a
+  # successful push-to-main ci run, a manual run on main, or a pushed tag.
+  gate:
+    name: gate
     if: >-
       github.repository == 'captf-io/cluster-api-provider-terraform' &&
-      (github.ref == 'refs/heads/main' ||
+      ((github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository) ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 45 # up to 30 minutes of waiting for ci on a tag
+    permissions:
+      contents: read
+      actions: read # list the ci runs of the commit
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      # The commit to publish: the ci run's head_sha, else the pushed or
+      # dispatched one. github.sha on a workflow_run is main's latest commit,
+      # which is not necessarily the one ci tested.
+      SOURCE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+      short: ${{ steps.resolve.outputs.short }}
+      edge: ${{ steps.resolve.outputs.edge }}
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      # A workflow_run is already a green ci run; a tag and a dispatch are
+      # checked against the commit's runs.
+      - name: Require green CI
+        if: ${{ github.event_name != 'workflow_run' }}
+        run: hack/require-ci.sh "${SOURCE_SHA}"
+      # :edge follows main HEAD only: an older commit's ci finishing late
+      # still gets its :sha-<7> but must not move :edge back.
+      - name: Resolve
+        id: resolve
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [[ ! "${SOURCE_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::not a commit: '${SOURCE_SHA}'"
+            exit 1
+          fi
+          edge=false
+          case "${EVENT}" in
+            workflow_dispatch) edge=true ;;
+            workflow_run)
+              head="$(gh api "repos/${GH_REPO}/commits/main" --jq .sha)"
+              [[ "${head}" == "${SOURCE_SHA}" ]] && edge=true
+              ;;
+          esac
+          {
+            echo "sha=${SOURCE_SHA}"
+            echo "short=${SOURCE_SHA:0:7}"
+            echo "edge=${edge}"
+          } >>"${GITHUB_OUTPUT}"
+
+  image:
+    name: image (${{ matrix.name }})
+    needs: gate
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -128,6 +219,7 @@ jobs:
       # newest tag, and release-preflight reads the previous metadata.yaml.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.gate.outputs.sha }}
           fetch-depth: 0
           persist-credentials: false
       # check-metadata.sh needs PyYAML (hack/ci/requirements.txt).
@@ -158,7 +250,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      # edge and sha-<7> from main, the tag itself from a tag; never
+      # edge and sha-<7> for main, the tag itself for a tag; never
       # "latest". The OCI labels and annotations (source, revision,
       # version, licenses) link the GHCR package to this repository.
       - name: Image metadata
@@ -169,16 +261,21 @@ jobs:
         with:
           images: ${{ env.IMAGE }}
           flavor: latest=false
+          # The tags are computed, not the action's edge and sha types: on a
+          # workflow_run they would name main's latest commit, not the one
+          # ci passed.
           tags: |
-            type=edge,branch=main
-            type=sha,format=short,enable={{is_default_branch}}
+            type=raw,value=edge,enable=${{ needs.gate.outputs.edge == 'true' }}
+            type=raw,value=sha-${{ needs.gate.outputs.short }},enable=${{ github.ref_type != 'tag' }}
             type=ref,event=tag
           # GitHub reads LICENSE.md's styled Markdown as "Other", so the
           # repository metadata would give NOASSERTION and no description.
           labels: |
+            org.opencontainers.image.revision=${{ needs.gate.outputs.sha }}
             org.opencontainers.image.licenses=Apache-2.0
             org.opencontainers.image.description=${{ matrix.description }}
           annotations: |
+            org.opencontainers.image.revision=${{ needs.gate.outputs.sha }}
             org.opencontainers.image.licenses=Apache-2.0
             org.opencontainers.image.description=${{ matrix.description }}
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1

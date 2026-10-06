@@ -400,6 +400,12 @@ release-preflight: ## Check the tree is clean, HEAD carries tag $(VERSION), and 
 	@git tag --points-at HEAD | grep -qxF -- "$(VERSION)" || { echo "$@: HEAD is not tagged $(VERSION)" >&2; exit 1; }
 	@hack/check-metadata.sh
 
+# Kept out of release-preflight so that stays offline. publish.yaml runs the
+# same script before it publishes a tag or a manual :edge republish.
+.PHONY: release-ci-check
+release-ci-check: ## Check the ci workflow passed on main for COMMIT (default HEAD); waits for a running one (needs gh).
+	@hack/require-ci.sh "$(COMMIT)"
+
 .PHONY: release
 release: release-preflight ## Build and push the manager and tfcapi-lint images, and build every asset into out/release (VERSION=vX.Y.Z).
 	$(MAKE) docker-build docker-push IMG=$(RELEASE_REPO):$(VERSION)
