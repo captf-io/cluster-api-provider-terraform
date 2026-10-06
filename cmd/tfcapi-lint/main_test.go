@@ -54,6 +54,7 @@ func TestFixtures(t *testing.T) {
 		{"bad/extra-input-no-default", "machine", app.ExitFindings},
 		{"bad/tofu-shadow", "machine", app.ExitFindings},
 		{"bad/no-tags", "cluster", app.ExitFindings},
+		{"bad/pool-no-provider-id-list", "machinepool", app.ExitFindings},
 	} {
 		t.Run(tt.dir, func(t *testing.T) {
 			t.Parallel()

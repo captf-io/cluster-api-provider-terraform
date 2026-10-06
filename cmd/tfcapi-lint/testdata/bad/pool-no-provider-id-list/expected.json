@@ -1,0 +1,19 @@
+{
+  "module": "testdata/bad/pool-no-provider-id-list",
+  "contract": "v1alpha1",
+  "role": "machinepool",
+  "findings": [
+    {
+      "id": "output/provider-id-list-shape",
+      "severity": "error",
+      "file": "",
+      "line": 0,
+      "message": "output provider_id_list is not declared: a pool reports every non-terminated member"
+    }
+  ],
+  "summary": {
+    "error": 1,
+    "warning": 0,
+    "info": 0
+  }
+}
