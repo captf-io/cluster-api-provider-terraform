@@ -131,7 +131,7 @@ fi
 pull=missing
 if [[ -z "${INPUT_IMAGE:-}" ]]; then pull=always; fi
 
-echo "tfcapi-lint: ${image}"
+echo "tfcapi-lint: ${image}" >&2
 echo "image=${image}" >>"${GITHUB_OUTPUT:-/dev/null}"
 
 # --network host: a registry on the runner (a service container on

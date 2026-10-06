@@ -327,6 +327,13 @@ docker-build-lint: ## Build the tfcapi-lint image $(LINT_IMG) for the host platf
 	$(CONTAINER_TOOL) build --target tfcapi-lint --build-arg GO_VERSION="$(GO_VERSION)" --build-arg LDFLAGS="$(LDFLAGS)" \
 		-t "$(LINT_IMG)" -f Dockerfile .
 
+# The docker CLI runs the image (tfcapi-lint.sh, as the action does); on a
+# podman host, the docker CLI talking to the podman socket sees the image
+# that podman built.
+.PHONY: test-lint-image
+test-lint-image: docker-build-lint ## Build $(LINT_IMG), then lint a known-good and a known-bad module of every role with it.
+	IMAGE="$(LINT_IMG)" actions/tfcapi-lint/image_test.sh
+
 .PHONY: docker-buildx
 docker-buildx: ## Build a multi-arch manifest list $(IMG) for $(PLATFORMS) (podman).
 	hack/ensure-podman.sh podman

@@ -576,6 +576,13 @@ jobs:
           load: true
           tags: tfcapi-lint:ci
           cache-from: type=gha,scope=tfcapi-lint
+      # A known-good and a known-bad module of every role, through the
+      # action's script: exit codes and JSON against the golden files.
+      - name: tfcapi-lint image on good and bad modules
+        if: ${{ steps.rel.outputs.run == 'true' }}
+        env:
+          IMAGE: tfcapi-lint:ci
+        run: actions/tfcapi-lint/image_test.sh
       - name: Action on a conforming module
         if: ${{ steps.rel.outputs.run == 'true' }}
         uses: ./actions/tfcapi-lint # zizmor: ignore[self-repository]
