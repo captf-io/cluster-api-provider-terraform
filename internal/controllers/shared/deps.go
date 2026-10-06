@@ -87,4 +87,11 @@ type Deps struct {
 	// (--state-backups); 0 takes none. Backups are Secrets read and written
 	// through Client, which reads Secrets live.
 	StateBackups int
+	// MaxActiveJobs caps the running Jobs across the manager
+	// (--max-active-jobs); 0 is no cap.
+	MaxActiveJobs int
+	// ClusterMaxActiveJobs caps the running Jobs of one cluster
+	// (--cluster-max-active-jobs) unless the TerraformCluster sets
+	// spec.maxActiveJobs; 0 is no cap.
+	ClusterMaxActiveJobs int
 }

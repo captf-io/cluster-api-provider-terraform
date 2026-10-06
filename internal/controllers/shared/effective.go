@@ -72,6 +72,10 @@ type EffectiveConfig struct {
 	// defaults.membershipRefreshIntervalSeconds, else
 	// DefaultMembershipRefreshInterval; 0 for every other kind.
 	MembershipRefreshInterval time.Duration
+	// MaxActiveJobs is the cluster's spec.maxActiveJobs (a machine or pool
+	// reads its TerraformCluster's); 0 means the manager's
+	// --cluster-max-active-jobs.
+	MaxActiveJobs int32
 }
 
 // DefaultHealthCheckInterval is remediation.healthCheckIntervalSeconds'
@@ -109,6 +113,9 @@ func Resolve(spec SpecView, cluster *infrav1.TerraformCluster, driftDefault time
 		if cluster != nil {
 			e.DeletionPolicy = cmp.Or(spec.DeletionPolicy, defaults.DeletionPolicy, cluster.Spec.DeletionPolicy, infrav1.DeletionPolicyDestroy)
 		}
+		if cluster != nil {
+			e.MaxActiveJobs = cluster.Spec.MaxActiveJobs
+		}
 		e.Jobs = MergeJobPolicy(spec.Jobs, jobs)
 		if spec.PoolDrift != nil {
 			interval = e.resolvePool(spec, drift, defaults.MembershipRefreshIntervalSeconds)
@@ -118,6 +125,7 @@ func Resolve(spec SpecView, cluster *infrav1.TerraformCluster, driftDefault time
 		}
 	} else {
 		e.IdentityName = spec.IdentityRef.Name
+		e.MaxActiveJobs = spec.MaxActiveJobs
 		if spec.Jobs != nil {
 			e.Jobs = *spec.Jobs.DeepCopy()
 		}

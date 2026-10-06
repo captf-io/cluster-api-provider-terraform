@@ -106,6 +106,9 @@ const (
 	// LeaseWaitMachineOperations: a TerraformCluster's apply or destroy
 	// waits for its machines' in flight.
 	LeaseWaitMachineOperations = "machine_operations"
+	// LeaseWaitJobSlot: the manager's or the cluster's active Jobs reached
+	// their limit.
+	LeaseWaitJobSlot = "job_slot"
 )
 
 // Job results, the result label of captf_jobs_total and
@@ -195,7 +198,7 @@ func Specs() []Spec {
 		{ImageInspectName, "counter", []string{"reason"}, "Registry or image-label failures while resolving template capacity."},
 		{HashChangesName, "counter", []string{"kind"}, "Applies started because the inputs of a mutable kind changed."},
 		{RemediationRequestsName, "counter", []string{"action"}, "cluster.x-k8s.io/remediate-machine annotations set on (requested) or removed from (withdrawn) a Machine."},
-		{LeaseWaitsName, "counter", []string{"kind", "reason"}, "Operations that started waiting for a run lease, once per wait: run_lease (another live Job of the object holds it), cluster_operation (a machine's apply or destroy waits for its TerraformCluster's) or machine_operations (a TerraformCluster's apply or destroy waits for its machines')."},
+		{LeaseWaitsName, "counter", []string{"kind", "reason"}, "Operations that started waiting for a run lease, once per wait: run_lease (another live Job of the object holds it), cluster_operation (a machine's apply or destroy waits for its TerraformCluster's), machine_operations (a TerraformCluster's apply or destroy waits for its machines') or job_slot (the manager's --max-active-jobs or the cluster's limit on active Jobs is reached)."},
 		{StateBackupsName, "counter", []string{"kind", "result"}, "State backups: taken (a new state serial copied into captf-state-backup-* Secrets), pruned (a backup beyond --state-backups deleted) or skipped (a new serial not backed up: encrypted, unreadable or oversized state, or a failed copy)."},
 		{StateRestoresName, "counter", []string{"kind", "result"}, "State restores requested with captf.io/restore-state: succeeded or failed (a restore Job finished), or not_found (the annotation names no backup)."},
 		{PlanApprovalsName, "counter", []string{"kind", "result"}, "TerraformPlan transitions: created (a plan waits for approval), approved (spec.approved was set), applied (the approved plan was applied), superseded (replaced by a newer plan, or no longer applicable, before it was applied) or failed (the approved apply planned other changes and stopped)."},
@@ -606,10 +609,10 @@ func (r *Recorder) RemediationRequest(action string) {
 }
 
 // LeaseWait records an operation on an object of kind that started waiting
-// for a run lease; reason is LeaseWaitRunLease, LeaseWaitClusterOperation
-// or LeaseWaitMachineOperations, anything else is dropped.
+// for a run lease; reason is LeaseWaitRunLease, LeaseWaitClusterOperation,
+// LeaseWaitMachineOperations or LeaseWaitJobSlot, anything else is dropped.
 func (r *Recorder) LeaseWait(kind, reason string) {
-	if r != nil && slices.Contains([]string{LeaseWaitRunLease, LeaseWaitClusterOperation, LeaseWaitMachineOperations}, reason) {
+	if r != nil && slices.Contains([]string{LeaseWaitRunLease, LeaseWaitClusterOperation, LeaseWaitMachineOperations, LeaseWaitJobSlot}, reason) {
 		r.leaseWaits.WithLabelValues(kind, reason).Inc()
 	}
 }

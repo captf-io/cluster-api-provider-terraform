@@ -62,6 +62,9 @@ const (
 	// EventWaitingForRunLease: an operation waits because another live Job
 	// holds the object's run lease.
 	EventWaitingForRunLease = "WaitingForRunLease"
+	// EventWaitingForJobSlot: an operation waits because the manager's or
+	// the cluster's active Jobs reached their limit.
+	EventWaitingForJobSlot = "WaitingForJobSlot"
 	// EventWaitingForClusterOperation: a machine's apply or destroy waits
 	// for its TerraformCluster's apply or destroy.
 	EventWaitingForClusterOperation = "WaitingForClusterOperation"
@@ -237,7 +240,7 @@ func DocumentedEvents() []string {
 		EventJobCreated, EventJobSucceeded, EventJobFailed, EventJobInterrupted, EventJobDeadlineExceeded,
 		EventStuckJobDeleted, EventDestructivePlanBlocked,
 		EventPlanReady, EventPlanApproved, EventPlanApplied, EventPlanChanged, EventPlanSuperseded,
-		EventWaitingForRunLease, EventWaitingForClusterOperation, EventWaitingForMachineOperations,
+		EventWaitingForRunLease, EventWaitingForClusterOperation, EventWaitingForMachineOperations, EventWaitingForJobSlot,
 		EventDeletionStarted, EventDestroyed, EventFinalizerRemoved,
 		EventInfrastructureRetained, EventRetainedStateFound, EventRetainedStateAdopted, EventPaused, EventResumed, EventProvisioned,
 		EventProviderIDSet, EventControlPlaneEndpointSet, EventFailureDomainsChanged, EventExportsNotPublished,
@@ -321,6 +324,7 @@ var informationalReasons = sets.New(
 	infrav1.WaitingForRunLeaseReason,
 	infrav1.WaitingForClusterOperationReason,
 	infrav1.WaitingForMachineOperationsReason,
+	infrav1.WaitingForJobSlotReason,
 	infrav1.PlanAwaitingApprovalReason,
 	infrav1.PlanChangedReason,
 	infrav1.AutoscalingDisabledReason,
@@ -534,6 +538,7 @@ var leaseWaitEvents = map[string]string{
 	infrav1.WaitingForRunLeaseReason:          EventWaitingForRunLease,
 	infrav1.WaitingForClusterOperationReason:  EventWaitingForClusterOperation,
 	infrav1.WaitingForMachineOperationsReason: EventWaitingForMachineOperations,
+	infrav1.WaitingForJobSlotReason:           EventWaitingForJobSlot,
 }
 
 // planWaitReasons are the ApplyJobSucceeded reasons of an apply waiting for
@@ -548,6 +553,7 @@ var leaseWaitMetrics = map[string]string{
 	infrav1.WaitingForRunLeaseReason:          metrics.LeaseWaitRunLease,
 	infrav1.WaitingForClusterOperationReason:  metrics.LeaseWaitClusterOperation,
 	infrav1.WaitingForMachineOperationsReason: metrics.LeaseWaitMachineOperations,
+	infrav1.WaitingForJobSlotReason:           metrics.LeaseWaitJobSlot,
 }
 
 // afterLeaseWait is the event of c, a Job condition that leaves a lease

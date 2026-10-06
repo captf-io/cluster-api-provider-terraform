@@ -159,7 +159,7 @@ const (
 // completed apply or destroy Job and is never Unknown once one completed,
 // except while the next apply or destroy waits for a run lease
 // (WaitingForRunLease, WaitingForClusterOperation,
-// WaitingForMachineOperations) or for the approval of its plan
+// WaitingForMachineOperations, WaitingForJobSlot) or for the approval of its plan
 // (PlanAwaitingApproval, PlanChanged).
 const (
 	// ApplyJobSucceededCondition reports the outcome of the last apply or
@@ -228,6 +228,13 @@ const (
 	// pools' applies and destroys in flight to finish; new ones wait for
 	// it meanwhile.
 	WaitingForMachineOperationsReason = "WaitingForMachineOperations"
+	// WaitingForJobSlotReason is the Unknown reason while an operation
+	// waits because the manager's active Jobs reached --max-active-jobs, or
+	// the cluster's reached its maxActiveJobs (--cluster-max-active-jobs):
+	// no Job starts until one finishes. Drift checks and refreshes wait
+	// from 80% of a limit. It is also the DriftJobSucceeded reason for a
+	// refresh or drift that waits.
+	WaitingForJobSlotReason = "WaitingForJobSlot"
 	// PlanAwaitingApprovalReason is the Unknown reason while a
 	// TerraformCluster with applyPolicy Manual waits for the approval of
 	// its plan, a TerraformPlan (status.pendingPlanRef). Unknown, so
@@ -654,7 +661,7 @@ func ConditionReasons() map[string]map[metav1.ConditionStatus][]string {
 		ApplyJobSucceededCondition: {
 			metav1.ConditionTrue:    {ApplySucceededReason, DestroySucceededReason},
 			metav1.ConditionFalse:   {ApplyFailedReason, DestroyFailedReason, JobDeadlineExceededReason, IdentityNotAllowedReason, ImageInvalidReason, ImagePullFailedReason, InputsTooLargeReason, JobPolicyInvalidReason, DestructivePlanBlockedReason},
-			metav1.ConditionUnknown: {NoApplyYetReason, WaitingForRunLeaseReason, WaitingForClusterOperationReason, WaitingForMachineOperationsReason, PlanAwaitingApprovalReason, PlanChangedReason},
+			metav1.ConditionUnknown: {NoApplyYetReason, WaitingForRunLeaseReason, WaitingForClusterOperationReason, WaitingForMachineOperationsReason, WaitingForJobSlotReason, PlanAwaitingApprovalReason, PlanChangedReason},
 		},
 		StateReadableCondition: {
 			metav1.ConditionTrue:    {StateReadReason},
@@ -664,7 +671,7 @@ func ConditionReasons() map[string]map[metav1.ConditionStatus][]string {
 		RestoreJobSucceededCondition: {
 			metav1.ConditionTrue:    {StateRestoredReason},
 			metav1.ConditionFalse:   {RestoreFailedReason, RestoreBackupNotFoundReason},
-			metav1.ConditionUnknown: {WaitingForRunLeaseReason, WaitingForClusterOperationReason, WaitingForMachineOperationsReason},
+			metav1.ConditionUnknown: {WaitingForRunLeaseReason, WaitingForClusterOperationReason, WaitingForMachineOperationsReason, WaitingForJobSlotReason},
 		},
 		OutputsValidCondition: {
 			metav1.ConditionTrue:    {OutputsValidReason, InstancesTruncatedReason},
@@ -679,7 +686,7 @@ func ConditionReasons() map[string]map[metav1.ConditionStatus][]string {
 		DriftJobSucceededCondition: {
 			metav1.ConditionTrue:    {DriftCheckedReason},
 			metav1.ConditionFalse:   {DriftJobFailedReason, DriftJobDeadlineExceededReason},
-			metav1.ConditionUnknown: {DriftNotCheckedReason, DriftJobRunningReason, WaitingForRunLeaseReason, DurableInputsMissingReason},
+			metav1.ConditionUnknown: {DriftNotCheckedReason, DriftJobRunningReason, WaitingForRunLeaseReason, WaitingForJobSlotReason, DurableInputsMissingReason},
 		},
 		DriftDetectedCondition: {
 			metav1.ConditionTrue:    {DriftReportedReason, DriftPendingReason, DriftRemediatingReason},

@@ -667,6 +667,15 @@ func (r *reconciler) startOp(ctx context.Context, bk *Bookkeeping, dec Decision,
 		}
 	}
 
+	// Before any rendering or lease: a wait for a slot changes nothing.
+	slot, err := r.takeJobSlot(ctx, op)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if slot.reason != "" {
+		return r.waitForLease(ctx, bk, op, slot)
+	}
+
 	req := JobRequest{
 		Op:             op,
 		Identity:       r.identityName,

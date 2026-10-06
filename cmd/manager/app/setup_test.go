@@ -234,4 +234,7 @@ func TestNewDeps(t *testing.T) {
 	if deps.StateBackups != opts.StateBackups {
 		t.Errorf("StateBackups = %d, want %d", deps.StateBackups, opts.StateBackups)
 	}
+	if deps.MaxActiveJobs != opts.MaxActiveJobs || deps.ClusterMaxActiveJobs != opts.ClusterMaxActiveJobs {
+		t.Errorf("Job limits = %d/%d, want %d/%d", deps.MaxActiveJobs, deps.ClusterMaxActiveJobs, opts.MaxActiveJobs, opts.ClusterMaxActiveJobs)
+	}
 }

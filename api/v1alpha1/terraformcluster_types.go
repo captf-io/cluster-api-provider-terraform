@@ -79,6 +79,20 @@ type TerraformClusterSpec struct {
 	// +optional
 	ApplyPolicy ApplyPolicy `json:"applyPolicy,omitempty"`
 
+	// maxActiveJobs caps the Jobs of this cluster that run at once, counting
+	// the TerraformCluster's own and those of its machines and pools. The
+	// manager starts no Job beyond it: an operation waits
+	// (WaitingForJobSlot) until one finishes. Drift checks and refreshes
+	// start only below 80% of it, so applies and destroys keep headroom. The
+	// count comes from the Job cache, so the cap is soft by a few Jobs. 0
+	// (unset) means the manager's --cluster-max-active-jobs; the CRD schema's
+	// minimum of 1 makes 0 itself an invalid setting, so it unambiguously
+	// means unset, the same convention as membershipRefreshIntervalSeconds
+	// (kube-api-linter optionalfields: WhenRequired).
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	MaxActiveJobs int32 `json:"maxActiveJobs,omitempty"`
+
 	// defaults are inherited by the TerraformMachines and TerraformMachinePools
 	// of this cluster, field by field: a field a machine or pool sets wins,
 	// an unset one comes from here. They do not apply to the

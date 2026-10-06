@@ -202,7 +202,7 @@ func TestReasonsBelongToOneType(t *testing.T) {
 	t.Parallel()
 	shared := map[string]bool{
 		DriftNotCheckedReason: true, SecretNotFoundReason: true, WaitingForRunLeaseReason: true,
-		WaitingForClusterOperationReason: true, WaitingForMachineOperationsReason: true,
+		WaitingForClusterOperationReason: true, WaitingForMachineOperationsReason: true, WaitingForJobSlotReason: true,
 		PlanPendingReason: true, PlanApprovedReason: true,
 	}
 	types := map[string]map[string]bool{}

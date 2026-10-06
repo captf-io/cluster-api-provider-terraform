@@ -49,6 +49,17 @@ func JobName(k Kind, req JobRequest) string {
 type leaseWait struct {
 	reason  string
 	message string
+	// requeue is when to look again; zero means GateRequeue.
+	requeue time.Duration
+}
+
+// after returns when to look again after w: its own requeue, else
+// GateRequeue.
+func (w leaseWait) after() time.Duration {
+	if w.requeue > 0 {
+		return w.requeue
+	}
+	return GateRequeue
 }
 
 // maxNamedHolders caps the Job names a WaitingForMachineOperations message
@@ -83,7 +94,7 @@ func acquireLeases(ctx context.Context, d Deps, k Kind, req JobRequest, name str
 		return leaseWait{}, err
 	}
 	if !res.Acquired {
-		return leaseWait{infrav1.WaitingForRunLeaseReason, heldBy("the run lease "+run.Name, res.Holder, req.Op)}, nil
+		return leaseWait{reason: infrav1.WaitingForRunLeaseReason, message: heldBy("the run lease "+run.Name, res.Holder, req.Op)}, nil
 	}
 	logger := klog.FromContext(ctx)
 	if res.Previous != "" {
@@ -216,7 +227,7 @@ func clusterGate(ctx context.Context, d Deps, run runlease.Spec, now time.Time) 
 		return leaseWait{}, err
 	}
 	if !res.Acquired {
-		return leaseWait{infrav1.WaitingForRunLeaseReason, heldBy("the cluster write lease "+cl.Name, res.Holder, run.Op)}, nil
+		return leaseWait{reason: infrav1.WaitingForRunLeaseReason, message: heldBy("the cluster write lease "+cl.Name, res.Holder, run.Op)}, nil
 	}
 	live, err := runlease.LiveMachineOps(ctx, d.APIReader, run.Namespace, run.ClusterName, now)
 	if err != nil || len(live) == 0 {
@@ -228,7 +239,7 @@ func clusterGate(ctx context.Context, d Deps, run runlease.Spec, now time.Time) 
 	if len(live) > len(named) {
 		msg += ", …"
 	}
-	return leaseWait{infrav1.WaitingForMachineOperationsReason, msg + ". New machine and machine pool applies and destroys wait for it meanwhile"}, nil
+	return leaseWait{reason: infrav1.WaitingForMachineOperationsReason, message: msg + ". New machine and machine pool applies and destroys wait for it meanwhile"}, nil
 }
 
 // machineGate checks, using ctx and d and at now, after run, the machine's or
@@ -246,7 +257,7 @@ func machineGate(ctx context.Context, d Deps, run runlease.Spec, now time.Time) 
 	if err != nil || !live {
 		return leaseWait{}, err
 	}
-	return leaseWait{infrav1.WaitingForClusterOperationReason, fmt.Sprintf(
+	return leaseWait{reason: infrav1.WaitingForClusterOperationReason, message: fmt.Sprintf(
 		"Waiting for the TerraformCluster's Job %s of cluster %s to finish before the %s starts", holder, run.ClusterName, run.Op)}, nil
 }
 
@@ -273,15 +284,15 @@ func (r *reconciler) waitForLease(ctx context.Context, bk *Bookkeeping, op jobs.
 	if op == jobs.OpRestore {
 		c.Type = infrav1.RestoreJobSucceededCondition
 		conditions.Set(r.obj, c)
-		return r.finish(bk, nil, ctrl.Result{RequeueAfter: GateRequeue})
+		return r.finish(bk, nil, ctrl.Result{RequeueAfter: w.after()})
 	}
 	if !runlease.Mutating(op) && op != jobs.OpPlan {
 		// A plan Job stands for the apply it plans: ApplyJobSucceeded.
 		c.Type = infrav1.DriftJobSucceededCondition
 		conditions.Set(r.obj, c)
-		return r.finish(bk, nil, ctrl.Result{RequeueAfter: GateRequeue})
+		return r.finish(bk, nil, ctrl.Result{RequeueAfter: w.after()})
 	}
-	return r.finish(bk, &c, ctrl.Result{RequeueAfter: GateRequeue})
+	return r.finish(bk, &c, ctrl.Result{RequeueAfter: w.after()})
 }
 
 // releaseLeases gives back, using ctx, the run lease, and a

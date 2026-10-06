@@ -82,7 +82,7 @@ func TestFlagSet(t *testing.T) {
 		"terraformcluster-concurrency", "terraformmachine-concurrency",
 		"terraformmachinetemplate-concurrency", "terraformmachinepool-concurrency", "webhook-port", "webhook-cert-dir",
 		"health-addr", "profiler-address", "diagnostics-address", "insecure-diagnostics",
-		"feature-gates", "runner-image", "runner-events", "drift-default-interval", "cluster-operation-gate", "state-backups", "logging-format", "v", "kubeconfig",
+		"feature-gates", "runner-image", "runner-events", "drift-default-interval", "cluster-operation-gate", "max-active-jobs", "cluster-max-active-jobs", "state-backups", "logging-format", "v", "kubeconfig",
 	} {
 		if fs.Lookup(name) == nil {
 			t.Errorf("flag --%s is missing", name)
@@ -121,6 +121,8 @@ func TestDefaults(t *testing.T) {
 		{"runner-image", o.RunnerImage, ""},
 		{"runner-events", o.RunnerEvents, true},
 		{"cluster-operation-gate", o.ClusterOperationGate, true},
+		{"max-active-jobs", o.MaxActiveJobs, 200},
+		{"cluster-max-active-jobs", o.ClusterMaxActiveJobs, 20},
 		{"state-backups", o.StateBackups, 5},
 		{"verbosity", int(o.Logs.Verbosity), 2},
 	}
@@ -171,12 +173,12 @@ func TestRunnerImage(t *testing.T) {
 // an error that names the offending flag. It does not run t.Parallel, for
 // the reason TestFlagSet gives.
 func TestValidateRanges(t *testing.T) {
-	o := parse(t, "--terraformmachine-concurrency=0", "--terraformmachinepool-concurrency=0", "--sync-period=0s", "--drift-default-interval=-1m", "--state-backups=-1")
+	o := parse(t, "--terraformmachine-concurrency=0", "--terraformmachinepool-concurrency=0", "--sync-period=0s", "--drift-default-interval=-1m", "--state-backups=-1", "--max-active-jobs=-1", "--cluster-max-active-jobs=-1")
 	o.Complete(envWith(testImage))
 	err := o.Validate()
 	for _, want := range []string{
 		"--terraformmachine-concurrency must be at least 1", "--terraformmachinepool-concurrency must be at least 1", "--sync-period must be positive", "--drift-default-interval must be positive",
-		"--state-backups must not be negative",
+		"--state-backups must not be negative", "--max-active-jobs must not be negative", "--cluster-max-active-jobs must not be negative",
 	} {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("Validate error = %v, want it to mention %q", err, want)

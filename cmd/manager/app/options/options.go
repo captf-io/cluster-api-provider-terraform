@@ -112,6 +112,14 @@ type Options struct {
 	// ClusterOperationGate keeps a TerraformCluster's apply or destroy and
 	// its machines' applies and destroys apart (--cluster-operation-gate).
 	ClusterOperationGate bool
+	// MaxActiveJobs caps the Jobs running at once across the manager
+	// (--max-active-jobs); 0 is no cap.
+	MaxActiveJobs int
+	// ClusterMaxActiveJobs caps the Jobs running at once for one
+	// TerraformCluster with its machines and pools
+	// (--cluster-max-active-jobs); 0 is no cap. TerraformCluster
+	// spec.maxActiveJobs overrides it.
+	ClusterMaxActiveJobs int
 	// StateBackups is how many state backups to keep per object
 	// (--state-backups); 0 disables backups.
 	StateBackups int
@@ -190,6 +198,10 @@ func (o *Options) Flags() cliflag.NamedFlagSets {
 		"Drift check interval for objects that set none.")
 	runner.BoolVar(&o.ClusterOperationGate, "cluster-operation-gate", true,
 		"Keep a TerraformCluster's apply or destroy and its machines' applies and destroys from running at once, through a per-Cluster write Lease. The per-object run Lease is always on.")
+	runner.IntVar(&o.MaxActiveJobs, "max-active-jobs", 200,
+		"Jobs that may run at once across all clusters. The manager starts no Job beyond it: the operation waits (WaitingForJobSlot). Drift checks and refreshes start only below 80% of it. Counted from the Job cache, so soft by a few Jobs. 0 is no cap.")
+	runner.IntVar(&o.ClusterMaxActiveJobs, "cluster-max-active-jobs", 20,
+		"Jobs that may run at once for one TerraformCluster, counting its machines and pools; TerraformCluster spec.maxActiveJobs overrides it. Enforced as --max-active-jobs is. 0 is no cap.")
 	runner.IntVar(&o.StateBackups, "state-backups", 5,
 		"State backups to keep per object: every new state serial is copied into captf-state-backup-* Secrets and older copies are pruned. 0 takes no backups (existing ones stay and can still be restored).")
 
@@ -234,6 +246,11 @@ func (o *Options) Validate() error {
 	} {
 		if v < 1 {
 			errs = append(errs, fmt.Errorf("--%s must be at least 1, got %d", name, v))
+		}
+	}
+	for name, v := range map[string]int{"max-active-jobs": o.MaxActiveJobs, "cluster-max-active-jobs": o.ClusterMaxActiveJobs} {
+		if v < 0 {
+			errs = append(errs, fmt.Errorf("--%s must not be negative, got %d", name, v))
 		}
 	}
 	if o.StateBackups < 0 {

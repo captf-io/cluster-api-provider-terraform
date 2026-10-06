@@ -291,7 +291,7 @@ func setup(ctx context.Context, getConfig func() *rest.Config, opts *options.Opt
 // the metrics recorder rec, and returns the resulting shared.Deps: Secrets
 // are read live through mgr's default client, and Job pods through its API
 // reader, while RunnerImage, RunnerEvents, DriftDefault, WatchFilter,
-// ClusterOperationGate and StateBackups are copied from opts and Metrics is
+// ClusterOperationGate, StateBackups, MaxActiveJobs and ClusterMaxActiveJobs are copied from opts and Metrics is
 // rec.
 func newDeps(mgr ctrl.Manager, opts *options.Options, rec *metrics.Recorder) shared.Deps {
 	c, apiReader := mgr.GetClient(), mgr.GetAPIReader()
@@ -312,5 +312,7 @@ func newDeps(mgr ctrl.Manager, opts *options.Options, rec *metrics.Recorder) sha
 
 		ClusterOperationGate: opts.ClusterOperationGate,
 		StateBackups:         opts.StateBackups,
+		MaxActiveJobs:        opts.MaxActiveJobs,
+		ClusterMaxActiveJobs: opts.ClusterMaxActiveJobs,
 	}
 }

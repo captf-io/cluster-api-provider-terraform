@@ -80,7 +80,7 @@ func (a *adapter) RefreshAfterApply() bool { return false }
 // Spec returns the wrapped TerraformCluster's spec as a shared.SpecView.
 func (a *adapter) Spec() shared.SpecView {
 	s := a.obj.Spec
-	return shared.SpecView{WorkspaceSpec: s.WorkspaceSpec, Drift: s.Drift, ApplyPolicy: s.ApplyPolicy}
+	return shared.SpecView{WorkspaceSpec: s.WorkspaceSpec, Drift: s.Drift, ApplyPolicy: s.ApplyPolicy, MaxActiveJobs: s.MaxActiveJobs}
 }
 
 // Status returns the wrapped TerraformCluster's status as a

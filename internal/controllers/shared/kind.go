@@ -95,6 +95,9 @@ type SpecView struct {
 	// spec.membershipRefreshIntervalSeconds; 0 when unset (the pool then
 	// gets DefaultMembershipRefreshInterval) and for every other kind.
 	MembershipRefreshInterval time.Duration
+	// MaxActiveJobs is a TerraformCluster's spec.maxActiveJobs; 0 when
+	// unset and for every other kind.
+	MaxActiveJobs int32
 	// InheritsDefaults is true for kinds whose unset fields come from the
 	// TerraformCluster's spec.defaults (machines and pools); false for the
 	// cluster itself.
