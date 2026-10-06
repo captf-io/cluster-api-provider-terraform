@@ -1,4 +1,4 @@
-# Allow-list: only what the manager/runner build needs.
+# Allow-list: only what the manager/runner and tfcapi-lint builds need.
 *
 !go.work
 !go.mod

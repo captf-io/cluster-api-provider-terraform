@@ -33,6 +33,7 @@ GO_VERSION ?= 1.26
 include $(ROOT_DIR)/hack/tools/versions.mk
 
 IMG ?= ghcr.io/captf-io/cluster-api-provider-terraform:dev
+LINT_IMG ?= ghcr.io/captf-io/tfcapi-lint:dev
 CONTAINER_TOOL ?= podman
 
 MODULE := github.com/captf-io/cluster-api-provider-terraform
@@ -317,14 +318,20 @@ runner: ## Build the static Job runner into bin/runner and check it is static.
 .PHONY: docker-build
 docker-build: ## Build the manager/runner image $(IMG) for the host platform.
 	hack/ensure-podman.sh "$(CONTAINER_TOOL)"
-	$(CONTAINER_TOOL) build --build-arg GO_VERSION="$(GO_VERSION)" --build-arg LDFLAGS="$(LDFLAGS)" \
+	$(CONTAINER_TOOL) build --target manager --build-arg GO_VERSION="$(GO_VERSION)" --build-arg LDFLAGS="$(LDFLAGS)" \
 		-t "$(IMG)" -f Dockerfile .
+
+.PHONY: docker-build-lint
+docker-build-lint: ## Build the tfcapi-lint image $(LINT_IMG) for the host platform.
+	hack/ensure-podman.sh "$(CONTAINER_TOOL)"
+	$(CONTAINER_TOOL) build --target tfcapi-lint --build-arg GO_VERSION="$(GO_VERSION)" --build-arg LDFLAGS="$(LDFLAGS)" \
+		-t "$(LINT_IMG)" -f Dockerfile .
 
 .PHONY: docker-buildx
 docker-buildx: ## Build a multi-arch manifest list $(IMG) for $(PLATFORMS) (podman).
 	hack/ensure-podman.sh podman
 	if podman manifest exists "$(IMG)"; then podman manifest rm "$(IMG)"; fi
-	podman build --platform "$(PLATFORMS)" --manifest "$(IMG)" \
+	podman build --target manager --platform "$(PLATFORMS)" --manifest "$(IMG)" \
 		--build-arg GO_VERSION="$(GO_VERSION)" --build-arg LDFLAGS="$(LDFLAGS)" -f Dockerfile .
 
 .PHONY: docker-push
@@ -355,6 +362,7 @@ release-lint: $(GORELEASER) ## Build tfcapi-lint release assets from the current
 # (CAPTF_MANAGER_IMAGE) is copied from it and is pinned the same way.
 RELEASE_DIR ?= $(ROOT_DIR)/out
 RELEASE_REPO ?= ghcr.io/captf-io/cluster-api-provider-terraform
+RELEASE_LINT_REPO ?= ghcr.io/captf-io/tfcapi-lint
 RELEASE_IMG ?= $(RELEASE_REPO):$(VERSION)
 SKOPEO ?= skopeo
 
@@ -373,7 +381,7 @@ manifests-release: $(KUSTOMIZE) ## Build out/infrastructure-components.yaml (REL
 # clean HEAD; nothing is ever force-pushed and tags never move: a bad rc gets
 # a new rc. The assets land in out/release/. Pushing the tag is the release:
 # .github/workflows/publish.yaml runs release-preflight, pushes the signed
-# image, then release-assets and release-github. `make release` is the
+# images, then release-assets and release-github. `make release` is the
 # manual fallback for when CI cannot run; never run both for one tag.
 RELEASE_ASSETS := $(RELEASE_DIR)/release
 
@@ -386,8 +394,10 @@ release-preflight: ## Check the tree is clean, HEAD carries tag $(VERSION), and 
 	@hack/check-metadata.sh
 
 .PHONY: release
-release: release-preflight ## Build and push the manager image, and build every asset into out/release (VERSION=vX.Y.Z).
+release: release-preflight ## Build and push the manager and tfcapi-lint images, and build every asset into out/release (VERSION=vX.Y.Z).
 	$(MAKE) docker-build docker-push IMG=$(RELEASE_REPO):$(VERSION)
+	$(MAKE) docker-build-lint LINT_IMG=$(RELEASE_LINT_REPO):$(VERSION)
+	$(MAKE) docker-push IMG=$(RELEASE_LINT_REPO):$(VERSION)
 	@digest="$$($(MAKE) --no-print-directory -s release-image-digest VERSION=$(VERSION))" || exit 1; \
 	$(MAKE) release-assets VERSION=$(VERSION) RELEASE_IMG="$(RELEASE_REPO)@$$digest"
 
