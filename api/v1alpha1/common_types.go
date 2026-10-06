@@ -481,6 +481,19 @@ type RunError struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=512
 	Summary string `json:"summary,omitempty"`
+
+	// resources are the resources an apply or destroy failed on, as
+	// "<address>: <summary>", from the runtime's error diagnostics that
+	// name a resource. At most 10, each at most 512 bytes, and secret
+	// values are redacted. The first is also named in the ApplyJobSucceeded
+	// condition's message.
+	// +optional
+	// +listType=atomic
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=10
+	// +kubebuilder:validation:items:MinLength=1
+	// +kubebuilder:validation:items:MaxLength=512
+	Resources []string `json:"resources,omitempty"`
 }
 
 // DriftSummary summarizes the plan of a drift run that found changes.

@@ -117,4 +117,9 @@ type Error struct {
 	Kind string  `json:"kind"`
 	Step *string `json:"step"`
 	Tail string  `json:"tail"`
+	// Resources are the failing resources of an apply or destroy, from
+	// the runtime's error diagnostics that name one: "<address>:
+	// <summary>", redacted, at most MaxErrorResources of at most
+	// MaxResourceBytes bytes. Encode shrinks them before the tail.
+	Resources []string `json:"resources,omitempty"`
 }

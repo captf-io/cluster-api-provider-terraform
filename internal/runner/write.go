@@ -23,7 +23,8 @@ import (
 )
 
 // Encode marshals r into at most MaxResultBytes, shrinking in stages until
-// it fits: the resource changes (only a metric), then the error tail, then
+// it fits: the resource changes (only a metric), then the error's failing
+// resources (halved, then dropped), then the error tail, then
 // the plan's resources (halved until it fits, marked truncated), then the
 // drift resources, then the steps (keeping the first and the last), then
 // everything but version, op, error kind and the plan's hash and counts
@@ -48,6 +49,15 @@ func Encode(r Result) []byte {
 	if r.Error != nil {
 		e := *r.Error
 		r.Error = &e
+		for len(r.Error.Resources) > 0 {
+			r.Error.Resources = r.Error.Resources[:len(r.Error.Resources)/2]
+			if len(r.Error.Resources) == 0 {
+				r.Error.Resources = nil
+			}
+			if b, ok := fits(r); ok {
+				return b
+			}
+		}
 		for r.Error.Tail != "" {
 			r.Error.Tail = r.Error.Tail[len(r.Error.Tail)/2:]
 			if len(r.Error.Tail) < 16 {

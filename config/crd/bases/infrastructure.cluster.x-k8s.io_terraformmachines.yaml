@@ -1256,6 +1256,21 @@ spec:
                         - blocked
                         - plan-changed
                         type: string
+                      resources:
+                        description: |-
+                          resources are the resources an apply or destroy failed on, as
+                          "<address>: <summary>", from the runtime's error diagnostics that
+                          name a resource. At most 10, each at most 512 bytes, and secret
+                          values are redacted. The first is also named in the ApplyJobSucceeded
+                          condition's message.
+                        items:
+                          maxLength: 512
+                          minLength: 1
+                          type: string
+                        maxItems: 10
+                        minItems: 1
+                        type: array
+                        x-kubernetes-list-type: atomic
                       step:
                         description: step that failed, for kind step.
                         maxLength: 64

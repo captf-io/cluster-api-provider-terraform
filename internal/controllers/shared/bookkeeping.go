@@ -676,6 +676,9 @@ func applyDestroyCondition(f finished, obj client.Object) metav1.Condition {
 	}
 	if !f.ok && f.result != nil && f.result.Error != nil && f.result.Error.Step != nil {
 		c.Message += ": step " + *f.result.Error.Step + " failed"
+		if rs := runResources(f.result.Error.Resources); len(rs) > 0 {
+			c.Message += ": " + rs[0]
+		}
 	}
 	return c
 }
@@ -801,11 +804,36 @@ func sourceImage(job *batchv1.Job) string {
 // MaxRunSummary is the byte limit of status.lastRun.error.summary.
 const MaxRunSummary = 512
 
+// MaxRunResources and MaxRunResourceBytes are the limits of
+// status.lastRun.error.resources: its item count and each item's bytes.
+const (
+	MaxRunResources     = 10
+	MaxRunResourceBytes = 512
+)
+
 // runSummary returns the runner's failure summary s cut to MaxRunSummary
 // bytes on a rune boundary, so the status update never fails CRD
 // validation.
 func runSummary(s string) string {
 	return strutil.Truncate(s, MaxRunSummary)
+}
+
+// runResources returns in, the failing resources of a run's error, as
+// status.lastRun.error.resources takes them: the first MaxRunResources,
+// each cut to MaxRunResourceBytes, and none when empty. The runner already
+// caps them; a result comes from a pod, so the controller does too.
+func runResources(in []string) []string {
+	var out []string
+	for _, s := range in {
+		if s == "" {
+			continue
+		}
+		out = append(out, strutil.Truncate(s, MaxRunResourceBytes))
+		if len(out) == MaxRunResources {
+			break
+		}
+	}
+	return out
 }
 
 // setLastRun copies f, the newest finished Job's result, into st's
@@ -819,7 +847,7 @@ func setLastRun(st CommonStatus, f finished) {
 			run.Steps = append(run.Steps, infrav1.RunStep{Name: s.Name, ExitCode: &exit, DurationMilliseconds: &ms})
 		}
 		if r.Error != nil {
-			run.Error = infrav1.RunError{Kind: infrav1.RunErrorKind(r.Error.Kind), Summary: runSummary(r.Error.Tail)}
+			run.Error = infrav1.RunError{Kind: infrav1.RunErrorKind(r.Error.Kind), Summary: runSummary(r.Error.Tail), Resources: runResources(r.Error.Resources)}
 			if r.Error.Step != nil {
 				run.Error.Step = *r.Error.Step
 			}

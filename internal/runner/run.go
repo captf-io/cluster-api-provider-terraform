@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strings"
 	"time"
 
 	"k8s.io/klog/v2"
@@ -186,15 +187,27 @@ func run(ctx context.Context, o Options) (Result, int) {
 		// passes through between them. Never the environment.
 		logger.Info("Step started", "step", s.Name)
 		o.emit(ctx, EventTypeNormal, EventStepStarted, s.Name, "step %s started", s.Name)
-		stdout := o.Stdout
+		stdout, stderr := o.Stdout, o.Stderr
 		var scan *changesScanner
+		var ui *uiRenderer
 		if s.Name == StepApply || s.Name == StepDestroy {
 			// The output still streams to the log; the scanner only keeps
 			// the summary line's counts.
 			scan = &changesScanner{}
 			stdout = io.MultiWriter(o.Stdout, scan)
+			// -json output is rendered back to readable log lines (the
+			// scanner sees those) and its error diagnostics kept.
+			// Both pipes of the step write the error stream: serialize.
+			stderr = &syncWriter{w: o.Stderr}
+			ui = newUIRenderer(stdout, stderr, o.red)
+			stdout = ui
 		}
-		res := Exec(ctx, o.Bin, s, prep.Env, prep.RootDir, stdout, o.Stderr, o.StopTimeout)
+		res := Exec(ctx, o.Bin, s, prep.Env, prep.RootDir, stdout, stderr, o.StopTimeout)
+		var diags []Diagnostic
+		if ui != nil {
+			ui.Flush()
+			diags = ui.Diagnostics()
+		}
 		logger.Info("Step finished", "step", s.Name, "exit", res.Exit, "seconds", res.Seconds)
 		r.Steps = append(r.Steps, Step{Name: s.Name, Exit: res.Exit, Seconds: round(res.Seconds)})
 		if scan != nil {
@@ -206,6 +219,9 @@ func run(ctx context.Context, o Options) (Result, int) {
 				fallback = fmt.Sprintf("step %s exited %d: %s", s.Name, res.Exit, res.Err.Error())
 			}
 			summary := FailureSummary(o.red, s.Name, res.Stdout, res.Tail, fallback)
+			if len(diags) > 0 {
+				summary = strutil.Truncate(o.red.Redact(strings.Join(errorLines(diags), "\n")), MaxSummary)
+			}
 			kind := ErrorKindStep
 			if ctx.Err() != nil {
 				// Terraform/OpenTofu catch SIGTERM and exit non-zero on their
@@ -217,7 +233,9 @@ func run(ctx context.Context, o Options) (Result, int) {
 			// The step's own code is in r.Steps; the process reports a
 			// failure. Passing a runtime's code through would make a
 			// Terraform panic (exit 2) look like ExitUsage.
-			return o.fail(r, kind, s.Name, summary), ExitFailure
+			r = o.fail(r, kind, s.Name, summary)
+			r.Error.Resources = failedResources(o.red, diags)
+			return r, ExitFailure
 		}
 		if s.Name == StepShowJSON {
 			// A plan that does not parse fails the step: one StepFailed, not

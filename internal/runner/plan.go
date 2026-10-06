@@ -136,6 +136,10 @@ func (o PlanOptions) lockTimeout() string {
 // "Backend initialization required", while init against existing state
 // succeeds with the lock held.
 //
+// The apply and destroy steps run with -json: their diagnostics name the
+// failing resource, which Run reads (diagnostics.go) and renders back to
+// readable log lines.
+//
 // The show-json step (drift, plan, and a guarded or approved apply) only
 // runs when the plan exits 2; Run decides that. A guarded or approved apply
 // whose plan exits 0 (no changes) also skips its apply step: Run ends the
@@ -168,17 +172,17 @@ func Steps(op string, o PlanOptions) ([]Invocation, error) {
 			Invocation{Name: StepValidate, Args: []string{"validate", "-json", "-no-color"}, Capture: true, LogCapture: true},
 			Invocation{Name: StepPlan, Args: append(append([]string{"plan"}, common...), "-detailed-exitcode", varFile, "-out="+planOut), OK: []int{0, 2}},
 			Invocation{Name: StepShowJSON, Args: []string{"show", "-json", "-no-color", planOut}, Capture: true},
-			Invocation{Name: StepApply, Args: append(append([]string{"apply"}, common...), planOut)},
+			Invocation{Name: StepApply, Args: append(append([]string{"apply"}, common...), "-json", planOut)},
 		), nil
 	}
 	switch op {
 	case OpApply:
 		steps = append(steps,
 			Invocation{Name: StepValidate, Args: []string{"validate", "-json", "-no-color"}, Capture: true, LogCapture: true},
-			Invocation{Name: StepApply, Args: append(append([]string{"apply"}, common...), "-auto-approve", varFile)},
+			Invocation{Name: StepApply, Args: append(append([]string{"apply"}, common...), "-json", "-auto-approve", varFile)},
 		)
 	case OpDestroy:
-		steps = append(steps, Invocation{Name: StepDestroy, Args: append(append([]string{"destroy"}, common...), "-auto-approve", varFile)})
+		steps = append(steps, Invocation{Name: StepDestroy, Args: append(append([]string{"destroy"}, common...), "-json", "-auto-approve", varFile)})
 	case OpRefresh:
 		steps = append(steps, applyRefreshOnly)
 	case OpDrift:

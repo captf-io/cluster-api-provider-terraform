@@ -110,6 +110,29 @@ func TestApplyDestroyCondition(t *testing.T) {
 	}
 }
 
+// TestFailedResourcesReported proves a failed apply's resources reach
+// status.lastRun.error (capped) and its condition message names the first.
+func TestFailedResourcesReported(t *testing.T) {
+	t.Parallel()
+	step := "apply"
+	long := strings.Repeat("x", MaxRunResourceBytes+10)
+	res := []string{"aws_instance.web: InvalidAMI", long}
+	for range MaxRunResources {
+		res = append(res, "a.b: c")
+	}
+	f := finished{job: ptr(job("j", jobs.OpApply, jobs.Failed, t0)), result: &jobs.Result{Error: &runner.Error{Kind: "step", Step: &step, Resources: res}}}
+	c := applyDestroyCondition(f, machine())
+	if want := "Job j: step apply failed: aws_instance.web: InvalidAMI"; c.Message != want {
+		t.Errorf("message = %q, want %q", c.Message, want)
+	}
+	m := machine()
+	setLastRun((&fakeKind{obj: m}).Status(), f)
+	got := m.Status.LastRun.Error.Resources
+	if len(got) != MaxRunResources || got[0] != res[0] || len(got[1]) != MaxRunResourceBytes {
+		t.Errorf("resources = %d items, first %q", len(got), got[0])
+	}
+}
+
 // ptr returns a pointer to v.
 func ptr[T any](v T) *T { return &v }
 

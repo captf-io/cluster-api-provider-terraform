@@ -722,7 +722,7 @@ func TestSteps(t *testing.T) {
 	}
 	apply, _ := Steps(OpApply, PlanOptions{LockTimeout: time.Minute})
 	if !slices.Equal(apply[1].Args, []string{"validate", "-json", "-no-color"}) ||
-		!slices.Equal(apply[2].Args, []string{"apply", "-input=false", "-no-color", "-lock-timeout=60s", "-auto-approve", "-var-file=terraform.tfvars.json"}) {
+		!slices.Equal(apply[2].Args, []string{"apply", "-input=false", "-no-color", "-lock-timeout=60s", "-json", "-auto-approve", "-var-file=terraform.tfvars.json"}) {
 		t.Errorf("apply = %v", apply)
 	}
 	guarded, _ := Steps(OpApply, PlanOptions{LockTimeout: time.Minute, WorkDir: "/captf/work", GuardDeletes: true})
@@ -731,7 +731,7 @@ func TestSteps(t *testing.T) {
 		{"validate", "-json", "-no-color"},
 		{"plan", "-input=false", "-no-color", "-lock-timeout=60s", "-detailed-exitcode", "-var-file=terraform.tfvars.json", "-out=/captf/work/apply.tfplan"},
 		{"show", "-json", "-no-color", "/captf/work/apply.tfplan"},
-		{"apply", "-input=false", "-no-color", "-lock-timeout=60s", "/captf/work/apply.tfplan"},
+		{"apply", "-input=false", "-no-color", "-lock-timeout=60s", "-json", "/captf/work/apply.tfplan"},
 	}
 	if len(guarded) != len(wantGuarded) || !guarded[3].Capture || guarded[3].LogCapture {
 		t.Fatalf("guarded apply = %+v", guarded)
