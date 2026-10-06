@@ -133,8 +133,8 @@ func TestScript(t *testing.T) {
 	got := Script(&State{Cluster: "captf-test-dev", Kubeconfig: "/a b/it's/kubeconfig"})
 	for _, want := range []string{
 		`export KUBECONFIG='/a b/it'\''s/kubeconfig'`,
-		"export TERRAFORM_CLUSTER_IMAGE='ghcr.io/captf-io/noop-cluster:edge-terraform@sha256:",
-		"export TERRAFORM_MACHINE_IMAGE='ghcr.io/captf-io/noop-machine:edge-terraform@sha256:",
+		"export TERRAFORM_CLUSTER_IMAGE='ghcr.io/captf-io/module-images/noop-cluster:" + framework.NoopVersion + "-terraform@sha256:",
+		"export TERRAFORM_MACHINE_IMAGE='ghcr.io/captf-io/module-images/noop-machine:" + framework.NoopVersion + "-terraform@sha256:",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("env.sh lacks %q:\n%s", want, got)

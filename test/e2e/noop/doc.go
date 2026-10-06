@@ -18,7 +18,7 @@ limitations under the License.
 
 // Package noop is the e2e noop data-flow suite: one ordered test,
 // TestNoop, that drives the published noop modules
-// (ghcr.io/captf-io/noop-{cluster,machine,machinepool}) through real
+// (ghcr.io/captf-io/module-images/noop-{cluster,machine,machinepool}) through real
 // Cluster API objects on the green-lit e2e cluster and proves, with no
 // cloud, that data flows end to end: the CAPI spec into the module
 // inputs, the module outputs into CAPTF status and on into CAPI, the

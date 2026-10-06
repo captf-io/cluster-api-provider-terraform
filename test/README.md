@@ -108,7 +108,7 @@ Every version, download and image is pinned in
 - kind v0.33.0 and its node image for Kubernetes v1.36.4, by digest;
 - the cluster-api v1.14.2 release assets, by sha256;
 - the cert-manager v1.21.1 manifest, by sha256;
-- the six published noop module images (`ghcr.io/captf-io/noop-{cluster,machine,machinepool}`
+- the six published noop module images (`ghcr.io/captf-io/module-images/noop-{cluster,machine,machinepool}`
   for Terraform and OpenTofu), by index digest.
 
 To bump a pin, follow the procedure in the comment at the top of
@@ -345,7 +345,7 @@ hashed past 57 characters.
 
 **Runtimes and images.** The cluster and machine A run Terraform; machine
 B and the pool run OpenTofu. Each `spec.source.image` is
-`<repository>:edge-<runtime>@<pinned digest>`, so the expected
+`<repository>:<framework.NoopVersion>-<runtime>@<pinned digest>`, so the expected
 `status.source.imageDigest` and the durable Secret's
 `captf.io/image-digest` are exactly `framework.NoopImage.Pinned()`
 (`<repository>@<digest>`). Every Terraform* object sets
@@ -442,9 +442,9 @@ stage 3 failed after 61 s and 71 s in two runs, with:
 ```text
 TerraformMachine mb provisioned: expected apply Job pod captf-m-mb-apply-a1-…
 to run, observed container "source" unable to pull image
-ghcr.io/captf-io/noop-machine:edge-opentofu@sha256:000…000 for 46s:
+ghcr.io/captf-io/module-images/noop-machine:v0.1.0-opentofu@sha256:000…000 for 46s:
 ErrImagePull: rpc error: code = NotFound desc = failed to pull and unpack
-image "ghcr.io/captf-io/noop-machine@sha256:000…000": … not found
+image "ghcr.io/captf-io/module-images/noop-machine@sha256:000…000": … not found
 (the Job's 600s deadline would end it as ImagePullFailed)
 ```
 

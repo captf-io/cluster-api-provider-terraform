@@ -187,8 +187,8 @@ func TestNoopImages(t *testing.T) {
 				t.Errorf("no noop image for %s/%s", role, rt)
 				continue
 			}
-			repo := "ghcr.io/captf-io/noop-" + string(role)
-			if img.Repository != repo || img.Ref != repo+":edge-"+string(rt) {
+			repo := "ghcr.io/captf-io/module-images/noop-" + string(role)
+			if img.Repository != repo || img.Ref != repo+":"+framework.NoopVersion+"-"+string(rt) {
 				t.Errorf("%s/%s: Repository %q Ref %q", role, rt, img.Repository, img.Ref)
 			}
 			if !digest.MatchString(img.Digest) {

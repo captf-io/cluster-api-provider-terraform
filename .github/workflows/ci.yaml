@@ -31,8 +31,9 @@
 # Checks NOT run here, and why:
 #   - docker-build with podman: the manager image is built (and scanned)
 #     with buildx in security.yaml.
-#   - The noop reference modules: they live in the noop-modules repository,
-#     which validates them.
+#   - The noop reference modules: they live in the terraform-noop-<role>
+#     repositories, which validate them; captf-io/module-images builds and
+#     smoke-tests their images.
 #   - e2e and any kind or cluster based tests: need live infrastructure, and
 #     are deferred until the software is near stable.
 #   - release, release-*: publish artifacts; publish.yaml runs them on a

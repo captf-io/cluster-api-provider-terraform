@@ -165,11 +165,11 @@ type NoopRole string
 
 // The three noop module roles, one image repository each.
 const (
-	// RoleCluster is the TerraformCluster module (ghcr.io/captf-io/noop-cluster).
+	// RoleCluster is the TerraformCluster module (ghcr.io/captf-io/module-images/noop-cluster).
 	RoleCluster NoopRole = "cluster"
-	// RoleMachine is the TerraformMachine module (ghcr.io/captf-io/noop-machine).
+	// RoleMachine is the TerraformMachine module (ghcr.io/captf-io/module-images/noop-machine).
 	RoleMachine NoopRole = "machine"
-	// RoleMachinePool is the TerraformMachinePool module (ghcr.io/captf-io/noop-machinepool).
+	// RoleMachinePool is the TerraformMachinePool module (ghcr.io/captf-io/module-images/noop-machinepool).
 	RoleMachinePool NoopRole = "machinepool"
 )
 
@@ -179,11 +179,17 @@ type NoopRuntime string
 
 // The two runtimes, one image tag each.
 const (
-	// RuntimeTerraform is HashiCorp Terraform (tag edge-terraform).
+	// RuntimeTerraform is HashiCorp Terraform (tag <NoopVersion>-terraform).
 	RuntimeTerraform NoopRuntime = "terraform"
-	// RuntimeOpenTofu is OpenTofu (tag edge-opentofu).
+	// RuntimeOpenTofu is OpenTofu (tag <NoopVersion>-opentofu).
 	RuntimeOpenTofu NoopRuntime = "opentofu"
 )
+
+// NoopVersion is the terraform-noop-<role> module release the pinned noop
+// images package. captf-io/module-images tags each image with its module
+// release, <NoopVersion>-<runtime>, so a bump changes this and the six
+// digests together.
+const NoopVersion = "v0.1.0"
 
 // NoopImage is one published noop module image.
 type NoopImage struct {
@@ -191,10 +197,11 @@ type NoopImage struct {
 	Role NoopRole
 	// Runtime is the runtime the image is built for.
 	Runtime NoopRuntime
-	// Repository is the image repository, ghcr.io/captf-io/noop-<role>.
+	// Repository is the image repository, ghcr.io/captf-io/module-images/noop-<role>.
 	Repository string
-	// Ref is the readable tag reference, <Repository>:edge-<runtime>.
-	// Tags move: pull Pinned, then tag the result as Ref.
+	// Ref is the readable tag reference, <Repository>:<NoopVersion>-<runtime>.
+	// Tags move (a base image bump rebuilds them): pull Pinned, then tag the
+	// result as Ref.
 	Ref string
 	// Digest is the multi-arch index digest, "sha256:<64 hex>".
 	Digest string
@@ -210,12 +217,12 @@ func (i NoopImage) Pinned() string {
 // noopImage builds the NoopImage for role and runtime with digest, and
 // returns it with Repository and Ref derived from role and runtime.
 func noopImage(role NoopRole, runtime NoopRuntime, digest string) NoopImage {
-	repo := "ghcr.io/captf-io/noop-" + string(role)
+	repo := "ghcr.io/captf-io/module-images/noop-" + string(role)
 	return NoopImage{
 		Role:       role,
 		Runtime:    runtime,
 		Repository: repo,
-		Ref:        repo + ":edge-" + string(runtime),
+		Ref:        repo + ":" + NoopVersion + "-" + string(runtime),
 		Digest:     digest,
 	}
 }
@@ -224,12 +231,12 @@ func noopImage(role NoopRole, runtime NoopRuntime, digest string) NoopImage {
 // images, every role for each runtime, Terraform first.
 func NoopImages() []NoopImage {
 	return []NoopImage{
-		noopImage(RoleCluster, RuntimeTerraform, "sha256:25663d2744fb10440867592fbad8c3dd360e36ed8ce130a32be737c7c6443454"),
-		noopImage(RoleMachine, RuntimeTerraform, "sha256:29e883366e0a96b3eb861a5c3ea45627df41fa1e0907e1b053181d94f4beb62b"),
-		noopImage(RoleMachinePool, RuntimeTerraform, "sha256:95863e471beafeddea4ced20794fca68316674d340adade6329e484fcae8b6d8"),
-		noopImage(RoleCluster, RuntimeOpenTofu, "sha256:533d4a41e079319899d932fbdbd0bd137a88adc4379a4f88e1afc10f972901b9"),
-		noopImage(RoleMachine, RuntimeOpenTofu, "sha256:426769a12c6e59cd0bdaed212e5245659d05478a05a5c3a660cab13225b81769"),
-		noopImage(RoleMachinePool, RuntimeOpenTofu, "sha256:294d4aeb0e841f170b91b436058faa7302ba7e1b53936fd686544a30ed977db3"),
+		noopImage(RoleCluster, RuntimeTerraform, "sha256:f6f3453a0d4703fa101ee4061dddab048756e5d0f6caaaa9a50ff33f4b991394"),
+		noopImage(RoleMachine, RuntimeTerraform, "sha256:cdc58eaa119c4679cbbc700c764a1f6302a10f164ffaf2991026a5852ac49d94"),
+		noopImage(RoleMachinePool, RuntimeTerraform, "sha256:58324b4c68e311b6313cd245216574db89fc924bf21cbfc762c15986030fe0a9"),
+		noopImage(RoleCluster, RuntimeOpenTofu, "sha256:fb0c29c268a3ae260eee37f3b9435370c5b864e5646c5c9ff0075a3eda840197"),
+		noopImage(RoleMachine, RuntimeOpenTofu, "sha256:d34a3e8df02fc99566b1f8b4fa576f50ef8165edc5c1b7f89e0b792b5343589f"),
+		noopImage(RoleMachinePool, RuntimeOpenTofu, "sha256:cef50e80f78d4258e27e6c7f64e535490dc0acd31356062fcc1d7f63493d80a1"),
 	}
 }
 

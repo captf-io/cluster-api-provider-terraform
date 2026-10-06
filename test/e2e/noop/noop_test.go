@@ -98,7 +98,7 @@ func TestMain(m *testing.M) {
 type image struct {
 	// framework.NoopImage is the pinned image.
 	framework.NoopImage
-	// ref is spec.source.image: <repo>:edge-<runtime>@<digest>.
+	// ref is spec.source.image: <repo>:<NoopVersion>-<runtime>@<digest>.
 	ref string
 }
 
@@ -241,7 +241,7 @@ func (s *suite) requireGreenLight(t *testing.T) {
 }
 
 // noopImage returns the pinned noop image for role and runtime, referenced
-// as <repo>:edge-<runtime>@<digest>; with bad the digest is badDigest
+// as <repo>:<NoopVersion>-<runtime>@<digest>; with bad the digest is badDigest
 // (the negative check), and so is the expected pin. It fails t when no
 // image is pinned for the pair.
 func noopImage(t *testing.T, role framework.NoopRole, runtime framework.NoopRuntime, bad bool) image {
