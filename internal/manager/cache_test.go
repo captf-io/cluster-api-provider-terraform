@@ -25,6 +25,7 @@ import (
 	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
@@ -34,7 +35,7 @@ import (
 
 // TestCacheOptions proves CacheOptions scopes DefaultNamespaces to the
 // given namespace (or leaves it nil for every namespace) and applies the
-// Secret and Job label selectors.
+// Secret and Job label selectors, and strips the data of cached Secrets.
 func TestCacheOptions(t *testing.T) {
 	t.Parallel()
 	scoped := CacheOptions("tenant-a")
@@ -50,6 +51,24 @@ func TestCacheOptions(t *testing.T) {
 		switch obj.(type) {
 		case *corev1.Secret:
 			selectors["secret"] = by.Label
+			// The managed Secrets hold state chunks, backups and inputs;
+			// the informer must keep only their metadata.
+			if by.Transform == nil {
+				t.Error("managed Secret informer has no Transform: it would hold every payload")
+				break
+			}
+			got, err := by.Transform(&corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: "s", Labels: map[string]string{"captf.io/managed": "true"}},
+				Data:       map[string][]byte{"state": []byte("payload")},
+				StringData: map[string]string{"k": "v"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			sec := got.(*corev1.Secret)
+			if sec.Data != nil || sec.StringData != nil || sec.Name != "s" || sec.Labels["captf.io/managed"] != "true" {
+				t.Errorf("Secret Transform = %+v, want data stripped and metadata kept", sec)
+			}
 		case *batchv1.Job:
 			selectors["job"] = by.Label
 		default:

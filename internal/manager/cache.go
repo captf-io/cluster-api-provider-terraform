@@ -55,7 +55,11 @@ const (
 //   - ns restricts every informer to one namespace; empty watches all;
 //   - Secrets are cached only with captf.io/managed=true (state, inputs,
 //     credential mirrors), so not every Secret of the cluster is held in
-//     memory;
+//     memory, and with their data stripped (StripData): the Secret watches
+//     use only the name, namespace, labels and annotations, and every Get
+//     or List of a Secret goes to the API server (UncachedObjects), so the
+//     state chunks, backups and inputs payloads are never held by the
+//     informer;
 //   - Jobs are cached only with the owner-kind label and captf.io/managed=true
 //     that every CAPTF Job carries, so a Job anyone else creates in a watched
 //     namespace is never held or counted.
@@ -70,7 +74,7 @@ func CacheOptions(ns string) ctrlcache.Options {
 	return ctrlcache.Options{
 		DefaultNamespaces: namespaces,
 		ByObject: map[client.Object]ctrlcache.ByObject{
-			&corev1.Secret{}: {Label: labels.SelectorFromSet(labels.Set{ManagedSecretLabel: "true"})},
+			&corev1.Secret{}: {Label: labels.SelectorFromSet(labels.Set{ManagedSecretLabel: "true"}), Transform: StripData},
 			&batchv1.Job{}:   {Label: jobSelector()},
 		},
 	}
@@ -105,9 +109,9 @@ func VariablesCacheOptions(ns string, scheme *runtime.Scheme, mapper meta.RESTMa
 	}
 }
 
-// StripData drops the data of obj before the variables cache stores it, when
-// obj is a *corev1.Secret or *corev1.ConfigMap; the watches need only the
-// name and namespace. It returns obj unchanged, mutated in place, and a nil
+// StripData drops the data of obj before a cache stores it, when obj is a
+// *corev1.Secret or *corev1.ConfigMap; both caches' watches need only the
+// object's metadata (name, namespace, labels, annotations). It returns obj unchanged, mutated in place, and a nil
 // error: it implements the ctrlcache.TransformFunc signature, which never
 // fails for this transform.
 func StripData(obj any) (any, error) {
