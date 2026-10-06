@@ -415,7 +415,7 @@ func TestResolveMachine(t *testing.T) {
 				ImagePullSecrets:   []corev1.LocalObjectReference{{Name: "regcred"}},
 				Resources:          &corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("2Gi")}},
 			},
-			Drift: &infrav1.MachineDriftPolicy{IntervalSeconds: new(int32(60))},
+			Drift: &infrav1.DriftPolicy{IntervalSeconds: new(int32(60))},
 		},
 	}}
 
@@ -476,7 +476,7 @@ func TestResolvePool(t *testing.T) {
 			Defaults: &infrav1.TerraformClusterDefaults{
 				IdentityRef: infrav1.IdentityReference{Name: "from-defaults"},
 				Jobs:        &infrav1.JobPolicy{ServiceAccountName: "deployer"},
-				Drift:       &infrav1.MachineDriftPolicy{IntervalSeconds: interval},
+				Drift:       &infrav1.DriftPolicy{IntervalSeconds: interval},
 			},
 		}}
 	}
@@ -537,7 +537,7 @@ func TestResolveCluster(t *testing.T) {
 		Defaults: &infrav1.TerraformClusterDefaults{
 			IdentityRef: infrav1.IdentityReference{Name: "for-machines"},
 			Jobs:        &infrav1.JobPolicy{ServiceAccountName: "machines-sa"},
-			Drift:       &infrav1.MachineDriftPolicy{IntervalSeconds: new(int32(60))},
+			Drift:       &infrav1.DriftPolicy{IntervalSeconds: new(int32(60))},
 		},
 	}}
 	// spec.defaults are for machines only: a cluster without its own jobs
@@ -564,6 +564,98 @@ func TestResolveCluster(t *testing.T) {
 	// No identity of its own: none, not the machines' default.
 	if got := Resolve(SpecView{}, cluster, 0, true).IdentityName; got != "" {
 		t.Errorf("cluster without identityRef resolved %q", got)
+	}
+}
+
+// TestResolveInheritancePrecedence proves the inheritance rule for the
+// operational policy a machine or pool takes from its cluster: its own
+// field wins, then spec.defaults, then the cluster's own field of the same
+// name where it has one, then the built-in default. It covers a pool's
+// drift action and membership refresh interval, and a machine's
+// remediation (its health check interval); a machine never takes a drift
+// action.
+func TestResolveInheritancePrecedence(t *testing.T) {
+	t.Parallel()
+	cluster := func(own, def infrav1.DriftAction, membership int32, rem *infrav1.MachineRemediation) *infrav1.TerraformCluster {
+		tc := &infrav1.TerraformCluster{Spec: infrav1.TerraformClusterSpec{
+			Defaults: &infrav1.TerraformClusterDefaults{MembershipRefreshIntervalSeconds: membership, Remediation: rem},
+		}}
+		if own != "" {
+			tc.Spec.Drift = &infrav1.DriftPolicy{Action: own}
+		}
+		if def != "" {
+			tc.Spec.Defaults.Drift = &infrav1.DriftPolicy{Action: def}
+		}
+		return tc
+	}
+	pool := func(action infrav1.DriftAction, membership time.Duration) SpecView {
+		return SpecView{InheritsDefaults: true, PoolDrift: &infrav1.MachinePoolDriftPolicy{Action: action}, MembershipRefreshInterval: membership}
+	}
+	machine := func(rem *infrav1.MachineRemediation) SpecView {
+		return SpecView{InheritsDefaults: true, Remediation: rem}
+	}
+	on := &infrav1.MachineRemediation{AnnotateMachine: new(true), HealthCheckIntervalSeconds: 120}
+	tests := []struct {
+		name       string
+		spec       SpecView
+		cluster    *infrav1.TerraformCluster
+		mutable    bool
+		action     infrav1.DriftAction
+		membership time.Duration
+		health     time.Duration
+	}{
+		{"pool: own action wins", pool(infrav1.DriftActionReport, 0),
+			cluster(infrav1.DriftActionRemediate, infrav1.DriftActionRemediate, 0, nil), true, infrav1.DriftActionReport, DefaultMembershipRefreshInterval, 0},
+		{"pool: the defaults' action next", pool("", 0),
+			cluster(infrav1.DriftActionReport, infrav1.DriftActionRemediate, 0, nil), true, infrav1.DriftActionRemediate, DefaultMembershipRefreshInterval, 0},
+		{"pool: the cluster's own action next", pool("", 0),
+			cluster(infrav1.DriftActionRemediate, "", 0, nil), true, infrav1.DriftActionRemediate, DefaultMembershipRefreshInterval, 0},
+		{"pool: Report last", pool("", 0), cluster("", "", 0, nil), true, infrav1.DriftActionReport, DefaultMembershipRefreshInterval, 0},
+		{"pool: own membership interval wins", pool("", 20*time.Second), cluster("", "", 90, nil), true, infrav1.DriftActionReport, 20 * time.Second, 0},
+		{"pool: the defaults' membership interval next", pool("", 0), cluster("", "", 90, nil), true, infrav1.DriftActionReport, 90 * time.Second, 0},
+		{"pool: no cluster", pool("", 0), nil, true, infrav1.DriftActionReport, DefaultMembershipRefreshInterval, 0},
+		{"pool: no remediation", pool("", 0), cluster("", "", 0, on), true, infrav1.DriftActionReport, DefaultMembershipRefreshInterval, 0},
+		{"machine: never a drift action, no membership", machine(nil),
+			cluster(infrav1.DriftActionRemediate, infrav1.DriftActionRemediate, 90, nil), false, infrav1.DriftActionReport, 0, 0},
+		{"machine: the defaults' remediation", machine(nil), cluster("", "", 0, on), false, infrav1.DriftActionReport, 0, 2 * time.Minute},
+		{"machine: own interval over the defaults'", machine(&infrav1.MachineRemediation{HealthCheckIntervalSeconds: 600}),
+			cluster("", "", 0, on), false, infrav1.DriftActionReport, 0, 10 * time.Minute},
+		{"machine: own annotateMachine false wins", machine(&infrav1.MachineRemediation{AnnotateMachine: new(false)}),
+			cluster("", "", 0, on), false, infrav1.DriftActionReport, 0, 0},
+		{"machine: the built-in interval", machine(&infrav1.MachineRemediation{AnnotateMachine: new(true)}),
+			cluster("", "", 0, nil), false, infrav1.DriftActionReport, 0, DefaultHealthCheckInterval},
+		{"cluster: spec.defaults are not its own", SpecView{}, cluster("", infrav1.DriftActionRemediate, 90, on), true,
+			infrav1.DriftActionReport, 0, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			e := Resolve(tt.spec, tt.cluster, 30*time.Minute, tt.mutable)
+			if e.DriftAction != tt.action || e.MembershipRefreshInterval != tt.membership || e.HealthCheckInterval != tt.health {
+				t.Errorf("action %s, membership %s, health %s; want %s, %s, %s",
+					e.DriftAction, e.MembershipRefreshInterval, e.HealthCheckInterval, tt.action, tt.membership, tt.health)
+			}
+		})
+	}
+}
+
+// TestMergeRemediation proves MergeRemediation takes each field own sets
+// and the defaults' otherwise, keeps own's explicit annotateMachine false,
+// and returns a value that shares no memory with either input.
+func TestMergeRemediation(t *testing.T) {
+	t.Parallel()
+	d := &infrav1.MachineRemediation{AnnotateMachine: new(true), UnhealthyThreshold: 5, HealthCheckIntervalSeconds: 600}
+	if got := MergeRemediation(nil, nil); !reflect.DeepEqual(got, infrav1.MachineRemediation{}) {
+		t.Errorf("nil, nil = %+v", got)
+	}
+	got := MergeRemediation(&infrav1.MachineRemediation{AnnotateMachine: new(false), UnhealthyThreshold: 2}, d)
+	if *got.AnnotateMachine || got.UnhealthyThreshold != 2 || got.HealthCheckIntervalSeconds != 600 {
+		t.Errorf("merged = %+v", got)
+	}
+	got = MergeRemediation(nil, d)
+	*got.AnnotateMachine = false
+	if !*d.AnnotateMachine {
+		t.Error("MergeRemediation aliases its input")
 	}
 }
 
@@ -666,7 +758,7 @@ func TestMergeJobPolicy(t *testing.T) {
 // returns a value that shares no memory with its default input.
 func TestMergeMachineDriftPolicy(t *testing.T) {
 	t.Parallel()
-	d := &infrav1.MachineDriftPolicy{IntervalSeconds: new(int32(60))}
+	d := &infrav1.DriftPolicy{IntervalSeconds: new(int32(60))}
 	if got := MergeMachineDriftPolicy(nil, nil); got.IntervalSeconds != nil {
 		t.Errorf("nil, nil = %+v", got)
 	}

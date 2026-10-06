@@ -44,7 +44,8 @@ type TerraformMachineSpec struct {
 	Drift *MachineDriftPolicy `json:"drift,omitempty"`
 
 	// remediation configures how an unhealthy instance is signalled to
-	// Cluster API beyond the Ready condition.
+	// Cluster API beyond the Ready condition. It is merged field by field
+	// over the cluster's defaults.remediation.
 	// +optional
 	Remediation *MachineRemediation `json:"remediation,omitempty"`
 }

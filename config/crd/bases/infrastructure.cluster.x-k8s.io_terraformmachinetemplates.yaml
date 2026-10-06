@@ -860,7 +860,8 @@ spec:
                       remediation:
                         description: |-
                           remediation configures how an unhealthy instance is signalled to
-                          Cluster API beyond the Ready condition.
+                          Cluster API beyond the Ready condition. It is merged field by field
+                          over the cluster's defaults.remediation.
                         properties:
                           annotateMachine:
                             description: |-

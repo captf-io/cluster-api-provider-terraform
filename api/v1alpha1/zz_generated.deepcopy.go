@@ -609,7 +609,12 @@ func (in *TerraformClusterDefaults) DeepCopyInto(out *TerraformClusterDefaults) 
 	}
 	if in.Drift != nil {
 		in, out := &in.Drift, &out.Drift
-		*out = new(MachineDriftPolicy)
+		*out = new(DriftPolicy)
+		(*in).DeepCopyInto(*out)
+	}
+	if in.Remediation != nil {
+		in, out := &in.Remediation, &out.Remediation
+		*out = new(MachineRemediation)
 		(*in).DeepCopyInto(*out)
 	}
 }

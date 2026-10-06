@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
+	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/state"
 )
 
@@ -59,6 +60,30 @@ func ClusterNetworkChanged() predicate.Funcs {
 			return ok1 && ok2 && !equality.Semantic.DeepEqual(o.Spec.ClusterNetwork, n.Spec.ClusterNetwork)
 		},
 	}
+}
+
+// InheritedPolicyChanged passes TerraformCluster updates that change what
+// its machines and pools inherit from it (Resolve): spec.defaults, or the
+// cluster's own identityRef or drift policy, which they fall back to. It
+// returns the predicate to register on a watch, with
+// TerraformClusterToObjects.
+func InheritedPolicyChanged() predicate.Funcs {
+	return predicate.Funcs{
+		CreateFunc:  func(event.CreateEvent) bool { return false },
+		DeleteFunc:  func(event.DeleteEvent) bool { return false },
+		GenericFunc: func(event.GenericEvent) bool { return false },
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			o, ok1 := e.ObjectOld.(*infrav1.TerraformCluster)
+			n, ok2 := e.ObjectNew.(*infrav1.TerraformCluster)
+			return ok1 && ok2 && !equality.Semantic.DeepEqual(inheritedPolicy(o), inheritedPolicy(n))
+		},
+	}
+}
+
+// inheritedPolicy returns the part of tc's spec its machines and pools
+// inherit (Resolve), for InheritedPolicyChanged to compare.
+func inheritedPolicy(tc *infrav1.TerraformCluster) []any {
+	return []any{tc.Spec.Defaults, tc.Spec.IdentityRef, tc.Spec.Drift}
 }
 
 // ManagedSecret passes Secrets labeled captf.io/managed=true: state, durable

@@ -300,6 +300,24 @@ func MachineToClusters(c client.Reader) handler.MapFunc {
 	}
 }
 
+// TerraformClusterToObjects maps a TerraformCluster to every object of
+// newList's kind (TerraformMachines or TerraformMachinePools) of its
+// cluster, by the cluster-name label, in its namespace: they inherit its
+// spec.defaults and some of its own policy (Resolve), so a change there
+// applies to them promptly, not at their next requeue. A TerraformCluster
+// without the label maps to nothing. It lists through the reader c and
+// returns the MapFunc to register as a watch handler, with
+// InheritedPolicyChanged.
+func TerraformClusterToObjects(c client.Reader, newList func() client.ObjectList) handler.MapFunc {
+	return func(ctx context.Context, o client.Object) []reconcile.Request {
+		cluster := o.GetLabels()[clusterv1.ClusterNameLabel]
+		if cluster == "" {
+			return nil
+		}
+		return list(ctx, c, newList(), client.InNamespace(o.GetNamespace()), client.MatchingLabels{clusterv1.ClusterNameLabel: cluster})
+	}
+}
+
 // Merge combines mappers, dropping duplicate requests. It returns the
 // combined MapFunc.
 func Merge(mappers ...handler.MapFunc) handler.MapFunc {

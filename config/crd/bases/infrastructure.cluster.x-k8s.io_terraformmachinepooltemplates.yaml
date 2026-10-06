@@ -91,8 +91,10 @@ spec:
                     properties:
                       drift:
                         description: |-
-                          drift is merged field by field over the cluster's defaults.drift.
-                          Unlike a machine's, a pool's drift may be remediated.
+                          drift is merged field by field over the cluster's defaults.drift;
+                          an unset action then falls back to the cluster's own
+                          spec.drift.action. Unlike a machine's, a pool's drift may be
+                          remediated.
                         properties:
                           action:
                             description: |-
@@ -868,7 +870,8 @@ spec:
                           `apply -refresh-only` to pick up group membership changes (new or
                           departed instances) between applies, in seconds
                           (https://captf.io/docs/module-author/contract/v1alpha1/machinepool.html "Membership refresh"). 0 (unset)
-                          means 60, applied at reconcile; the CRD schema's minimum of 15 makes 0
+                          means the cluster's defaults.membershipRefreshIntervalSeconds, else
+                          60, applied at reconcile; the CRD schema's minimum of 15 makes 0
                           itself an invalid setting, so it unambiguously means unset, the same
                           convention as activeDeadlineSeconds and unhealthyThreshold
                           (kube-api-linter optionalfields: WhenRequired).

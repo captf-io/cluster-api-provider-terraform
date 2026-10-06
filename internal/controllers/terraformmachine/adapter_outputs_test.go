@@ -100,7 +100,7 @@ func TestApplyOutputsProviderIDDebounce(t *testing.T) {
 	if h.State != contract.HealthProviderIDMissing || h.Message == nil || !strings.Contains(*h.Message, "next sample") {
 		t.Fatalf("first missing sample: %+v", h)
 	}
-	if RemediationReason(remediating(a.obj)) != "" {
+	if RemediationReason(remediating(a.obj), nil) != "" {
 		t.Error("the first missing sample asked for remediation")
 	}
 	if h := apply(missing); h.State != contract.HealthProviderIDMissing {

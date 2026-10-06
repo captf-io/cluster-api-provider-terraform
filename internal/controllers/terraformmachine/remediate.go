@@ -43,13 +43,19 @@ const (
 // RemediationReason says why tm's owner Machine should be remediated, or
 // "": only with remediation.annotateMachine, only after provisioning, and
 // only for a terminated instance (one sample) or unhealthyThreshold
-// consecutive unhealthy, degraded or stopped samples. One transient
-// reading must never set it: once MachineHealthCheck acts on the
-// annotation, the Machine is replaced. It returns that reason, or "" when
-// none applies.
-func RemediationReason(tm *infrav1.TerraformMachine) string {
-	r := tm.Spec.Remediation
-	if r == nil || r.AnnotateMachine == nil || !*r.AnnotateMachine {
+// consecutive unhealthy, degraded or stopped samples. The remediation
+// policy is tm's own merged over cluster's defaults.remediation
+// (shared.MergeRemediation); cluster is tm's TerraformCluster, nil when
+// not known. One transient reading must never set it: once
+// MachineHealthCheck acts on the annotation, the Machine is replaced. It
+// returns that reason, or "" when none applies.
+func RemediationReason(tm *infrav1.TerraformMachine, cluster *infrav1.TerraformCluster) string {
+	var defaults *infrav1.MachineRemediation
+	if cluster != nil && cluster.Spec.Defaults != nil {
+		defaults = cluster.Spec.Defaults.Remediation
+	}
+	r := shared.MergeRemediation(tm.Spec.Remediation, defaults)
+	if r.AnnotateMachine == nil || !*r.AnnotateMachine {
 		return ""
 	}
 	if p := tm.Status.Initialization.Provisioned; p == nil || !*p || !tm.DeletionTimestamp.IsZero() {
@@ -86,18 +92,19 @@ func Recovered(tm *infrav1.TerraformMachine) bool {
 // SyncRemediation keeps cluster.x-k8s.io/remediate-machine on machine in
 // line with tm's instance health, patching through d's client using ctx.
 // It sets the annotation, with RequestedByAnnotation, when
-// RemediationReason says so, and is a no-op when the annotation is already
+// RemediationReason (with cluster, tm's TerraformCluster, nil when not
+// known) says so, and is a no-op when the annotation is already
 // there. It removes both again once the instance is Healthy (Recovered)
 // and the Machine is not being deleted, so a blip that recovered does not
 // get the Machine replaced the next time a MachineHealthCheck looks; an
 // annotation someone else set is never removed. A nil machine is ignored.
 // It returns an error only from a failed patch.
-func SyncRemediation(ctx context.Context, d shared.Deps, machine *clusterv1.Machine, tm *infrav1.TerraformMachine) error {
+func SyncRemediation(ctx context.Context, d shared.Deps, machine *clusterv1.Machine, tm *infrav1.TerraformMachine, cluster *infrav1.TerraformCluster) error {
 	if machine == nil {
 		return nil
 	}
 	_, annotated := machine.Annotations[clusterv1.RemediateMachineAnnotation]
-	reason := RemediationReason(tm)
+	reason := RemediationReason(tm, cluster)
 	switch {
 	case reason != "" && !annotated:
 		return patchRemediation(ctx, d, machine, tm, reason)

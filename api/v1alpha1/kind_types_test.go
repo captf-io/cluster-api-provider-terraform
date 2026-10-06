@@ -183,9 +183,11 @@ func TestKindsJSONRoundTrip(t *testing.T) {
 					},
 					Drift: fullDrift(),
 					Defaults: &TerraformClusterDefaults{
-						IdentityRef: IdentityReference{Name: "aws"},
-						Jobs:        fullJobs(),
-						Drift:       fullMachineDrift(),
+						IdentityRef:                      IdentityReference{Name: "aws"},
+						Jobs:                             fullJobs(),
+						Drift:                            fullDrift(),
+						Remediation:                      &MachineRemediation{AnnotateMachine: ptr(true), UnhealthyThreshold: 3, HealthCheckIntervalSeconds: 600},
+						MembershipRefreshIntervalSeconds: 30,
 					},
 				},
 				Status: TerraformClusterStatus{

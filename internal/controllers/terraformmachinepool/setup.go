@@ -62,8 +62,8 @@ func SecretToPools(c client.Reader) handler.MapFunc {
 
 // SetupWithManager registers the controller with mgr and its watches,
 // using ctx to build them and applying opts to the underlying controller.
-// The watch-filter predicate is only on For and the MachinePool and
-// Cluster watches. A controller write to the pool (spec.providerIDList,
+// The watch-filter predicate is only on For and the MachinePool, Cluster
+// and TerraformCluster watches. A controller write to the pool (spec.providerIDList,
 // status) re-triggers a reconcile but no apply: inputs are compared by
 // hash, and they hold none of the mapped outputs. The bootstrap data
 // Secret is deliberately not watched yet (it is not captf.io/managed, so
@@ -87,6 +87,9 @@ func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, opt
 			filter).
 		Watches(&clusterv1.Cluster{}, handler.EnqueueRequestsFromMapFunc(clusterToPools),
 			predicates.ClusterPausedTransitionsOrInfrastructureProvisioned(scheme, logger), filter).
+		Watches(&infrav1.TerraformCluster{},
+			handler.EnqueueRequestsFromMapFunc(shared.TerraformClusterToObjects(c, func() client.ObjectList { return &infrav1.TerraformMachinePoolList{} })),
+			shared.InheritedPolicyChanged(), filter).
 		Owns(&batchv1.Job{}).
 		// An approval is a spec change; the controller's own phase labels
 		// and status writes are not.

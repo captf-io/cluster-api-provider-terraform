@@ -104,7 +104,11 @@ type TerraformClusterSpec struct {
 
 // TerraformClusterDefaults are values the TerraformMachines and
 // TerraformMachinePools of a cluster inherit when they do not set them.
-// There is no source: every role names its own image.
+// Operational policy inherits in this order: the machine's or pool's own
+// field, then spec.defaults, then the TerraformCluster's own field of the
+// same name where it has one (identityRef, drift.action), then the
+// built-in default. Module inputs (source, variables, variablesFrom) are
+// never inherited: every role names its own image.
 type TerraformClusterDefaults struct {
 	// identityRef is used by machines and pools without their own
 	// identityRef. When unset, such machines and pools use
@@ -120,9 +124,24 @@ type TerraformClusterDefaults struct {
 	// drift is merged field by field under each machine's or pool's drift
 	// policy. A pool's drift is never fully disabled: an inherited
 	// intervalSeconds of 0 disables a machine's drift checks but not a
-	// pool's, which then uses the controller's default interval.
+	// pool's, which then uses the controller's default interval. action is
+	// inherited by pools only, before the cluster's own spec.drift.action:
+	// a machine's drift is always reported, never remediated.
 	// +optional
-	Drift *MachineDriftPolicy `json:"drift,omitempty"`
+	Drift *DriftPolicy `json:"drift,omitempty"`
+
+	// remediation is merged field by field under each machine's
+	// remediation policy. Pools have none.
+	// +optional
+	Remediation *MachineRemediation `json:"remediation,omitempty"`
+
+	// membershipRefreshIntervalSeconds is the membership refresh interval
+	// of each pool that does not set its own, in seconds. 0 (unset) means
+	// 60, applied at reconcile. Machines have none.
+	// +optional
+	// +kubebuilder:validation:Minimum=15
+	// +kubebuilder:validation:Maximum=86400
+	MembershipRefreshIntervalSeconds int32 `json:"membershipRefreshIntervalSeconds,omitempty"`
 }
 
 // TerraformClusterStatus is the observed state of a TerraformCluster. Nothing

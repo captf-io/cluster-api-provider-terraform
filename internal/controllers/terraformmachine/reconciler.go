@@ -68,7 +68,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 	// After the shared flow, which has read the health and counted the
 	// sample, the remediation annotation follows the health.
-	if err := SyncRemediation(ctx, r.Deps, owner.Machine, tm); err != nil {
+	if err := SyncRemediation(ctx, r.Deps, owner.Machine, tm, owner.InfraCluster); err != nil {
 		return ctrl.Result{}, err
 	}
 	return res, nil

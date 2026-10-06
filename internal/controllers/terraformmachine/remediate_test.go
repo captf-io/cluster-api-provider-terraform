@@ -136,7 +136,39 @@ func TestRemediationReason(t *testing.T) {
 			tm.Spec.Remediation.UnhealthyThreshold = 1
 		}), true},
 	} {
-		if got := RemediationReason(tt.tm) != ""; got != tt.want {
+		if got := RemediationReason(tt.tm, nil) != ""; got != tt.want {
+			t.Errorf("%s: annotate = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
+// TestRemediationReasonInherits proves RemediationReason merges the
+// machine's own remediation over the cluster's defaults.remediation field
+// by field: the defaults opt a machine in, its own annotateMachine false
+// opts it out again, and an unset threshold comes from the defaults.
+func TestRemediationReasonInherits(t *testing.T) {
+	t.Parallel()
+	cluster := &infrav1.TerraformCluster{Spec: infrav1.TerraformClusterSpec{Defaults: &infrav1.TerraformClusterDefaults{
+		Remediation: &infrav1.MachineRemediation{AnnotateMachine: new(true), UnhealthyThreshold: 5},
+	}}}
+	for _, tt := range []struct {
+		name    string
+		tm      *infrav1.TerraformMachine
+		cluster *infrav1.TerraformCluster
+		want    bool
+	}{
+		{"opted in by the defaults", unhealthy(infrav1.InstanceTerminatedReason, 0, func(tm *infrav1.TerraformMachine) { tm.Spec.Remediation = nil }), cluster, true},
+		{"own false wins over the defaults", unhealthy(infrav1.InstanceTerminatedReason, 0, func(tm *infrav1.TerraformMachine) {
+			tm.Spec.Remediation = &infrav1.MachineRemediation{AnnotateMachine: new(false)}
+		}), cluster, false},
+		{"the defaults' threshold applies", unhealthy(infrav1.InstanceDegradedReason, 4, func(tm *infrav1.TerraformMachine) { tm.Spec.Remediation = nil }), cluster, false},
+		{"the defaults' threshold is reached", unhealthy(infrav1.InstanceDegradedReason, 5, func(tm *infrav1.TerraformMachine) { tm.Spec.Remediation = nil }), cluster, true},
+		{"own threshold wins", unhealthy(infrav1.InstanceDegradedReason, 2, func(tm *infrav1.TerraformMachine) {
+			tm.Spec.Remediation = &infrav1.MachineRemediation{UnhealthyThreshold: 2}
+		}), cluster, true},
+		{"no defaults: opted out", unhealthy(infrav1.InstanceTerminatedReason, 0, func(tm *infrav1.TerraformMachine) { tm.Spec.Remediation = nil }), &infrav1.TerraformCluster{}, false},
+	} {
+		if got := RemediationReason(tt.tm, tt.cluster) != ""; got != tt.want {
 			t.Errorf("%s: annotate = %v, want %v", tt.name, got, tt.want)
 		}
 	}
@@ -168,7 +200,7 @@ func TestSyncRemediation(t *testing.T) {
 
 	cached := machine.DeepCopy()
 	for range 2 { // the second call finds the annotation and does nothing
-		if err := SyncRemediation(t.Context(), d, cached, tm); err != nil {
+		if err := SyncRemediation(t.Context(), d, cached, tm, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -184,10 +216,10 @@ func TestSyncRemediation(t *testing.T) {
 	}
 
 	// Nothing to do: no Machine, or a healthy machine.
-	if err := SyncRemediation(t.Context(), d, nil, tm); err != nil {
+	if err := SyncRemediation(t.Context(), d, nil, tm, nil); err != nil {
 		t.Error(err)
 	}
-	if err := SyncRemediation(t.Context(), d, machine.DeepCopy(), unhealthy(infrav1.HealthyReason, 0)); err != nil || len(rec.reasons) != 1 {
+	if err := SyncRemediation(t.Context(), d, machine.DeepCopy(), unhealthy(infrav1.HealthyReason, 0), nil); err != nil || len(rec.reasons) != 1 {
 		t.Errorf("healthy: %v, events %v", err, rec.reasons)
 	}
 }
@@ -204,7 +236,7 @@ func TestMaybeAnnotateError(t *testing.T) {
 	}).Build()
 	rec := &recorder{}
 	machine := &clusterv1.Machine{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "m1"}}
-	err := SyncRemediation(t.Context(), shared.Deps{Client: c, Recorder: rec}, machine, unhealthy(infrav1.InstanceTerminatedReason, 0))
+	err := SyncRemediation(t.Context(), shared.Deps{Client: c, Recorder: rec}, machine, unhealthy(infrav1.InstanceTerminatedReason, 0), nil)
 	if err == nil {
 		t.Error("MaybeAnnotate swallowed a genuine Patch error")
 	}
@@ -226,7 +258,7 @@ func TestMaybeAnnotateMachineGone(t *testing.T) {
 	rec := &recorder{}
 	m, reg := metricsRecorder(t)
 	machine := &clusterv1.Machine{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "m1"}}
-	if err := SyncRemediation(t.Context(), shared.Deps{Client: c, Recorder: rec, Metrics: m}, machine, unhealthy(infrav1.InstanceTerminatedReason, 0)); err != nil {
+	if err := SyncRemediation(t.Context(), shared.Deps{Client: c, Recorder: rec, Metrics: m}, machine, unhealthy(infrav1.InstanceTerminatedReason, 0), nil); err != nil {
 		t.Errorf("MaybeAnnotate = %v", err)
 	}
 	if len(rec.reasons) != 0 {
@@ -268,7 +300,7 @@ func TestSyncRemediationWithdraws(t *testing.T) {
 			c := fake.NewClientBuilder().WithScheme(scheme(t)).WithObjects(machine.DeepCopy()).Build()
 			rec := &recorder{}
 			m, reg := metricsRecorder(t)
-			if err := SyncRemediation(t.Context(), shared.Deps{Client: c, Recorder: rec, Metrics: m}, machine, tt.tm); err != nil {
+			if err := SyncRemediation(t.Context(), shared.Deps{Client: c, Recorder: rec, Metrics: m}, machine, tt.tm, nil); err != nil {
 				t.Fatal(err)
 			}
 			withdrawn := 0
@@ -320,14 +352,14 @@ func TestForgedOwnerNeverRemediatesVictim(t *testing.T) {
 	if owner.Gate == nil || owner.Gate.Reason != infrav1.OwnerMismatchReason || owner.Machine != nil {
 		t.Fatalf("owner = %+v, want an OwnerMismatch gate and no Machine", owner)
 	}
-	if got := RemediationReason(forged); got == "" {
+	if got := RemediationReason(forged, nil); got == "" {
 		t.Fatal("fixture is not actually reporting a remediation-worthy terminated instance")
 	}
 
 	rec := &recorder{}
 	m, reg := metricsRecorder(t)
 	d := shared.Deps{Client: a.d.Client, Recorder: rec, Metrics: m}
-	if err := SyncRemediation(t.Context(), d, owner.Machine, forged); err != nil {
+	if err := SyncRemediation(t.Context(), d, owner.Machine, forged, nil); err != nil {
 		t.Fatal(err)
 	}
 	checkRemediations(t, reg, 0, 0)

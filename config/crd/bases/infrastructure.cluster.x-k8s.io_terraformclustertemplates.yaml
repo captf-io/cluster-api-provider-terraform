@@ -136,15 +136,25 @@ spec:
                               drift is merged field by field under each machine's or pool's drift
                               policy. A pool's drift is never fully disabled: an inherited
                               intervalSeconds of 0 disables a machine's drift checks but not a
-                              pool's, which then uses the controller's default interval.
+                              pool's, which then uses the controller's default interval. action is
+                              inherited by pools only, before the cluster's own spec.drift.action:
+                              a machine's drift is always reported, never remediated.
                             properties:
+                              action:
+                                description: |-
+                                  action taken when drift is found: Report or Remediate. Defaults to
+                                  Report, applied at reconcile. Remediate applies the current inputs
+                                  automatically, reverting every out-of-band change.
+                                enum:
+                                - Report
+                                - Remediate
+                                type: string
                               intervalSeconds:
                                 description: |-
                                   intervalSeconds between drift checks, in seconds. Defaults to the
                                   manager's --drift-default-interval (30m), applied at reconcile. 0
-                                  disables drift checks. Unless remediation.annotateMachine is true
-                                  (which refreshes at remediation.healthCheckIntervalSeconds), that also
-                                  stops every health sample after provisioning.
+                                  disables drift checks, and with them every health sample after
+                                  provisioning: health is re-read only by a refresh or drift run.
                                 format: int32
                                 minimum: 0
                                 type: integer
@@ -898,6 +908,54 @@ spec:
                                 format: int32
                                 maximum: 100
                                 minimum: 0
+                                type: integer
+                            type: object
+                          membershipRefreshIntervalSeconds:
+                            description: |-
+                              membershipRefreshIntervalSeconds is the membership refresh interval
+                              of each pool that does not set its own, in seconds. 0 (unset) means
+                              60, applied at reconcile. Machines have none.
+                            format: int32
+                            maximum: 86400
+                            minimum: 15
+                            type: integer
+                          remediation:
+                            description: |-
+                              remediation is merged field by field under each machine's
+                              remediation policy. Pools have none.
+                            properties:
+                              annotateMachine:
+                                description: |-
+                                  annotateMachine sets cluster.x-k8s.io/remediate-machine on the owner
+                                  Machine once the instance has been unhealthy for unhealthyThreshold
+                                  consecutive samples, or at once when it is terminated. CAPTF removes
+                                  the annotation it set once the instance reads Healthy again and the
+                                  Machine is not being deleted; an annotation set by anyone else is left
+                                  alone. It has an effect only when a MachineHealthCheck selects the
+                                  Machine; a single-replica control plane refuses the remediation.
+                                  Defaults to false.
+                                type: boolean
+                              healthCheckIntervalSeconds:
+                                description: |-
+                                  healthCheckIntervalSeconds is how often a provisioned machine is
+                                  refreshed to sample its health while annotateMachine is true,
+                                  independent of drift.intervalSeconds. Defaults to 300, applied at
+                                  reconcile when unset (0). With annotateMachine false it is ignored and
+                                  health is re-read only at the drift (or refresh) cadence, so
+                                  drift.intervalSeconds 0 then stops health sampling after provisioning.
+                                format: int32
+                                maximum: 86400
+                                minimum: 60
+                                type: integer
+                              unhealthyThreshold:
+                                description: |-
+                                  unhealthyThreshold is the number of consecutive unhealthy health samples
+                                  before the Machine is annotated. A sample is one completed refresh or
+                                  drift Job. Defaults to 3, applied at reconcile when unset (0). A
+                                  terminated instance counts on the first sample.
+                                format: int32
+                                maximum: 100
+                                minimum: 1
                                 type: integer
                             type: object
                         type: object

@@ -79,6 +79,48 @@ func TestPredicates(t *testing.T) {
 	}
 }
 
+// TestInheritedPolicyChanged proves InheritedPolicyChanged passes only a
+// TerraformCluster update that changes what its machines and pools
+// inherit: spec.defaults, its identityRef or its drift policy; not its
+// source, a status write, or another kind.
+func TestInheritedPolicyChanged(t *testing.T) {
+	t.Parallel()
+	p := InheritedPolicyChanged()
+	old := &infrav1.TerraformCluster{Spec: infrav1.TerraformClusterSpec{
+		WorkspaceSpec: infrav1.WorkspaceSpec{IdentityRef: infrav1.IdentityReference{Name: "id"}},
+	}}
+	for _, tt := range []struct {
+		name string
+		mut  func(*infrav1.TerraformCluster)
+		want bool
+	}{
+		{"defaults.remediation", func(tc *infrav1.TerraformCluster) {
+			tc.Spec.Defaults = &infrav1.TerraformClusterDefaults{Remediation: &infrav1.MachineRemediation{AnnotateMachine: new(true)}}
+		}, true},
+		{"defaults.membershipRefreshIntervalSeconds", func(tc *infrav1.TerraformCluster) {
+			tc.Spec.Defaults = &infrav1.TerraformClusterDefaults{MembershipRefreshIntervalSeconds: 30}
+		}, true},
+		{"spec.drift.action", func(tc *infrav1.TerraformCluster) {
+			tc.Spec.Drift = &infrav1.DriftPolicy{Action: infrav1.DriftActionRemediate}
+		}, true},
+		{"spec.identityRef", func(tc *infrav1.TerraformCluster) { tc.Spec.IdentityRef.Name = "other" }, true},
+		{"spec.source", func(tc *infrav1.TerraformCluster) { tc.Spec.Source.Image = "registry.example/c:2" }, false},
+		{"status", func(tc *infrav1.TerraformCluster) { tc.Status.FailureDomains = []clusterv1.FailureDomain{{Name: "a"}} }, false},
+	} {
+		n := old.DeepCopy()
+		tt.mut(n)
+		if got := p.Update(event.UpdateEvent{ObjectOld: old, ObjectNew: n}); got != tt.want {
+			t.Errorf("%s: passed = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+	if p.Create(event.CreateEvent{Object: old}) || p.Delete(event.DeleteEvent{Object: old}) || p.Generic(event.GenericEvent{Object: old}) {
+		t.Error("InheritedPolicyChanged passes a create, delete or generic event")
+	}
+	if p.Update(event.UpdateEvent{ObjectOld: &infrav1.TerraformMachine{}, ObjectNew: &infrav1.TerraformMachine{}}) {
+		t.Error("InheritedPolicyChanged passes another kind")
+	}
+}
+
 // TestIndexers proves ClusterIdentityIndexer returns a cluster's own and
 // default identity names (deduped), MachineIdentityIndexer returns nil for
 // a machine without an identity, and each indexer returns nil for the other
@@ -186,6 +228,19 @@ func TestMappers(t *testing.T) {
 	}
 	if got := MachineToClusters(c)(ctx, &infrav1.TerraformMachine{}); got != nil {
 		t.Errorf("unlabeled machine = %v", got)
+	}
+
+	c1 := &infrav1.TerraformCluster{ObjectMeta: metav1.ObjectMeta{Namespace: testNS, Name: "c1", Labels: map[string]string{clusterv1.ClusterNameLabel: "c1"}}}
+	toMachines := TerraformClusterToObjects(c, func() client.ObjectList { return &infrav1.TerraformMachineList{} })
+	if got := names(toMachines(ctx, c1)); !slices.Equal(got, []string{"team-a/m-inherit", "team-a/m-own"}) {
+		t.Errorf("TerraformClusterToObjects(machines) = %v", got)
+	}
+	toPools := TerraformClusterToObjects(c, func() client.ObjectList { return &infrav1.TerraformMachinePoolList{} })
+	if got := names(toPools(ctx, c1)); !slices.Equal(got, []string{"team-a/p-admin", "team-a/p-inherit", "team-a/p-own"}) {
+		t.Errorf("TerraformClusterToObjects(pools) = %v", got)
+	}
+	if got := toMachines(ctx, &infrav1.TerraformCluster{}); got != nil {
+		t.Errorf("unlabeled TerraformCluster = %v", got)
 	}
 
 	suffix, err := state.Suffix(testNS, state.KindTerraformCluster, "c1")
