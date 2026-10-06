@@ -62,6 +62,10 @@ type Deps struct {
 	// Inspector reads image configs for TerraformMachineTemplate capacity
 	// (imageinspect.Remote{} in the manager).
 	Inspector imageinspect.Inspector
+	// Schemas caches the variables schemas the Inspector reads
+	// (io.captf.variables-schema), by image digest. The admission webhook
+	// reads the same cache. nil validates no variables.
+	Schemas *imageinspect.SchemaCache
 	// VariablesCache holds the ConfigMaps and Secrets labeled
 	// captf.io/variables=true, without their data
 	// (manager.VariablesCacheOptions), for the variablesFrom watches. The

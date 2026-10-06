@@ -182,7 +182,7 @@ func (s *sourceData) mergeInto(vars contract.Variables, role contract.Role, form
 			}
 			v = b
 		}
-		vars[key] = contract.Variable{Value: v, Sensitive: s.sensitive}
+		vars[key] = contract.Variable{Value: v, Sensitive: s.sensitive, Lenient: format != infrav1.VariablesFormatJSON}
 	}
 	return nil
 }

@@ -94,6 +94,10 @@ type Variable struct {
 	// Sensitive is true when the winning value came from a Secret: the
 	// generated root declares the variable sensitive.
 	Sensitive bool
+	// Lenient is true when the value came from a string-format
+	// variablesFrom source: it is always a JSON string that Terraform's
+	// type system converts, so schema validation checks it leniently.
+	Lenient bool
 }
 
 // Variables are the merged user variables of an object, by name. They are

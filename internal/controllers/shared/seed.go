@@ -29,6 +29,7 @@ import (
 
 	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
 	captfconds "github.com/captf-io/cluster-api-provider-terraform/internal/conditions"
+	"github.com/captf-io/cluster-api-provider-terraform/internal/contract"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/hash"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/inputs"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/jobs"
@@ -75,6 +76,10 @@ func (r *reconciler) build(ctx context.Context, view *StateView) (any, *Gate, er
 		captfconds.SetDependenciesReady(r.obj, gate.Status, gate.Reason, gate.Message)
 		return in, gate, nil
 	}
+	if gate = r.variablesSchemaGate(ctx, in); gate != nil {
+		captfconds.SetDependenciesReady(r.obj, gate.Status, gate.Reason, gate.Message)
+		return in, gate, nil
+	}
 	captfconds.SetDependenciesReady(r.obj, metav1.ConditionTrue, infrav1.DependenciesReadyReason, "")
 	r.observeGuard()
 	if err := r.supersedeWithdrawn(ctx); err != nil {
@@ -89,6 +94,19 @@ func (r *reconciler) build(ctx context.Context, view *StateView) (any, *Gate, er
 		}
 	}
 	return in, nil, nil
+}
+
+// variablesSchemaGate validates the user variables carried by in, the
+// built inputs, against the variables schema of the spec image before any
+// Job starts (VariablesInvalid, naming the variable); ctx bounds the image
+// read. It returns nil when the variables are acceptable or there is
+// nothing to check against; see VariablesSchemaGate.
+func (r *reconciler) variablesSchemaGate(ctx context.Context, in any) *Gate {
+	var names []string
+	for _, s := range r.eff.Jobs.ImagePullSecrets {
+		names = append(names, s.Name)
+	}
+	return VariablesSchemaGate(ctx, r.d, r.obj.GetNamespace(), r.k.Spec().Source.Image, names, contract.VariablesOf(in))
 }
 
 // seedExports records, using ctx, the exports of the last successful
