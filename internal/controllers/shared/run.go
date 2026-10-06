@@ -260,11 +260,11 @@ func startJob(ctx context.Context, d Deps, k Kind, req JobRequest) (job *batchv1
 		d.Emit(obj, corev1.EventTypeWarning, EventDigestUnknown, "Run", "No image digest is pinned; %s runs %s", req.Op, ref)
 	}
 
-	// Only a plan and an approved apply fingerprint their plan; both must
-	// key it with the same per-object key, so the Secret exists before
-	// either Job does.
+	// A plan, a guarded apply (which reports its plan when it blocks) and an
+	// approved apply fingerprint their plan; all must key it with the same
+	// per-object key, so the Secret exists before any of those Jobs does.
 	var planKey string
-	if req.Op == jobs.OpPlan || (req.Op == jobs.OpApply && req.ExpectPlan != "") {
+	if (jobs.Spec{Op: req.Op, OwnerKind: k.Kind(), ApprovalHash: req.ApprovalHash, ExpectPlan: req.ExpectPlan}).Fingerprints() {
 		name, err := plankey.Ensure(ctx, d.Client, obj)
 		if err != nil {
 			return nil, false, err

@@ -429,6 +429,9 @@ func TestRunGuardedApply(t *testing.T) {
 			if r.Error.Step != nil {
 				t.Errorf("blocked step = %q, want none", *r.Error.Step)
 			}
+			if r.Plan == nil || !strings.HasPrefix(r.Plan.Hash, PlanHashPrefix) || r.Plan.Hash == EmptyPlanHash {
+				t.Errorf("blocked result plan = %+v, want its fingerprint", r.Plan)
+			}
 			if !strings.HasPrefix(r.Error.Tail, blockedPrefix) || strings.Contains(r.Error.Tail, "module.role.tags") {
 				t.Errorf("summary = %q", r.Error.Tail)
 			}

@@ -132,3 +132,31 @@ func TestSecretVolumeModes(t *testing.T) {
 		t.Errorf("restore config volume = %+v, want projected with defaultMode 0440", cfg)
 	}
 }
+
+// TestFingerprints: a plan Job, a guarded apply (a cluster's, or a pool's
+// that carries an ApprovalHash) and an approved apply fingerprint their
+// plan; no other Job does.
+func TestFingerprints(t *testing.T) {
+	t.Parallel()
+	pool := spec(OpApply)
+	pool.ApprovalHash = "h1:exports"
+	approved := spec(OpApply)
+	approved.ExpectPlan = "p2:x"
+	for name, c := range map[string]struct {
+		s    Spec
+		want bool
+	}{
+		"plan":            {spec(OpPlan), true},
+		"cluster apply":   {clusterSpec(OpApply), true},
+		"pool guarded":    {pool, true},
+		"approved apply":  {approved, true},
+		"machine apply":   {spec(OpApply), false},
+		"cluster destroy": {clusterSpec(OpDestroy), false},
+		"cluster drift":   {clusterSpec(OpDrift), false},
+		"cluster refresh": {clusterSpec(OpRefresh), false},
+	} {
+		if got := c.s.Fingerprints(); got != c.want {
+			t.Errorf("%s: Fingerprints() = %v, want %v", name, got, c.want)
+		}
+	}
+}

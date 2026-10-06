@@ -124,18 +124,6 @@ func (f *fingerprinter) line(name string, c planChange, from string) (string, er
 	return name + "|" + strings.Join(c.Actions, ",") + "|" + hex.EncodeToString(mac.Sum(nil)), nil
 }
 
-// planSensitiveValues returns planSensitive of the `show -json` plan
-// planJSON, without a key: a run that fingerprints nothing (a guarded
-// apply) still redacts them. It returns a non-nil error when planJSON is
-// not valid JSON.
-func planSensitiveValues(planJSON []byte) ([]string, error) {
-	plan, err := parsePlan(planJSON)
-	if err != nil {
-		return nil, err
-	}
-	return planSensitive(plan)
-}
-
 // planSensitive returns, sorted and without duplicates, the non-empty
 // string values plan marks sensitive: those of its resource changes, no-ops
 // included (before under before_sensitive, after under after_sensitive),

@@ -349,15 +349,12 @@ const dataSourcePlan = `{"prior_state":{"values":{"root_module":{` +
 // an error.
 func TestSensitiveDataSources(t *testing.T) {
 	t.Parallel()
-	got, err := planSensitiveValues([]byte(dataSourcePlan))
-	if want := []string{"child-data-secret", "root-data-secret"}; err != nil || !slices.Equal(got, want) {
-		t.Errorf("planSensitiveValues = %v, %v; want %v", got, err, want)
-	}
-	if got := mustPlan(t, dataSourcePlan).SensitiveValues(); !slices.Contains(got, "root-data-secret") {
-		t.Errorf("SensitiveValues = %v, want the data source's", got)
+	got := mustPlan(t, dataSourcePlan).SensitiveValues()
+	if want := []string{"child-data-secret", "root-data-secret"}; !slices.Equal(got, want) {
+		t.Errorf("SensitiveValues = %v; want %v", got, want)
 	}
 	bad := `{"prior_state":{"values":{"root_module":{"resources":[{"mode":"data","values":{},"sensitive_values":"x}]}}}}`
-	if _, err := planSensitiveValues([]byte(bad)); err == nil {
+	if _, err := ParsePlan([]byte(bad), []byte(testPlanKey)); err == nil {
 		t.Error("invalid plan JSON parsed")
 	}
 }
@@ -407,9 +404,8 @@ func TestLoadPlanKey(t *testing.T) {
 	}
 }
 
-// TestRunWithoutPlanKey: a plan and an approved apply fail closed before
-// any step when the key cannot be read; drift and a guarded apply never
-// read it.
+// TestRunWithoutPlanKey: a plan, a guarded apply and an approved apply fail
+// closed before any step when the key cannot be read; drift never reads it.
 func TestRunWithoutPlanKey(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -422,7 +418,7 @@ func TestRunWithoutPlanKey(t *testing.T) {
 		{name: "plan", op: OpPlan, fails: true},
 		{name: "approved apply", op: OpApply, expect: EmptyPlanHash, fails: true},
 		{name: "drift", op: OpDrift},
-		{name: "guarded apply", op: OpApply, guard: true},
+		{name: "guarded apply", op: OpApply, guard: true, fails: true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()

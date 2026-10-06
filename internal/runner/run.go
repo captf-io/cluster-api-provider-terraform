@@ -297,13 +297,13 @@ func run(ctx context.Context, o Options) (Result, int) {
 			r.Drift = d
 			o.planSummary(ctx, s.Name, d)
 		case o.Op == OpApply && s.Name == StepShowJSON:
-			// A guarded apply fingerprints nothing, but its apply step can
-			// still echo a plan-sensitive value.
-			sensitive, err := planSensitiveValues(res.Stdout)
+			// A guarded apply fingerprints its plan, to report it when it
+			// blocks, and its apply step can echo a plan-sensitive value.
+			p, err := ParsePlan(res.Stdout, planKey)
 			if err != nil {
 				return o.fail(r, ErrorKindStep, s.Name, err.Error()), ExitFailure
 			}
-			secrets = append(secrets, planSecrets(sensitive)...)
+			secrets = append(secrets, planSecrets(p.SensitiveValues())...)
 			o.red = newRedactor(secrets)
 			destructive, err := DestructiveChanges(res.Stdout)
 			if err != nil {
@@ -315,7 +315,8 @@ func run(ctx context.Context, o Options) (Result, int) {
 			if len(destructive) > 0 && !o.deletesApproved() {
 				// The addresses may be logged; the plan's values never are.
 				summary := strutil.Truncate(o.red.Redact(blockedSummary(destructive)), MaxSummary)
-				logger.Info("Apply blocked", "summary", summary, "inputsHash", o.InputsHash)
+				logger.Info("Apply blocked", "summary", summary, "inputsHash", o.InputsHash, "planHash", p.Hash)
+				r.Plan = p
 				return o.fail(r, ErrorKindBlocked, "", summary), ExitFailure
 			}
 			if len(destructive) > 0 {
@@ -350,11 +351,12 @@ func (o Options) planSummary(ctx context.Context, step string, d *Drift) {
 
 // fingerprints reports whether this run computes a plan fingerprint, and
 // so needs the plan key: a plan Job, and an approved apply (ExpectPlan)
-// that compares its plan's fingerprint with the approved one. Drift and a
-// guarded apply read the plan without fingerprinting it, so no run ever
-// computes an unkeyed fingerprint.
+// that compares its plan's fingerprint with the approved one, and a guarded
+// apply (GuardDeletes), which reports its plan's fingerprint when it blocks.
+// Drift reads the plan without fingerprinting it, so no run ever computes an
+// unkeyed fingerprint.
 func (o Options) fingerprints() bool {
-	return o.Op == OpPlan || (o.Op == OpApply && o.ExpectPlan != "")
+	return o.Op == OpPlan || (o.Op == OpApply && (o.GuardDeletes || o.ExpectPlan != ""))
 }
 
 // deletesApproved reports whether this run's inputs hash was approved for

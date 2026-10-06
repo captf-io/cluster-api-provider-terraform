@@ -182,6 +182,14 @@ func (s Spec) guardsDeletes() bool {
 	return s.Op == OpApply && (s.OwnerKind == state.KindTerraformCluster || s.ApprovalHash != "")
 }
 
+// Fingerprints reports whether the Job's runner fingerprints a plan, and so
+// needs the plan key: a plan Job, and an apply that is guarded
+// (guardsDeletes), so a blocked apply can report its plan for approval, or
+// approved for a plan (ExpectPlan).
+func (s Spec) Fingerprints() bool {
+	return s.Op == OpPlan || (s.Op == OpApply && (s.guardsDeletes() || s.ExpectPlan != ""))
+}
+
 // guardHash returns the hash the runner's guard compares the approval
 // with (--inputs-hash): ApprovalHash when set, else InputsHash.
 func (s Spec) guardHash() string {
