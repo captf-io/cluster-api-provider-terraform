@@ -276,11 +276,6 @@ func (o *Options) ManagerOptions(scheme *runtime.Scheme) (ctrl.Options, error) {
 		LeaderElection:             o.LeaderElect,
 		LeaderElectionID:           LeaderElectionID,
 		LeaderElectionResourceLock: resourcelock.LeasesResourceLock,
-		// The leader gives up the Lease on shutdown, so the standby takes
-		// over at once instead of after LeaseDuration. Safe because Run
-		// returns, and the process exits, as soon as the manager stops.
-		LeaderElectionReleaseOnCancel: true,
-		GracefulShutdownTimeout:       &gracefulShutdown,
 		LeaseDuration:              &lease,
 		RenewDeadline:              &renew,
 		RetryPeriod:                &retry,
@@ -289,6 +284,11 @@ func (o *Options) ManagerOptions(scheme *runtime.Scheme) (ctrl.Options, error) {
 		Metrics:                    *metricsOpts,
 		Cache:                      cacheOpts,
 		Client:                     client.Options{Cache: &client.CacheOptions{DisableFor: captfmanager.UncachedObjects()}},
+		GracefulShutdownTimeout:    &gracefulShutdown,
+		// The leader gives up the Lease on shutdown, so the standby takes
+		// over at once instead of after LeaseDuration. Safe because Run
+		// returns, and the process exits, as soon as the manager stops.
+		LeaderElectionReleaseOnCancel: true,
 		WebhookServer: webhook.NewServer(webhook.Options{
 			Port:     o.WebhookPort,
 			CertDir:  o.WebhookCertDir,
