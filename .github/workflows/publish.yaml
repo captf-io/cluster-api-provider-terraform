@@ -27,8 +27,10 @@
 #                     templates) and the tfcapi-lint binaries and checksums
 #
 # The action's image follows its ref (actions/tfcapi-lint/tfcapi-lint.sh):
-# a release tag runs :vX.Y.Z, a commit on main :sha-<7>, main :edge. So
-# :sha-<7> must exist for every pushed main HEAD, as it does.
+# a release tag runs :vX.Y.Z, a commit on main :sha-<7>, main :edge. A
+# commit that was never a pushed main HEAD, or whose run failed or has not
+# finished, has no :sha-<7>; the action's version and image inputs are the
+# way around that.
 #
 # Images are linux/amd64 and linux/arm64; the Dockerfile cross-compiles, so
 # no emulation. A tag must pass `make release-preflight` (vX.Y.Z or
@@ -58,9 +60,9 @@
 # settings): a new organization package may default to private.
 #
 # Each image build reads, and never writes, the buildx cache scope (one per
-# image) that the security workflow fills on main: only trusted refs write it (security
-# builds the image on main, the weekly schedule and manual runs, never on a
-# PR), so an untrusted run cannot poison a published image. A miss only
+# image) that the security workflow fills on main: only trusted refs write
+# it (security builds the images on main, the weekly schedule and manual
+# runs, never on a PR), so an untrusted run cannot poison a published image. A miss only
 # costs time. The release job uses no module or build cache.
 name: publish
 
@@ -267,10 +269,17 @@ jobs:
       # The components pin the image by the digest just pushed, as
       # `make release` does, so they never follow a moved tag. GoReleaser
       # (pinned in the Makefile) builds tfcapi-lint from the tag.
+      # The digest comes through the matrix's merged outputs; refuse
+      # anything but a digest rather than pin the components to "<repo>@".
       - name: Build the release assets
         env:
           DIGEST: ${{ needs.image.outputs.manager-digest }}
-        run: make release-assets VERSION="${VERSION}" RELEASE_IMG="${IMAGE}@${DIGEST}"
+        run: |
+          if [[ ! "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::no manager image digest from the image job: '${DIGEST}'"
+            exit 1
+          fi
+          make release-assets VERSION="${VERSION}" RELEASE_IMG="${IMAGE}@${DIGEST}"
       - name: Attest the release assets
         id: attest
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
