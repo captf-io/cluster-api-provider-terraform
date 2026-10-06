@@ -281,7 +281,8 @@ func TestReconcileInspectFailed(t *testing.T) {
 // TestReconcileSpecCapacityInspectFailed proves spec.capacity is applied
 // when the image cannot be inspected: source Spec, no image recorded, the
 // last known nodeInfo kept, CapacityResolved True with a message noting the
-// image was not inspected, and a retry scheduled for the image.
+// image was not inspected, VariablesValid Unknown (no schema without the
+// image), and a retry scheduled for the image.
 func TestReconcileSpecCapacityInspectFailed(t *testing.T) {
 	t.Parallel()
 	tpl := template(func(tpl *infrav1.TerraformMachineTemplate) {
@@ -294,6 +295,9 @@ func TestReconcileSpecCapacityInspectFailed(t *testing.T) {
 		!got.Status.Capacity.Cpu().Equal(resource.MustParse("2")) || got.Status.CapacitySource.Source != infrav1.CapacitySourceSpec ||
 		got.Status.CapacitySource.Image != "" || got.Status.NodeInfo.Architecture != infrav1.ArchitectureArm64 || res.RequeueAfter != RetryFloor {
 		t.Errorf("condition %+v, status %+v, result %+v", c, got.Status, res)
+	}
+	if v := conditions.Get(got, infrav1.VariablesValidCondition); v == nil || v.Status != metav1.ConditionUnknown || v.Reason != infrav1.VariablesSchemaUnavailableReason {
+		t.Errorf("VariablesValid = %+v, want Unknown/%s", v, infrav1.VariablesSchemaUnavailableReason)
 	}
 	if Resolved(got) {
 		t.Error("a template whose image was not inspected counts as resolved")
@@ -386,5 +390,61 @@ func TestReconcileNotFound(t *testing.T) {
 	r := &Reconciler{Deps: shared.Deps{Client: c}}
 	if res, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKey{Namespace: "ns", Name: "gone"}}); err != nil || res.RequeueAfter != 0 {
 		t.Errorf("NotFound = %+v, %v", res, err)
+	}
+}
+
+// variablesValid returns t's VariablesValid condition, or nil.
+func variablesValid(t *infrav1.TerraformMachineTemplate) *metav1.Condition {
+	return conditions.Get(t, infrav1.VariablesValidCondition)
+}
+
+// TestVariablesValid: the template's inline variables are checked against
+// the image's schema into VariablesValid, and the schema is remembered in
+// the shared cache.
+func TestVariablesValid(t *testing.T) {
+	t.Parallel()
+	schema := `{"type":"object","properties":{"instance_type":{"type":"string"}},"required":["instance_type"],"additionalProperties":false}`
+	insp := &fakeInspector{cfg: &imageinspect.Config{Digest: "sha256:aa", Labels: map[string]string{imageinspect.VariablesSchemaLabel: schema}}}
+	withVars := func(raw string) func(*infrav1.TerraformMachineTemplate) {
+		return func(tpl *infrav1.TerraformMachineTemplate) {
+			tpl.Spec.Template.Spec.Variables = runtime.RawExtension{Raw: []byte(raw)}
+		}
+	}
+
+	got, res := run(t, template(withVars(`{"instance_type":"m5"}`)), insp)
+	if c := variablesValid(got); c == nil || c.Status != metav1.ConditionTrue || c.Reason != infrav1.VariablesValidReason || res.RequeueAfter != 0 {
+		t.Errorf("valid variables: %+v, %+v", c, res)
+	}
+	if !Resolved(got) {
+		t.Error("a template with valid variables is resolved")
+	}
+
+	got, _ = run(t, template(withVars(`{"instance_type":"m5","instnce":1}`)), insp)
+	c := variablesValid(got)
+	if c == nil || c.Status != metav1.ConditionFalse || c.Reason != infrav1.VariablesRejectedReason || !strings.Contains(c.Message, `"instnce" is not declared`) {
+		t.Errorf("invalid variables: %+v", c)
+	}
+	if !Resolved(got) {
+		t.Error("invalid variables are final for this image")
+	}
+
+	got, _ = run(t, template(), &fakeInspector{cfg: &imageinspect.Config{}})
+	if c := variablesValid(got); c == nil || c.Status != metav1.ConditionTrue || c.Reason != infrav1.VariablesSchemaNotDeclaredReason {
+		t.Errorf("no schema: %+v", c)
+	}
+
+	got, res = run(t, template(func(tpl *infrav1.TerraformMachineTemplate) {
+		tpl.Spec.Template.Spec.VariablesFrom = []infrav1.VariablesSource{{ConfigMapRef: infrav1.VariablesSourceReference{Name: "nope"}}}
+	}), insp)
+	if c := variablesValid(got); c == nil || c.Status != metav1.ConditionUnknown || c.Reason != infrav1.VariablesSourcePendingReason || res.RequeueAfter != RetryFloor {
+		t.Errorf("missing source: %+v, %+v", c, res)
+	}
+	if Resolved(got) {
+		t.Error("a missing source is retried")
+	}
+
+	got, _ = run(t, template(), &fakeInspector{err: errors.New("down")})
+	if c := variablesValid(got); c == nil || c.Status != metav1.ConditionUnknown || c.Reason != infrav1.VariablesSchemaUnavailableReason {
+		t.Errorf("inspect failure: %+v", c)
 	}
 }

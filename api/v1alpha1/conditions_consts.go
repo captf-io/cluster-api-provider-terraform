@@ -101,7 +101,10 @@ const (
 	// VariablesInvalidReason is the False reason when a variablesFrom source
 	// has a key that is not a Terraform identifier or is reserved, or a
 	// value that is not UTF-8 or (format JSON) not valid JSON. The message
-	// names the key, never the value; no Job starts.
+	// names the key, never the value; no Job starts. It is also the reason
+	// when the merged variables do not fit the variables schema the image
+	// publishes (io.captf.variables-schema): an unknown key, a missing
+	// required one or a value of the wrong type.
 	VariablesInvalidReason = "VariablesInvalid"
 )
 
@@ -544,6 +547,32 @@ const (
 	CapacityLabelInvalidReason = "CapacityLabelInvalid"
 )
 
+// VariablesValid: positive polarity; TerraformMachineTemplate only. It says
+// whether the template's variables and variablesFrom fit the variables
+// schema the image publishes (io.captf.variables-schema).
+const (
+	// VariablesValidCondition reports whether the template's merged
+	// variables fit the image's variables schema.
+	VariablesValidCondition = "VariablesValid"
+
+	// VariablesValidReason is the True reason when the variables fit the
+	// image's schema.
+	VariablesValidReason = "VariablesValid"
+	// VariablesSchemaNotDeclaredReason is the True reason when the image
+	// carries no usable variables schema, so nothing is checked.
+	VariablesSchemaNotDeclaredReason = "VariablesSchemaNotDeclared"
+	// VariablesRejectedReason is the False reason when a variable is
+	// unknown to the module, required and not set, of the wrong type, or a
+	// source has an invalid key; the message names the variable.
+	VariablesRejectedReason = "VariablesRejected"
+	// VariablesSourcePendingReason is the Unknown reason while a
+	// variablesFrom source of the template is missing or unlabeled.
+	VariablesSourcePendingReason = "VariablesSourcePending"
+	// VariablesSchemaUnavailableReason is the Unknown reason when the image
+	// could not be read, so its schema is unknown.
+	VariablesSchemaUnavailableReason = "VariablesSchemaUnavailable"
+)
+
 // Ready of a TerraformClusterIdentity: positive polarity. The identity uses
 // ReadyCondition with its own reasons; the manager sets it from the
 // credentials Secret.
@@ -725,6 +754,11 @@ func ConditionReasons() map[string]map[metav1.ConditionStatus][]string {
 		CapacityResolvedCondition: {
 			metav1.ConditionTrue:  {CapacityResolvedReason, CapacityNotDeclaredReason},
 			metav1.ConditionFalse: {ImageInspectFailedReason, CapacityLabelInvalidReason},
+		},
+		VariablesValidCondition: {
+			metav1.ConditionTrue:    {VariablesValidReason, VariablesSchemaNotDeclaredReason},
+			metav1.ConditionFalse:   {VariablesRejectedReason},
+			metav1.ConditionUnknown: {VariablesSourcePendingReason, VariablesSchemaUnavailableReason},
 		},
 	}
 }

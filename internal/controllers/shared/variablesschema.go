@@ -70,6 +70,13 @@ func VariablesSchemaGate(ctx context.Context, d Deps, namespace, image string, p
 		klog.FromContext(ctx).V(LogFlow).Info("Not validating variables: the image schema is unavailable", "image", image, "error", err.Error())
 		return nil
 	}
+	return VariablesSchemaGateOf(schema, vars)
+}
+
+// VariablesSchemaGateOf is VariablesSchemaGate over a schema already in
+// hand: a VariablesInvalid gate naming up to three problems of vars, or
+// nil when schema is nil or vars fits it. It returns that gate, or nil.
+func VariablesSchemaGateOf(schema *varschema.Schema, vars contract.Variables) *Gate {
 	problems := SchemaProblems(schema, vars)
 	if len(problems) == 0 {
 		return nil

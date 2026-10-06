@@ -143,14 +143,34 @@ func (c *SchemaCache) Schema(ctx context.Context, insp Inspector, ref string, ke
 		c.mu.Unlock()
 		return nil, err
 	}
-	e := schemaEntry{}
-	if label, ok := cfg.Labels[VariablesSchemaLabel]; ok {
-		if e.schema, e.invalid = varschema.Parse(label); e.invalid != nil {
-			e.schema = nil
-		}
+	return c.Remember(ref, cfg)
+}
+
+// SchemaOf returns the variables schema in cfg's labels: nil with a nil
+// error when the image declares none, or an error wrapping
+// varschema.ErrInvalid or varschema.ErrTooLarge for a label that is
+// present but unusable.
+func SchemaOf(cfg *Config) (*varschema.Schema, error) {
+	label, ok := cfg.Labels[VariablesSchemaLabel]
+	if !ok {
+		return nil, nil
 	}
-	c.put(ref, cfg.Digest, e)
-	return e.schema, e.invalid
+	s, err := varschema.Parse(label)
+	if err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// Remember records the schema in cfg, the image config ref resolved to, by
+// its digest and returns it as SchemaOf does. The receiver may be nil,
+// which records nothing.
+func (c *SchemaCache) Remember(ref string, cfg *Config) (*varschema.Schema, error) {
+	s, err := SchemaOf(cfg)
+	if c != nil {
+		c.put(ref, cfg.Digest, schemaEntry{schema: s, invalid: err})
+	}
+	return s, err
 }
 
 // recentFailure returns the error of ref's last failed read when it is

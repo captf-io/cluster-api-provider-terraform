@@ -44,6 +44,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
+	"github.com/captf-io/cluster-api-provider-terraform/internal/contract"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/controllers/shared"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/imageinspect"
 )
@@ -84,7 +85,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 		return ctrl.Result{}, fmt.Errorf("patch helper: %w", err)
 	}
 	defer func() {
-		if err := helper.Patch(ctx, t, patch.WithOwnedConditions{Conditions: []string{infrav1.CapacityResolvedCondition}}); err != nil {
+		if err := helper.Patch(ctx, t, patch.WithOwnedConditions{Conditions: []string{infrav1.CapacityResolvedCondition, infrav1.VariablesValidCondition}}); err != nil {
 			reterr = kerrors.NewAggregate([]error{reterr, fmt.Errorf("patch: %w", err)})
 		}
 	}()
@@ -92,9 +93,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 }
 
 // Resolved reports whether t's status already describes its spec: the same
-// image, and the capacity from the same origin (spec.capacity as it stands,
-// or the image), resolved or not declared, or a label invalid for that same
-// image (the tag is not re-polled, so a retry cannot change it).
+// image, the capacity from the same origin (spec.capacity as it stands, or
+// the image), resolved or not declared, or a label invalid for that same
+// image (the tag is not re-polled, so a retry cannot change it), and its
+// variables checked against the image's schema (valid or invalid;
+// Unknown, a source that is not there yet, is retried).
 func Resolved(t *infrav1.TerraformMachineTemplate) bool {
 	if t.Status.CapacitySource.Image != t.Spec.Template.Spec.Source.Image {
 		return false
@@ -107,7 +110,9 @@ func Resolved(t *infrav1.TerraformMachineTemplate) bool {
 		return false
 	}
 	c := conditions.Get(t, infrav1.CapacityResolvedCondition)
-	return c != nil && (c.Status == metav1.ConditionTrue || c.Reason == infrav1.CapacityLabelInvalidReason)
+	v := conditions.Get(t, infrav1.VariablesValidCondition)
+	return c != nil && (c.Status == metav1.ConditionTrue || c.Reason == infrav1.CapacityLabelInvalidReason) &&
+		v != nil && v.Status != metav1.ConditionUnknown
 }
 
 // resolve inspects t's spec image using ctx, and sets its status.capacity,
@@ -142,6 +147,11 @@ func (r *Reconciler) resolve(ctx context.Context, t *infrav1.TerraformMachineTem
 		retry := failedRetry(t, r.Deps.Clock.Now())
 		prev := conditions.Get(t, infrav1.CapacityResolvedCondition)
 		firstFailure := prev == nil || (prev.Reason != infrav1.ImageInspectFailedReason && !strings.HasPrefix(prev.Message, notInspected))
+		// Without the image there is no schema to check the variables
+		// against, with the override or without.
+		conditions.Set(t, metav1.Condition{
+			Type: infrav1.VariablesValidCondition, Status: metav1.ConditionUnknown, Reason: infrav1.VariablesSchemaUnavailableReason, Message: msg,
+		})
 		if len(t.Spec.Capacity) > 0 {
 			// The override does not depend on the registry: apply it, keep
 			// the last known nodeInfo, and keep retrying for the image.
@@ -190,6 +200,41 @@ func (r *Reconciler) resolve(ctx context.Context, t *infrav1.TerraformMachineTem
 		r.Deps.Metrics.ImageInspectError(infrav1.CapacityLabelInvalidReason)
 	}
 	conditions.Set(t, res.Condition)
+	return r.validateVariables(ctx, t, cfg)
+}
+
+// validateVariables sets t's VariablesValid condition: the template's
+// merged variables and variablesFrom against the variables schema in cfg,
+// the image config just read (also remembered in the shared cache, so the
+// admission webhook knows it). A source that is missing leaves it Unknown
+// and requeues; an image without a usable schema checks nothing. ctx
+// bounds the source reads. It returns a Result requeuing for a missing
+// source, and an error only from reading a source.
+func (r *Reconciler) validateVariables(ctx context.Context, t *infrav1.TerraformMachineTemplate, cfg *imageinspect.Config) (ctrl.Result, error) {
+	spec := t.Spec.Template.Spec
+	set := func(status metav1.ConditionStatus, reason, msg string) {
+		conditions.Set(t, metav1.Condition{Type: infrav1.VariablesValidCondition, Status: status, Reason: reason, Message: msg})
+	}
+	schema, schemaErr := r.Deps.Schemas.Remember(spec.Source.Image, cfg)
+	vars, gate, err := shared.ResolveVariables(ctx, r.Deps.APIReader, t.Namespace, contract.RoleMachine,
+		shared.VariablesSpec{Inline: spec.Variables, From: spec.VariablesFrom})
+	switch {
+	case err != nil:
+		return ctrl.Result{}, err
+	case gate != nil && gate.Reason == infrav1.VariablesSourceNotFoundReason:
+		set(metav1.ConditionUnknown, infrav1.VariablesSourcePendingReason, gate.Message)
+		return ctrl.Result{RequeueAfter: RetryFloor}, nil
+	case gate != nil:
+		set(metav1.ConditionFalse, infrav1.VariablesRejectedReason, gate.Message)
+	case schemaErr != nil || schema == nil:
+		set(metav1.ConditionTrue, infrav1.VariablesSchemaNotDeclaredReason, "The image declares no usable "+imageinspect.VariablesSchemaLabel+"; the variables are not checked")
+	default:
+		if g := shared.VariablesSchemaGateOf(schema, vars); g != nil {
+			set(metav1.ConditionFalse, infrav1.VariablesRejectedReason, g.Message)
+		} else {
+			set(metav1.ConditionTrue, infrav1.VariablesValidReason, "")
+		}
+	}
 	return ctrl.Result{}, nil
 }
 

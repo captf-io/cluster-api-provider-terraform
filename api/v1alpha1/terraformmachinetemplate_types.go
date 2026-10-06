@@ -116,7 +116,8 @@ type CapacitySource struct {
 // Autoscaler scale from zero.
 // +kubebuilder:validation:MinProperties=1
 type TerraformMachineTemplateStatus struct {
-	// conditions of the TerraformMachineTemplate (CapacityResolved).
+	// conditions of the TerraformMachineTemplate (CapacityResolved,
+	// VariablesValid).
 	// +optional
 	// +listType=map
 	// +listMapKey=type

@@ -1117,7 +1117,9 @@ spec:
                 - message: image is required when source is Image
                   rule: '!has(self.source) || self.source != ''Image'' || has(self.image)'
               conditions:
-                description: conditions of the TerraformMachineTemplate (CapacityResolved).
+                description: |-
+                  conditions of the TerraformMachineTemplate (CapacityResolved,
+                  VariablesValid).
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
