@@ -31,6 +31,7 @@ import (
 	"github.com/captf-io/cluster-api-provider-terraform/internal/contract"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/imageinspect/labels"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/lint"
+	"github.com/captf-io/cluster-api-provider-terraform/internal/varschema"
 )
 
 // Image check IDs.
@@ -46,6 +47,7 @@ const (
 	IDLabelContract     = "image/label-contract"
 	IDLabelCapacity     = "image/label-capacity"
 	IDCapacitySizeVar   = "image/capacity-size-variable"
+	IDLabelVariables    = "image/label-variables-schema"
 	IDUserRoot          = "image/user-root"
 	IDModuleReadable    = "image/module-readable"
 	IDModuleLink        = "image/module-link"
@@ -84,7 +86,7 @@ func (c imageChecks) run() []lint.Finding {
 	var out []lint.Finding
 	for _, check := range []func() []lint.Finding{
 		c.modulePresent, c.runtimePresent, c.runtimeVersion, c.providers, c.reserved,
-		c.labelRole, c.labelContract, c.labelCapacity, c.capacitySizeVar, c.userRoot, c.userUnresolved, c.moduleReadable,
+		c.labelRole, c.labelContract, c.labelCapacity, c.capacitySizeVar, c.labelVariables, c.userRoot, c.userUnresolved, c.moduleReadable,
 		c.moduleLinks, c.entrypoint,
 	} {
 		out = append(out, check()...)
@@ -429,6 +431,22 @@ func (c imageChecks) capacitySizeVar() []lint.Finding {
 	return []lint.Finding{finding(IDCapacitySizeVar, lint.SeverityWarning, "",
 		fmt.Sprintf("the image declares %s but the module has the size variable(s) %s: the label cannot follow a changed size; drop the label and set spec.capacity on the TerraformMachineTemplate",
 			labels.CapacityLabel, strings.Join(found, ", ")))}
+}
+
+// labelVariables checks that io.captf.variables-schema, when present,
+// parses as the manager parses it. The label is optional: an absent one
+// is no finding, and the manager then validates no variables. It returns
+// an IDLabelVariables error finding for a label that is invalid or larger
+// than varschema.MaxLabelBytes.
+func (c imageChecks) labelVariables() []lint.Finding {
+	label, ok := c.cfg.Config.Labels[varschema.Label]
+	if !ok {
+		return nil
+	}
+	if _, err := varschema.Parse(label); err != nil {
+		return []lint.Finding{finding(IDLabelVariables, lint.SeverityError, "", err.Error())}
+	}
+	return nil
 }
 
 // userRoot checks c.cfg.Config.User and returns an IDUserRoot warning

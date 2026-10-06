@@ -253,6 +253,8 @@ func TestImageChecks(t *testing.T) {
 		{"contract label mismatch", contract.RoleCluster, withLabels(labelContract, "v1beta1"), [][]entry{good}, []string{IDLabelContract}},
 		{"contract label absent", contract.RoleCluster, withLabels(labelContract, ""), [][]entry{good}, []string{IDLabelContract}},
 		{"capacity on a cluster image", contract.RoleCluster, withLabels("io.captf.capacity", `{"cpu":"4"}`), [][]entry{good}, []string{IDLabelCapacity}},
+		{"variables schema valid", contract.RoleCluster, withLabels("io.captf.variables-schema", `{"type":"object","additionalProperties":false}`), [][]entry{good}, nil},
+		{"variables schema invalid", contract.RoleCluster, withLabels("io.captf.variables-schema", `{"type":"array"}`), [][]entry{good}, []string{IDLabelVariables}},
 		{"root user", contract.RoleCluster, func(cf *v1.ConfigFile) { cf.Config.User = "" }, [][]entry{good}, []string{IDUserRoot}},
 		{"root by name", contract.RoleCluster, func(cf *v1.ConfigFile) { cf.Config.User = "root:root" }, [][]entry{good}, []string{IDUserRoot}},
 		{"named user is not resolved", contract.RoleCluster, func(cf *v1.ConfigFile) { cf.Config.User = "captf" }, [][]entry{good}, []string{IDUserUnresolved}},
