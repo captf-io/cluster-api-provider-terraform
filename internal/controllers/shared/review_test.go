@@ -537,7 +537,7 @@ func TestJitter(t *testing.T) {
 func TestFailedRemediationMessage(t *testing.T) {
 	t.Parallel()
 	m := machine()
-	summary := "Job d: 0 to add, 1 to change, 0 to destroy"
+	summary := "Job d: 0 to create, 1 to update, 0 to replace, 0 to delete"
 	conditions.Set(m, metav1.Condition{Type: infrav1.DriftDetectedCondition, Status: metav1.ConditionTrue, Reason: infrav1.DriftPendingReason, Message: summary})
 	running := job("a", jobs.OpApply, jobs.Running, t0)
 	setDriftRemediating(m, infrav1.DriftActionRemediate, &running)
@@ -571,7 +571,7 @@ func TestDriftEventOncePerCheck(t *testing.T) {
 		set(reason, msg)
 		emitTransitions(d, logger, state.KindTerraformMachine, m, before, nil)
 	}
-	summary := "Job d1: 0 to add, 1 to change, 0 to destroy"
+	summary := "Job d1: 0 to create, 1 to update, 0 to replace, 0 to delete"
 	step(infrav1.DriftPendingReason, summary)
 	step(infrav1.DriftRemediatingReason, summary+remediationMarker+"a applies the current inputs")
 	step(infrav1.DriftPendingReason, summary+remediationMarker+"a failed")
@@ -579,7 +579,7 @@ func TestDriftEventOncePerCheck(t *testing.T) {
 	if n := rec.count(EventDriftDetected); n != 1 {
 		t.Errorf("DriftDetected events = %d over one check, want 1", n)
 	}
-	step(infrav1.DriftPendingReason, "Job d2: 0 to add, 2 to change, 0 to destroy")
+	step(infrav1.DriftPendingReason, "Job d2: 0 to create, 2 to update, 0 to replace, 0 to delete")
 	if n := rec.count(EventDriftDetected); n != 2 {
 		t.Errorf("DriftDetected events = %d after a new check, want 2", n)
 	}

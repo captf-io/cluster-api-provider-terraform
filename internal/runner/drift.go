@@ -96,13 +96,13 @@ func parsePlan(planJSON []byte) (planDoc, error) {
 }
 
 // ParseDrift summarizes the `show -json` plan planJSON and returns the
-// resulting Drift: counts of resources to add, change and destroy (a
-// replace counts as one add and one destroy, as the CLI summary does) and
-// up to MaxDriftResources addresses. Output changes are not drift, nor are
-// imports and moves: they come from the configuration (an import or a
-// moved block), not from a change made outside it, so a resource the plan
-// imports or moves counts only by the action it also takes, if any. It
-// returns a non-nil error when planJSON is not valid JSON.
+// resulting Drift: counts of resources to create, update, replace (delete
+// and create, in either order) and delete, and up to MaxDriftResources
+// addresses. Output changes are not drift, nor are imports and moves: they
+// come from the configuration (an import or a moved block), not from a
+// change made outside it, so a resource the plan imports or moves counts
+// only by the action it also takes, if any. It returns a non-nil error when
+// planJSON is not valid JSON.
 func ParseDrift(planJSON []byte) (*Drift, error) {
 	plan, err := parsePlan(planJSON)
 	if err != nil {
@@ -111,18 +111,19 @@ func ParseDrift(planJSON []byte) (*Drift, error) {
 	d := &Drift{Resources: []string{}}
 	for _, rc := range plan.ResourceChanges {
 		a := rc.Change.Actions
-		changed := false
-		if slices.Contains(a, "create") {
-			d.Add++
-			changed = true
-		}
-		if slices.Contains(a, "delete") {
-			d.Destroy++
-			changed = true
-		}
-		if slices.Contains(a, "update") {
-			d.Change++
-			changed = true
+		create, del := slices.Contains(a, "create"), slices.Contains(a, "delete")
+		changed := true
+		switch {
+		case create && del:
+			d.Replace++
+		case create:
+			d.Create++
+		case del:
+			d.Delete++
+		case slices.Contains(a, "update"):
+			d.Update++
+		default:
+			changed = false
 		}
 		if changed && len(d.Resources) < MaxDriftResources {
 			d.Resources = append(d.Resources, rc.Address)
@@ -130,7 +131,7 @@ func ParseDrift(planJSON []byte) (*Drift, error) {
 	}
 	// A plan can exit 2 for output-only changes or other actions this parser
 	// does not count (e.g. a data source read); that is not drift.
-	d.Detected = d.Add+d.Change+d.Destroy > 0
+	d.Detected = d.Create+d.Update+d.Replace+d.Delete > 0
 	return d, nil
 }
 

@@ -244,7 +244,7 @@ func TestPlanPreviewFlow(t *testing.T) {
 	}
 
 	// The plan: status.plan, the condition and one PlanReady; no apply.
-	p1 := &runner.Plan{Hash: runner.PlanHash([]string{"module.role.lb|update", "module.role.sg|delete"}), Change: 1, Destroy: 1,
+	p1 := &runner.Plan{Hash: runner.PlanHash([]string{"module.role.lb|update", "module.role.sg|delete"}), Update: 1, Delete: 1,
 		Resources: []string{"module.role.lb (update)", "module.role.sg (delete)"}}
 	e.finishRunner(t, plan, jobs.Succeeded, t0.Add(-30*time.Minute), planResult(runner.OpPlan, p1, ""))
 	for i := range 2 {
@@ -255,7 +255,7 @@ func TestPlanPreviewFlow(t *testing.T) {
 	if len(e.runner.created) != 1 {
 		t.Fatalf("created %v while the plan waits", e.runner.created)
 	}
-	if e.plan.PlanHash != p1.Hash || e.plan.InputsHash != e.hash || e.plan.Job != plan || *e.plan.Destroy != 1 ||
+	if e.plan.PlanHash != p1.Hash || e.plan.InputsHash != e.hash || e.plan.Job != plan || *e.plan.Delete != 1 ||
 		!slices.Equal(e.plan.Resources, p1.Resources) || e.plan.CreatedAt == nil {
 		t.Errorf("status.plan = %+v", e.plan)
 	}
@@ -265,7 +265,7 @@ func TestPlanPreviewFlow(t *testing.T) {
 		t.Fatalf("ApplyJobSucceeded = %+v, want PlanAwaitingApproval with %q", c, cmd)
 	}
 	if got := e.rec.only(EventPlanReady); len(got) != 1 || got[0].eventType != corev1.EventTypeNormal ||
-		!strings.Contains(got[0].note, "0 to add, 1 to change, 1 to destroy") || !strings.Contains(got[0].note, cmd) {
+		!strings.Contains(got[0].note, "0 to create, 1 to update, 0 to replace, 1 to delete") || !strings.Contains(got[0].note, cmd) {
 		t.Errorf("PlanReady = %+v", got)
 	}
 	for _, ev := range e.rec.only(EventConditionChanged) {
@@ -308,7 +308,7 @@ func TestPlanPreviewFlow(t *testing.T) {
 
 	// The plan changed: the new plan waits for its own approval, without
 	// backoff.
-	p2 := &runner.Plan{Hash: runner.PlanHash([]string{"module.role.lb|update"}), Change: 1, Resources: []string{"module.role.lb (update)"}}
+	p2 := &runner.Plan{Hash: runner.PlanHash([]string{"module.role.lb|update"}), Update: 1, Resources: []string{"module.role.lb (update)"}}
 	e.finishRunner(t, apply1, jobs.Failed, t0.Add(-20*time.Minute), planResult(runner.OpApply, p2, runner.ErrorKindPlanChanged))
 	e.reconcile(t, nil)
 	if len(e.runner.created) != 2 {
@@ -482,7 +482,7 @@ func TestPlanDriftRemediationGated(t *testing.T) {
 	if jobs.OpOf(e.jobNamed(t, plan)) != jobs.OpPlan || e.rec.count(EventDriftRemediationStarted) != 0 {
 		t.Fatalf("created %v, %d DriftRemediationStarted; want a plan Job only", e.runner.created, e.rec.count(EventDriftRemediationStarted))
 	}
-	p := &runner.Plan{Hash: runner.PlanHash([]string{"module.role.tags|update"}), Change: 1, Resources: []string{"module.role.tags (update)"}}
+	p := &runner.Plan{Hash: runner.PlanHash([]string{"module.role.tags|update"}), Update: 1, Resources: []string{"module.role.tags (update)"}}
 	e.finishRunner(t, plan, jobs.Succeeded, t0.Add(-time.Minute), planResult(runner.OpPlan, p, ""))
 	// The drift check is due: it runs, and the plan stays.
 	e.reconcile(t, remediate)
@@ -566,14 +566,14 @@ func TestPlanWaitEvents(t *testing.T) {
 func TestPlanOutputChanges(t *testing.T) {
 	t.Parallel()
 	j := job("p", jobs.OpPlan, jobs.Succeeded, t0)
-	p, ok := previewOf(&finished{job: &j, result: &jobs.Result{Plan: &runner.Plan{Hash: "p1:x", Outputs: 2}}})
+	p, ok := previewOf(&finished{job: &j, result: &jobs.Result{Plan: &runner.Plan{Hash: "p1:x", OutputChanges: 2}}})
 	if !ok || p.OutputChanges == nil || *p.OutputChanges != 2 {
 		t.Fatalf("preview = %+v", p)
 	}
-	if got, want := planCounts(p), "0 to add, 0 to change, 0 to destroy, 2 output(s) to change"; got != want {
+	if got, want := planCounts(p), "0 to create, 0 to update, 0 to replace, 0 to delete, 2 output(s) to change"; got != want {
 		t.Errorf("planCounts = %q, want %q", got, want)
 	}
-	if got := planCounts(infrav1.PlanPreview{Add: new(int32(1))}); strings.Contains(got, "output") {
+	if got := planCounts(infrav1.PlanPreview{Create: new(int32(1))}); strings.Contains(got, "output") {
 		t.Errorf("planCounts without outputs = %q", got)
 	}
 }
@@ -583,12 +583,12 @@ func TestPlanPreviewOf(t *testing.T) {
 	t.Parallel()
 	j := job("p", jobs.OpPlan, jobs.Succeeded, t0)
 	j.Annotations = map[string]string{state.InputsHashAnnotation: "h1:x"}
-	res := &runner.Plan{Hash: "p1:x", Add: 60}
+	res := &runner.Plan{Hash: "p1:x", Create: 60}
 	for range infrav1.MaxPlanResources + 3 {
 		res.Resources = append(res.Resources, strings.Repeat("é", 400)+" (create)")
 	}
 	p, ok := previewOf(&finished{job: &j, result: &jobs.Result{Plan: res}})
-	if !ok || len(p.Resources) != infrav1.MaxPlanResources || p.Truncated == nil || !*p.Truncated || *p.Add != 60 || p.InputsHash != "h1:x" {
+	if !ok || len(p.Resources) != infrav1.MaxPlanResources || p.Truncated == nil || !*p.Truncated || *p.Create != 60 || p.InputsHash != "h1:x" {
 		t.Fatalf("preview = %d resources, %+v", len(p.Resources), p)
 	}
 	for _, r := range p.Resources {

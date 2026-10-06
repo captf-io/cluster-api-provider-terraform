@@ -52,7 +52,7 @@ func TestPlanWaitKeptThroughChecks(t *testing.T) {
 	remediate := &infrav1.DriftPolicy{IntervalSeconds: new(int32(3600)), Action: infrav1.DriftActionRemediate}
 	e.reconcile(t, remediate)
 	plan := e.newest(t)
-	p := &runner.Plan{Hash: runner.PlanHash([]string{"module.role.tags|update"}), Change: 1, Resources: []string{"module.role.tags (update)"}}
+	p := &runner.Plan{Hash: runner.PlanHash([]string{"module.role.tags|update"}), Update: 1, Resources: []string{"module.role.tags (update)"}}
 	e.finishRunner(t, plan, jobs.Succeeded, t0.Add(-time.Minute), planResult(runner.OpPlan, p, ""))
 
 	waits := func(pass string) {
@@ -188,7 +188,7 @@ func TestMismatchedApprovalNoted(t *testing.T) {
 		e := newPlanEnv(t, "h1:old")
 		e.reconcile(t, nil)
 		plan := e.newest(t)
-		p := &runner.Plan{Hash: runner.PlanHash([]string{"module.role.lb|update"}), Change: 1, Resources: []string{"module.role.lb (update)"}}
+		p := &runner.Plan{Hash: runner.PlanHash([]string{"module.role.lb|update"}), Update: 1, Resources: []string{"module.role.lb (update)"}}
 		e.finishRunner(t, plan, jobs.Succeeded, t0.Add(-time.Minute), planResult(runner.OpPlan, p, ""))
 		e.approvePlan(t, "p1:another")
 		e.reconcile(t, nil)

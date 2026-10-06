@@ -466,21 +466,27 @@ type RunError struct {
 // DriftSummary summarizes the plan of a drift run that found changes.
 // +kubebuilder:validation:MinProperties=1
 type DriftSummary struct {
-	// add is the number of resources the plan would create.
+	// create is the number of resources the plan would create.
 	// +optional
 	// +kubebuilder:validation:Minimum=0
-	Add *int32 `json:"add,omitempty"`
+	Create *int32 `json:"create,omitempty"`
 
-	// change is the number of resources the plan would update in place.
+	// update is the number of resources the plan would update in place.
 	// +optional
 	// +kubebuilder:validation:Minimum=0
-	Change *int32 `json:"change,omitempty"`
+	Update *int32 `json:"update,omitempty"`
 
-	// destroy is the number of resources the plan would destroy, counting
+	// replace is the number of resources the plan would replace: delete and
+	// create again. A replacement counts here only.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	Replace *int32 `json:"replace,omitempty"`
+
+	// delete is the number of resources the plan would delete, not counting
 	// replacements.
 	// +optional
 	// +kubebuilder:validation:Minimum=0
-	Destroy *int32 `json:"destroy,omitempty"`
+	Delete *int32 `json:"delete,omitempty"`
 
 	// resources are the addresses of the drifted resources, at most 20.
 	// +optional

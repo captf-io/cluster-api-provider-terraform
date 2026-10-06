@@ -102,8 +102,8 @@ func TestRecorderSeries(t *testing.T) {
 
 	// One child per series, so each one exports.
 	r.JobFinished(Job{Kind: "TerraformCluster", Op: "apply", Result: ResultSucceeded, Duration: time.Minute, Queue: time.Second, Attempt: 2,
-		Steps: []Step{{Name: "init", Seconds: 3}}, Changes: &Changes{Add: 1}})
-	r.JobFinished(Job{Kind: "TerraformCluster", Op: "drift", Result: ResultFailed, ErrorKind: "step", ErrorStep: "plan", Drift: &Changes{Change: 1}})
+		Steps: []Step{{Name: "init", Seconds: 3}}, Changes: &Changes{Create: 1}})
+	r.JobFinished(Job{Kind: "TerraformCluster", Op: "drift", Result: ResultFailed, ErrorKind: "step", ErrorStep: "plan", Drift: &Changes{Update: 1}})
 	r.Decision("TerraformCluster", "apply", "NoState")
 	r.StateReadError("TerraformCluster", "encrypted")
 	r.OutputsInvalid("TerraformMachine", "OutputsInvalid")
@@ -174,10 +174,10 @@ func TestJobFinished(t *testing.T) {
 		Steps: []Step{{Name: "init", Seconds: 4}, {Name: "apply", Seconds: 50}}, ErrorKind: "step", ErrorStep: "apply"})
 	r.JobFinished(Job{Kind: "TerraformMachine", Op: "apply", Result: ResultSucceeded, Attempt: 2, Queue: 40 * time.Second,
 		Steps:   []Step{{Name: "init", Seconds: 3}, {Name: "apply", Seconds: -1}},
-		Changes: &Changes{Add: 2, Destroy: 1}})
+		Changes: &Changes{Create: 2, Delete: 1}})
 	// No result: unknown error kind, no step.
 	r.JobFinished(Job{Kind: "TerraformCluster", Op: "drift", Result: ResultDeadline, Duration: time.Hour})
-	r.JobFinished(Job{Kind: "TerraformCluster", Op: "drift", Result: ResultSucceeded, Drift: &Changes{Change: 3, Destroy: 1}})
+	r.JobFinished(Job{Kind: "TerraformCluster", Op: "drift", Result: ResultSucceeded, Drift: &Changes{Update: 3, Delete: 1}})
 	if n, err := testutil.GetCounterMetricValue(r.jobsTotal.WithLabelValues("TerraformMachine", "apply", ResultFailed)); err != nil || n != 1 {
 		t.Errorf("failed = %v (%v)", n, err)
 	}
@@ -186,14 +186,14 @@ func TestJobFinished(t *testing.T) {
 # TYPE captf_job_errors_total counter
 captf_job_errors_total{error_kind="step",kind="TerraformMachine",op="apply",step="apply"} 1
 captf_job_errors_total{error_kind="unknown",kind="TerraformCluster",op="drift",step="none"} 1
-# HELP captf_resources_changed_total [ALPHA] Resources an apply or destroy Job changed, by action (add, change, destroy, import), from the runtime's final summary line.
+# HELP captf_resources_changed_total [ALPHA] Resources an apply or destroy Job changed, by action (create, update, delete, import), from the runtime's final summary line.
 # TYPE captf_resources_changed_total counter
-captf_resources_changed_total{action="add",kind="TerraformMachine",op="apply"} 2
-captf_resources_changed_total{action="destroy",kind="TerraformMachine",op="apply"} 1
-# HELP captf_drift_resources_total [ALPHA] Resources a drift Job that detected drift found to add, change or destroy.
+captf_resources_changed_total{action="create",kind="TerraformMachine",op="apply"} 2
+captf_resources_changed_total{action="delete",kind="TerraformMachine",op="apply"} 1
+# HELP captf_drift_resources_total [ALPHA] Resources a drift Job that detected drift found to create, update, replace or delete.
 # TYPE captf_drift_resources_total counter
-captf_drift_resources_total{action="change",kind="TerraformCluster"} 3
-captf_drift_resources_total{action="destroy",kind="TerraformCluster"} 1
+captf_drift_resources_total{action="update",kind="TerraformCluster"} 3
+captf_drift_resources_total{action="delete",kind="TerraformCluster"} 1
 `
 	if err := testutil.GatherAndCompare(reg, strings.NewReader(want), JobErrorsName, ResourcesChangedName, DriftResourcesName); err != nil {
 		t.Error(err)
@@ -354,7 +354,7 @@ captf_remediation_requests_total{action="withdrawn"} 1
 func TestNilRecorder(t *testing.T) {
 	t.Parallel()
 	var r *Recorder
-	r.JobFinished(Job{Kind: "k", Op: "apply", Result: ResultFailed, Duration: time.Second, Changes: &Changes{Add: 1}, Drift: &Changes{}})
+	r.JobFinished(Job{Kind: "k", Op: "apply", Result: ResultFailed, Duration: time.Second, Changes: &Changes{Create: 1}, Drift: &Changes{}})
 	r.Decision("k", "none", "UpToDate")
 	r.StateReadError("k", "corrupt")
 	r.OutputsInvalid("k", "x")
@@ -384,7 +384,7 @@ func TestNilRecorder(t *testing.T) {
 func TestUnregisteredRecorder(t *testing.T) {
 	t.Parallel()
 	r := New()
-	r.JobFinished(Job{Kind: "k", Op: "apply", Result: ResultFailed, Duration: time.Second, Changes: &Changes{Add: 1}, Drift: &Changes{}})
+	r.JobFinished(Job{Kind: "k", Op: "apply", Result: ResultFailed, Duration: time.Second, Changes: &Changes{Create: 1}, Drift: &Changes{}})
 	r.Decision("k", "none", "UpToDate")
 	r.StateReadError("k", "corrupt")
 	r.OutputsInvalid("k", "x")

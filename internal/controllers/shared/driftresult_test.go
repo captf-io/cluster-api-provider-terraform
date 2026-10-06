@@ -57,7 +57,7 @@ func driftRun(d *runner.Drift) *runner.Result { return &runner.Result{Op: "drift
 // one.
 func TestSetDriftResults(t *testing.T) {
 	t.Parallel()
-	found := &runner.Drift{Detected: true, Add: 1, Change: 2, Destroy: 3}
+	found := &runner.Drift{Detected: true, Create: 1, Update: 2, Delete: 3}
 	for _, tt := range []struct {
 		name         string
 		action       infrav1.DriftAction
@@ -126,7 +126,7 @@ func TestSetDriftResults(t *testing.T) {
 // never for Report; a check newer than the apply wins.
 func TestDriftRemediationTransitions(t *testing.T) {
 	t.Parallel()
-	found := driftRun(&runner.Drift{Detected: true, Change: 1})
+	found := driftRun(&runner.Drift{Detected: true, Update: 1})
 	for _, tt := range []struct {
 		name   string
 		action infrav1.DriftAction
@@ -254,15 +254,15 @@ func TestAdvanceOnlyForward(t *testing.T) {
 // dropping empty and over-length addresses.
 func TestDriftSummary(t *testing.T) {
 	t.Parallel()
-	if s := driftSummary(nil); s.Add != nil || s.Resources != nil {
+	if s := driftSummary(nil); s.Create != nil || s.Resources != nil {
 		t.Errorf("nil drift = %+v", s)
 	}
-	if s := driftSummary(&runner.Drift{}); s.Add != nil {
+	if s := driftSummary(&runner.Drift{}); s.Create != nil {
 		t.Errorf("no drift = %+v", s)
 	}
 	long := strings.Repeat("x", maxAddressLength+1)
-	s := driftSummary(&runner.Drift{Detected: true, Add: 1, Resources: []string{"module.role.aws_instance.this", long, ""}})
-	if *s.Add != 1 || *s.Change != 0 || len(s.Resources) != 1 {
+	s := driftSummary(&runner.Drift{Detected: true, Create: 1, Resources: []string{"module.role.aws_instance.this", long, ""}})
+	if *s.Create != 1 || *s.Update != 0 || len(s.Resources) != 1 {
 		t.Errorf("summary = %+v", s)
 	}
 }

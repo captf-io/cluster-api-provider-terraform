@@ -493,7 +493,7 @@ func (e *clusterEnv) planFinished(job *batchv1.Job, hash string) {
 	e.t.Helper()
 	e.resultFinished(job, runner.Result{
 		Version: runner.ResultVersion, Op: runner.OpPlan, Steps: []runner.Step{{Name: "init"}, {Name: "plan", Exit: 2}, {Name: "show-json"}},
-		Plan: &runner.Plan{Hash: hash, Change: 1, Resources: []string{"module.role.aws_lb.this (update)"}},
+		Plan: &runner.Plan{Hash: hash, Update: 1, Resources: []string{"module.role.aws_lb.this (update)"}},
 	})
 }
 

@@ -27,7 +27,7 @@ import (
 // the plan's resources (halved until it fits, marked truncated), then the
 // drift resources, then the steps (keeping the first and the last), then
 // everything but version, op, error kind and the plan's hash and counts
-// (resources, outputs, imports and moves): without the hash a plan Job's
+// (resources, outputs, imports, moves and forgets): without the hash a plan Job's
 // result is lost, and the controller could only plan again; without the
 // output count an output-only plan would read as changing nothing. It
 // returns the resulting JSON bytes.
@@ -91,8 +91,9 @@ func Encode(r Result) []byte {
 	}
 	if r.Plan != nil {
 		minimal.Plan = &Plan{
-			Hash: r.Plan.Hash, Add: r.Plan.Add, Change: r.Plan.Change, Destroy: r.Plan.Destroy,
-			Outputs: r.Plan.Outputs, Import: r.Plan.Import, Move: r.Plan.Move, Truncated: r.Plan.Truncated,
+			Hash: r.Plan.Hash, Create: r.Plan.Create, Update: r.Plan.Update, Replace: r.Plan.Replace, Delete: r.Plan.Delete,
+			OutputChanges: r.Plan.OutputChanges, Import: r.Plan.Import, Move: r.Plan.Move, Forget: r.Plan.Forget,
+			Truncated: r.Plan.Truncated,
 		}
 	}
 	b, _ := json.Marshal(minimal)

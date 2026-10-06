@@ -176,7 +176,7 @@ func driftDetected(f *finished, action infrav1.DriftAction) metav1.Condition {
 	if action == infrav1.DriftActionRemediate {
 		c.Reason = infrav1.DriftPendingReason
 	}
-	c.Message = fmt.Sprintf("Job %s: %d to add, %d to change, %d to destroy", f.job.Name, d.Add, d.Change, d.Destroy)
+	c.Message = fmt.Sprintf("Job %s: %d to create, %d to update, %d to replace, %d to delete", f.job.Name, d.Create, d.Update, d.Replace, d.Delete)
 	return c
 }
 
@@ -199,7 +199,7 @@ func driftSummary(d *runner.Drift) infrav1.DriftSummary {
 	if d == nil || !d.Detected {
 		return infrav1.DriftSummary{}
 	}
-	s := infrav1.DriftSummary{Add: new(int32(d.Add)), Change: new(int32(d.Change)), Destroy: new(int32(d.Destroy))} // #nosec G115 -- drift resource counts, far below MaxInt32
+	s := infrav1.DriftSummary{Create: new(int32(d.Create)), Update: new(int32(d.Update)), Replace: new(int32(d.Replace)), Delete: new(int32(d.Delete))} // #nosec G115 -- drift resource counts, far below MaxInt32
 	for _, r := range d.Resources {
 		if r != "" && len(r) <= maxAddressLength {
 			s.Resources = append(s.Resources, r)

@@ -273,8 +273,8 @@ func run(ctx context.Context, o Options) (Result, int) {
 			secrets = append(secrets, planSecrets(p.SensitiveValues())...)
 			o.red = newRedactor(secrets)
 			o.emit(ctx, EventTypeNormal, EventPlanSummary, s.Name, "plan: %s", p.counts())
-			logger.Info("Plan computed", "hash", p.Hash, "add", p.Add, "change", p.Change, "destroy", p.Destroy,
-				"import", p.Import, "move", p.Move, "outputs", p.Outputs)
+			logger.Info("Plan computed", "hash", p.Hash, "create", p.Create, "update", p.Update, "replace", p.Replace,
+				"delete", p.Delete, "import", p.Import, "move", p.Move, "forget", p.Forget, "outputChanges", p.OutputChanges)
 		case o.Op == OpApply && s.Name == StepShowJSON && o.ExpectPlan != "":
 			p, err := ParsePlan(res.Stdout, planKey)
 			if err != nil {
@@ -345,7 +345,7 @@ func (o Options) stepFailed(ctx context.Context, step string, res StepResult, su
 // planSummary emits PlanSummary using ctx, for step and drift summary d:
 // counts only, never addresses or values.
 func (o Options) planSummary(ctx context.Context, step string, d *Drift) {
-	o.emit(ctx, EventTypeNormal, EventPlanSummary, step, "plan: %d to add, %d to change, %d to destroy", d.Add, d.Change, d.Destroy)
+	o.emit(ctx, EventTypeNormal, EventPlanSummary, step, "plan: %d to create, %d to update, %d to replace, %d to delete", d.Create, d.Update, d.Replace, d.Delete)
 }
 
 // fingerprints reports whether this run computes a plan fingerprint, and

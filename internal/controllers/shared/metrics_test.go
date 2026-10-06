@@ -146,22 +146,22 @@ func TestRecordFinishedResult(t *testing.T) {
 	applied.pod = podWith("{}", "")
 	applied.pod.Status.ContainerStatuses[0].State.Terminated.StartedAt = metav1.NewTime(applied.job.CreationTimestamp.Add(400 * time.Second))
 	destroyed := done("x", jobs.OpDestroy, true, t0, &runner.Result{Changes: &runner.Changes{Destroy: 4}})
-	drifted := done("d", jobs.OpDrift, true, t0, driftRun(&runner.Drift{Detected: true, Add: 1, Destroy: 2}))
+	drifted := done("d", jobs.OpDrift, true, t0, driftRun(&runner.Drift{Detected: true, Create: 1, Delete: 2}))
 	clean := done("c", jobs.OpDrift, true, t0, driftRun(&runner.Drift{}))
 	for _, f := range []finished{applied, destroyed, drifted, clean} {
 		recordFinished(d, "TerraformCluster", f, 1)
 	}
 	want := `
-# HELP captf_resources_changed_total [ALPHA] Resources an apply or destroy Job changed, by action (add, change, destroy, import), from the runtime's final summary line.
+# HELP captf_resources_changed_total [ALPHA] Resources an apply or destroy Job changed, by action (create, update, delete, import), from the runtime's final summary line.
 # TYPE captf_resources_changed_total counter
-captf_resources_changed_total{action="add",kind="TerraformCluster",op="apply"} 3
-captf_resources_changed_total{action="change",kind="TerraformCluster",op="apply"} 1
-captf_resources_changed_total{action="destroy",kind="TerraformCluster",op="destroy"} 4
+captf_resources_changed_total{action="create",kind="TerraformCluster",op="apply"} 3
+captf_resources_changed_total{action="update",kind="TerraformCluster",op="apply"} 1
+captf_resources_changed_total{action="delete",kind="TerraformCluster",op="destroy"} 4
 captf_resources_changed_total{action="import",kind="TerraformCluster",op="apply"} 2
-# HELP captf_drift_resources_total [ALPHA] Resources a drift Job that detected drift found to add, change or destroy.
+# HELP captf_drift_resources_total [ALPHA] Resources a drift Job that detected drift found to create, update, replace or delete.
 # TYPE captf_drift_resources_total counter
-captf_drift_resources_total{action="add",kind="TerraformCluster"} 1
-captf_drift_resources_total{action="destroy",kind="TerraformCluster"} 2
+captf_drift_resources_total{action="create",kind="TerraformCluster"} 1
+captf_drift_resources_total{action="delete",kind="TerraformCluster"} 2
 # HELP captf_job_queue_seconds [ALPHA] Time from a Job's creation to its source container's start: scheduling, image pulls and the runner copy. Not observed when the pod reports no start.
 # TYPE captf_job_queue_seconds histogram
 captf_job_queue_seconds_bucket{kind="TerraformCluster",op="apply",le="5"} 0
@@ -237,9 +237,9 @@ func TestJobMetricsCountedOnce(t *testing.T) {
 # HELP captf_jobs_total [ALPHA] Jobs completed, by result: succeeded, failed, deadline, interrupted (stopped from outside: a drain, eviction or deletion), blocked (a guarded apply, of a TerraformCluster or of a TerraformMachinePool's change of the cluster's exports, stopped before a plan that deletes or replaces resources, awaiting approval) or plan_changed (an apply approved for one plan planned other changes and stopped, applyPolicy Manual). Op plan is a plan Job that applies nothing.
 # TYPE captf_jobs_total counter
 captf_jobs_total{kind="TerraformMachine",op="apply",result="succeeded"} 1
-# HELP captf_resources_changed_total [ALPHA] Resources an apply or destroy Job changed, by action (add, change, destroy, import), from the runtime's final summary line.
+# HELP captf_resources_changed_total [ALPHA] Resources an apply or destroy Job changed, by action (create, update, delete, import), from the runtime's final summary line.
 # TYPE captf_resources_changed_total counter
-captf_resources_changed_total{action="add",kind="TerraformMachine",op="apply"} 2
+captf_resources_changed_total{action="create",kind="TerraformMachine",op="apply"} 2
 `
 		if err := testutil.GatherAndCompare(reg, strings.NewReader(want), metrics.JobsTotalName, metrics.ResourcesChangedName); err != nil {
 			t.Errorf("pass %d: %v", pass, err)

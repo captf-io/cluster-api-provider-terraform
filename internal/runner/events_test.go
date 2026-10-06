@@ -119,7 +119,7 @@ func TestRunEvents(t *testing.T) {
 				"RunStarted/drift", "StepStarted/init", "StepSucceeded/init", "StepStarted/apply-refresh-only", "StepSucceeded/apply-refresh-only",
 				"StepStarted/plan", "StepSucceeded/plan", "StepStarted/show-json", "StepSucceeded/show-json", "PlanSummary/show-json", "RunFinished/drift",
 			},
-			note: map[string]string{EventPlanSummary: "plan: 0 to add, 1 to change, 0 to destroy"},
+			note: map[string]string{EventPlanSummary: "plan: 0 to create, 1 to update, 0 to replace, 0 to delete"},
 		},
 		{
 			name: "drift without changes", op: OpDrift,
@@ -161,7 +161,7 @@ func TestRunEvents(t *testing.T) {
 				"StepStarted/plan", "StepSucceeded/plan", "StepStarted/show-json", "StepSucceeded/show-json", "PlanSummary/show-json", "RunFinished/apply",
 			},
 			warn: []string{EventRunFinished},
-			note: map[string]string{EventPlanSummary: "plan: 2 to add, 1 to change, 3 to destroy"},
+			note: map[string]string{EventPlanSummary: "plan: 0 to create, 1 to update, 2 to replace, 1 to delete"},
 		},
 	}
 	for _, c := range cases {

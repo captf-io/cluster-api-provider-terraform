@@ -251,7 +251,7 @@ func TestRunSequences(t *testing.T) {
 			steps: []string{"init", "apply-refresh-only", "plan", "show-json"}, calls: []string{"VERSION", "INIT", "APPLY_REFRESH_ONLY", "PLAN", "SHOW"},
 			check: func(t *testing.T, r Result, f fixture) {
 				d := r.Drift
-				if d == nil || !d.Detected || d.Add != 1 || d.Change != 1 || d.Destroy != 1 || !slices.Equal(d.Resources, []string{"module.role.a", "module.role.b"}) {
+				if d == nil || !d.Detected || d.Create != 0 || d.Update != 1 || d.Replace != 1 || d.Delete != 0 || !slices.Equal(d.Resources, []string{"module.role.a", "module.role.b"}) {
 					t.Errorf("drift = %+v", d)
 				}
 				if r.Steps[2].Exit != 2 {
@@ -268,7 +268,7 @@ func TestRunSequences(t *testing.T) {
 			steps: []string{"init", "apply-refresh-only", "plan", "show-json"}, calls: []string{"VERSION", "INIT", "APPLY_REFRESH_ONLY", "PLAN", "SHOW"},
 			check: func(t *testing.T, r Result, _ fixture) {
 				d := r.Drift
-				if d == nil || d.Detected || d.Add != 0 || d.Change != 0 || d.Destroy != 0 {
+				if d == nil || d.Detected || d.Create != 0 || d.Update != 0 || d.Replace != 0 || d.Delete != 0 {
 					t.Errorf("drift = %+v, want no drift detected", d)
 				}
 			}},
@@ -865,7 +865,7 @@ func TestParseDrift(t *testing.T) {
 		changes = append(changes, fmt.Sprintf(`{"address":"r.%d","change":{"actions":["create"]}}`, i))
 	}
 	d, err := ParseDrift([]byte(`{"resource_changes":[` + strings.Join(changes, ",") + `]}`))
-	if err != nil || d.Add != 30 || len(d.Resources) != MaxDriftResources {
+	if err != nil || d.Create != 30 || len(d.Resources) != MaxDriftResources {
 		t.Errorf("drift = %+v (err %v)", d, err)
 	}
 	if _, err := ParseDrift([]byte("{")); err == nil {

@@ -49,9 +49,10 @@ func planApproveCommand(kind string, obj client.Object, planHash string) string 
 		strings.ToLower(kind), obj.GetName(), obj.GetNamespace(), infrav1.ApprovePlanAnnotation, planHash)
 }
 
-// planCounts returns p formatted as "N to add, M to change, K to
-// destroy", followed by ", J output(s) to change" when the plan changes
-// outputs, so an output-only plan does not read as no changes.
+// planCounts returns p formatted as "N to create, M to update, K to
+// replace, L to delete", followed by the import, move and forget counts and
+// ", J output(s) to change" for those the plan has, so an output-only plan
+// does not read as no changes.
 func planCounts(p infrav1.PlanPreview) string {
 	n := func(v *int32) int32 {
 		if v == nil {
@@ -59,7 +60,15 @@ func planCounts(p infrav1.PlanPreview) string {
 		}
 		return *v
 	}
-	s := fmt.Sprintf("%d to add, %d to change, %d to destroy", n(p.Add), n(p.Change), n(p.Destroy))
+	s := fmt.Sprintf("%d to create, %d to update, %d to replace, %d to delete", n(p.Create), n(p.Update), n(p.Replace), n(p.Delete))
+	for _, c := range []struct {
+		n    *int32
+		verb string
+	}{{p.Import, "import"}, {p.Move, "move"}, {p.Forget, "forget"}} {
+		if v := n(c.n); v > 0 {
+			s += fmt.Sprintf(", %d to %s", v, c.verb)
+		}
+	}
 	if o := n(p.OutputChanges); o > 0 {
 		s += fmt.Sprintf(", %d output(s) to change", o)
 	}
@@ -97,8 +106,10 @@ func previewOf(f *finished) (infrav1.PlanPreview, bool) {
 	at := metav1.NewTime(jobs.FinishedAt(f.job))
 	p := infrav1.PlanPreview{
 		InputsHash: f.job.Annotations[state.InputsHashAnnotation], Job: f.job.Name, PlanHash: rp.Hash,
-		Add: new(int32(rp.Add)), Change: new(int32(rp.Change)), Destroy: new(int32(rp.Destroy)), // #nosec G115 -- plan resource counts, far below MaxInt32
-		OutputChanges: new(int32(rp.Outputs)), CreatedAt: &at, // #nosec G115 -- output-change count, far below MaxInt32
+		// #nosec G115 -- plan resource counts, far below MaxInt32
+		Create: new(int32(rp.Create)), Update: new(int32(rp.Update)), Replace: new(int32(rp.Replace)), Delete: new(int32(rp.Delete)),
+		Import: new(int32(rp.Import)), Move: new(int32(rp.Move)), Forget: new(int32(rp.Forget)),
+		OutputChanges: new(int32(rp.OutputChanges)), CreatedAt: &at,
 	}
 	truncated := rp.Truncated
 	for i, r := range rp.Resources {

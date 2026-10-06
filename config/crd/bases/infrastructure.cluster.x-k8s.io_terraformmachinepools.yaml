@@ -1193,22 +1193,23 @@ spec:
                     description: drift is set when a drift run found changes.
                     minProperties: 1
                     properties:
-                      add:
-                        description: add is the number of resources the plan would
+                      create:
+                        description: create is the number of resources the plan would
                           create.
                         format: int32
                         minimum: 0
                         type: integer
-                      change:
-                        description: change is the number of resources the plan would
-                          update in place.
+                      delete:
+                        description: |-
+                          delete is the number of resources the plan would delete, not counting
+                          replacements.
                         format: int32
                         minimum: 0
                         type: integer
-                      destroy:
+                      replace:
                         description: |-
-                          destroy is the number of resources the plan would destroy, counting
-                          replacements.
+                          replace is the number of resources the plan would replace: delete and
+                          create again. A replacement counts here only.
                         format: int32
                         minimum: 0
                         type: integer
@@ -1223,6 +1224,12 @@ spec:
                         minItems: 1
                         type: array
                         x-kubernetes-list-type: atomic
+                      update:
+                        description: update is the number of resources the plan would
+                          update in place.
+                        format: int32
+                        minimum: 0
+                        type: integer
                     type: object
                   error:
                     description: error is set when the run failed.

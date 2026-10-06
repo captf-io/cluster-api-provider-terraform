@@ -58,10 +58,10 @@ func recordFinished(d Deps, kind string, f finished, retry int) {
 			j.Steps = append(j.Steps, metrics.Step{Name: runner.StepLabel(s.Name), Seconds: s.Seconds})
 		}
 		if c := r.Changes; c != nil {
-			j.Changes = &metrics.Changes{Add: c.Add, Change: c.Change, Destroy: c.Destroy, Import: c.Import}
+			j.Changes = &metrics.Changes{Create: c.Add, Update: c.Change, Delete: c.Destroy, Import: c.Import}
 		}
 		if dr := r.Drift; jobs.OpOf(f.job) == jobs.OpDrift && dr != nil && dr.Detected {
-			j.Drift = &metrics.Changes{Add: dr.Add, Change: dr.Change, Destroy: dr.Destroy}
+			j.Drift = &metrics.Changes{Create: dr.Create, Update: dr.Update, Replace: dr.Replace, Delete: dr.Delete}
 		}
 	}
 	if !f.ok {

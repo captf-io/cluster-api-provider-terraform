@@ -48,18 +48,24 @@ const EmptyPlanHash = PlanHashPrefix + "e3b0c44298fc1c149afbf4c8996fb92427ae41e4
 // the summary is read from stays in the runner.
 type Plan struct {
 	// Hash is PlanHash of the plan's changes.
-	Hash    string `json:"hash"`
-	Add     int    `json:"add"`
-	Change  int    `json:"change"`
-	Destroy int    `json:"destroy"`
-	// Outputs is the number of root module outputs the plan changes.
-	Outputs int `json:"outputs,omitempty"`
-	// Import and Move are the numbers of resources the plan imports into
-	// the state and moves to a new address (a moved block). Neither counts
-	// in Add, Change or Destroy; a resource imported or moved and also
-	// changed counts there by its action as well.
+	Hash string `json:"hash"`
+	// Create, Update, Replace and Delete count the resources the plan
+	// creates, updates in place, replaces (either order) and deletes; a
+	// replace counts only in Replace.
+	Create  int `json:"create"`
+	Update  int `json:"update"`
+	Replace int `json:"replace,omitempty"`
+	Delete  int `json:"delete"`
+	// OutputChanges is the number of root module outputs the plan changes.
+	OutputChanges int `json:"outputChanges,omitempty"`
+	// Import, Move and Forget are the numbers of resources the plan imports
+	// into the state, moves to a new address (a moved block) and removes
+	// from the state without destroying them (a removed block). None counts
+	// in Create, Update, Replace or Delete; a resource imported or moved and
+	// also changed counts there by its action as well.
 	Import int `json:"import,omitempty"`
 	Move   int `json:"move,omitempty"`
+	Forget int `json:"forget,omitempty"`
 	// Resources are "<address> (<labels>)", sorted by address: the action
 	// (create, update, delete, replace, read or forget) unless a no-op,
 	// then "import" and "move" when the plan imports or moves the
@@ -161,7 +167,7 @@ func changeLabels(rc resourceChange) []string {
 
 // ParsePlan summarizes the `show -json` plan planJSON for review, and
 // returns the resulting Plan: counts as ParseDrift counts them, the numbers
-// of changed outputs and of imported and moved resources, the changed,
+// of changed outputs and of imported, moved and forgotten resources, the changed,
 // imported and moved resources, the sensitive values and
 // PlanHash, keyed with key. It returns a non-nil error when key is shorter
 // than a plan key (a fingerprint is never computed unkeyed) or planJSON is
@@ -178,7 +184,7 @@ func ParsePlan(planJSON, key []byte) (*Plan, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := &Plan{Add: d.Add, Change: d.Change, Destroy: d.Destroy}
+	p := &Plan{Create: d.Create, Update: d.Update, Replace: d.Replace, Delete: d.Delete}
 	f := &fingerprinter{key: key}
 	var entries []string
 	type listed struct{ address, line string }
@@ -195,6 +201,9 @@ func ParsePlan(planJSON, key []byte) (*Plan, error) {
 		if rc.Change.imports() {
 			p.Import++
 		}
+		if slices.Contains(rc.Change.Actions, "forget") {
+			p.Forget++
+		}
 		if rc.PreviousAddress != "" {
 			p.Move++
 		}
@@ -210,7 +219,7 @@ func ParsePlan(planJSON, key []byte) (*Plan, error) {
 			return nil, err
 		}
 		entries = append(entries, e)
-		p.Outputs++
+		p.OutputChanges++
 	}
 	p.Hash = PlanHash(entries)
 	if p.sensitive, err = planSensitive(plan); err != nil {
@@ -234,19 +243,22 @@ func planChangedSummary(approved string, p *Plan) string {
 		approved, p.Hash, p.counts()), MaxSummary)
 }
 
-// counts returns p's counts as "<n> to add, <n> to change, <n> to
-// destroy", followed by ", <n> to import", ", <n> to move" and ", <n>
-// output(s) to change" for those it has.
+// counts returns p's counts as "<n> to create, <n> to update, <n> to
+// replace, <n> to delete", followed by ", <n> to import", ", <n> to move",
+// ", <n> to forget" and ", <n> output(s) to change" for those it has.
 func (p *Plan) counts() string {
-	s := fmt.Sprintf("%d to add, %d to change, %d to destroy", p.Add, p.Change, p.Destroy)
+	s := fmt.Sprintf("%d to create, %d to update, %d to replace, %d to delete", p.Create, p.Update, p.Replace, p.Delete)
 	if p.Import > 0 {
 		s += fmt.Sprintf(", %d to import", p.Import)
 	}
 	if p.Move > 0 {
 		s += fmt.Sprintf(", %d to move", p.Move)
 	}
-	if p.Outputs > 0 {
-		s += fmt.Sprintf(", %d output(s) to change", p.Outputs)
+	if p.Forget > 0 {
+		s += fmt.Sprintf(", %d to forget", p.Forget)
+	}
+	if p.OutputChanges > 0 {
+		s += fmt.Sprintf(", %d output(s) to change", p.OutputChanges)
 	}
 	return s
 }

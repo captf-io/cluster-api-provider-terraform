@@ -232,21 +232,43 @@ type PlanPreview struct {
 	// +kubebuilder:validation:MaxLength=128
 	PlanHash string `json:"planHash,omitempty"`
 
-	// add is the number of resources the plan creates.
+	// create is the number of resources the plan creates.
 	// +optional
 	// +kubebuilder:validation:Minimum=0
-	Add *int32 `json:"add,omitempty"`
+	Create *int32 `json:"create,omitempty"`
 
-	// change is the number of resources the plan updates in place.
+	// update is the number of resources the plan updates in place.
 	// +optional
 	// +kubebuilder:validation:Minimum=0
-	Change *int32 `json:"change,omitempty"`
+	Update *int32 `json:"update,omitempty"`
 
-	// destroy is the number of resources the plan destroys, counting
+	// replace is the number of resources the plan replaces: deletes and
+	// creates again. A replacement counts here only.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	Replace *int32 `json:"replace,omitempty"`
+
+	// delete is the number of resources the plan deletes, not counting
 	// replacements.
 	// +optional
 	// +kubebuilder:validation:Minimum=0
-	Destroy *int32 `json:"destroy,omitempty"`
+	Delete *int32 `json:"delete,omitempty"`
+
+	// import is the number of resources the plan imports into the state.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	Import *int32 `json:"import,omitempty"`
+
+	// move is the number of resources a moved block moves to a new address.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	Move *int32 `json:"move,omitempty"`
+
+	// forget is the number of resources the plan removes from the state
+	// without destroying them.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	Forget *int32 `json:"forget,omitempty"`
 
 	// outputChanges is the number of root module outputs the plan changes.
 	// An output change alone still needs approval: cluster exports feed

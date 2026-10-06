@@ -321,7 +321,7 @@ func TestDestructivePlanBlocksCostNoBackoff(t *testing.T) {
 // hash lets it run.
 func TestDestructiveRemediationBlocked(t *testing.T) {
 	t.Parallel()
-	summary := "Job d: 0 to add, 0 to change, 1 to destroy"
+	summary := "Job d: 0 to create, 0 to update, 0 to replace, 1 to delete"
 	e := newBlockedEnv(t, "", true, func(m *infrav1.TerraformMachine) {
 		m.Status.LastDriftCheck = &metav1.Time{Time: t0.Add(-time.Hour)}
 		m.Status.Conditions = append(m.Status.Conditions, metav1.Condition{

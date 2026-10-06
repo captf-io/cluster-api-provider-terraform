@@ -77,10 +77,14 @@ type Step struct {
 
 // Drift summarizes a drift plan.
 type Drift struct {
-	Detected  bool     `json:"detected"`
-	Add       int      `json:"add"`
-	Change    int      `json:"change"`
-	Destroy   int      `json:"destroy"`
+	Detected bool `json:"detected"`
+	// Create, Update, Replace and Delete count the resources the plan
+	// creates, updates in place, replaces and deletes; a replace counts only
+	// in Replace.
+	Create    int      `json:"create"`
+	Update    int      `json:"update"`
+	Replace   int      `json:"replace"`
+	Delete    int      `json:"delete"`
 	Resources []string `json:"resources"`
 }
 

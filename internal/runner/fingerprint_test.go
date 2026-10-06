@@ -272,14 +272,14 @@ func TestNormMarker(t *testing.T) {
 func TestPlanHashOutputs(t *testing.T) {
 	t.Parallel()
 	p := mustPlan(t, `{"output_changes":{"endpoint":{"actions":["update"],"before":"a","after":"b"}},"resource_changes":[]}`)
-	if p.Hash == EmptyPlanHash || p.Outputs != 1 || p.Add+p.Change+p.Destroy != 0 || len(p.Resources) != 0 {
+	if p.Hash == EmptyPlanHash || p.OutputChanges != 1 || p.Create+p.Update+p.Replace+p.Delete != 0 || len(p.Resources) != 0 {
 		t.Errorf("output-only plan = %+v", p)
 	}
 	q := mustPlan(t, `{"output_changes":{"endpoint":{"actions":["update"],"before":"a","after":"c"}}}`)
 	if q.Hash == p.Hash {
 		t.Error("output values do not reach the hash")
 	}
-	if n := mustPlan(t, `{"output_changes":{"endpoint":{"actions":["no-op"],"before":"a","after":"a"}}}`); n.Hash != EmptyPlanHash || n.Outputs != 0 {
+	if n := mustPlan(t, `{"output_changes":{"endpoint":{"actions":["no-op"],"before":"a","after":"a"}}}`); n.Hash != EmptyPlanHash || n.OutputChanges != 0 {
 		t.Errorf("output no-op plan = %+v", n)
 	}
 	if !strings.Contains(planChangedSummary("p2:x", p), "1 output(s) to change") {

@@ -85,7 +85,7 @@ func TestPlanHashImportsAndMoves(t *testing.T) {
 		nullImport = `{"resource_changes":[{"address":"module.role.y","change":{"actions":["no-op"],"importing":null}}]}`
 	)
 	imp := mustPlan(t, importOnly)
-	if imp.Hash == EmptyPlanHash || imp.Import != 1 || imp.Add+imp.Change+imp.Destroy+imp.Move != 0 ||
+	if imp.Hash == EmptyPlanHash || imp.Import != 1 || imp.Create+imp.Update+imp.Replace+imp.Delete+imp.Move != 0 ||
 		!slices.Equal(imp.Resources, []string{"module.role.y (import)"}) {
 		t.Errorf("import-only plan = %+v", imp)
 	}
@@ -99,14 +99,14 @@ func TestPlanHashImportsAndMoves(t *testing.T) {
 		t.Error("two import identities hash alike")
 	}
 	mv := mustPlan(t, moveOnly)
-	if mv.Hash == EmptyPlanHash || mv.Move != 1 || mv.Add+mv.Change+mv.Destroy+mv.Import != 0 ||
+	if mv.Hash == EmptyPlanHash || mv.Move != 1 || mv.Create+mv.Update+mv.Replace+mv.Delete+mv.Import != 0 ||
 		!slices.Equal(mv.Resources, []string{"module.role.new (move)"}) {
 		t.Errorf("move-only plan = %+v", mv)
 	}
 	if mv.Hash == mustPlan(t, moveOther).Hash {
 		t.Error("two moves from different addresses hash alike")
 	}
-	if b := mustPlan(t, both); b.Change != 1 || b.Import != 1 || b.Move != 1 ||
+	if b := mustPlan(t, both); b.Update != 1 || b.Import != 1 || b.Move != 1 ||
 		!slices.Equal(b.Resources, []string{"module.role.z (update, import, move)"}) {
 		t.Errorf("updated, imported and moved = %+v", b)
 	}
@@ -126,7 +126,7 @@ func TestParsePlan(t *testing.T) {
 	t.Parallel()
 	p := mustPlan(t, destructivePlan)
 	want := []string{"module.role.lb (replace)", "module.role.net (replace)", "module.role.old (delete)", "module.role.tags (update)"}
-	if p.Add != 2 || p.Change != 1 || p.Destroy != 3 || !slices.Equal(p.Resources, want) || p.Truncated {
+	if p.Create != 0 || p.Update != 1 || p.Replace != 2 || p.Delete != 1 || !slices.Equal(p.Resources, want) || p.Truncated {
 		t.Errorf("plan = %+v", p)
 	}
 	var changes []string
@@ -134,7 +134,7 @@ func TestParsePlan(t *testing.T) {
 		changes = append(changes, fmt.Sprintf(`{"address":"r.%03d","change":{"actions":["create"]}}`, i))
 	}
 	big, err := ParsePlan([]byte(`{"resource_changes":[`+strings.Join(changes, ",")+`]}`), []byte(testPlanKey))
-	if err != nil || big.Add != MaxPlanResources+5 || len(big.Resources) != MaxPlanResources || !big.Truncated || big.Resources[0] != "r.000 (create)" {
+	if err != nil || big.Create != MaxPlanResources+5 || len(big.Resources) != MaxPlanResources || !big.Truncated || big.Resources[0] != "r.000 (create)" {
 		t.Errorf("big plan = %d resources, truncated %v, %v", len(big.Resources), big.Truncated, err)
 	}
 	if _, err := ParsePlan([]byte("{"), []byte(testPlanKey)); err == nil {
@@ -159,7 +159,7 @@ func TestRunPlan(t *testing.T) {
 		t.Errorf("calls = %v", got)
 	}
 	want := mustPlan(t, destructivePlan)
-	if r.Plan == nil || r.Plan.Hash != want.Hash || r.Plan.Destroy != 3 || len(r.Plan.Resources) != 4 {
+	if r.Plan == nil || r.Plan.Hash != want.Hash || r.Plan.Replace != 2 || len(r.Plan.Resources) != 4 {
 		t.Errorf("plan = %+v", r.Plan)
 	}
 	for _, out := range []string{log.String(), stderr.String(), f.stdout.String(), string(Encode(r))} {
@@ -256,7 +256,7 @@ func TestRunExpectPlan(t *testing.T) {
 // even in the minimal document.
 func TestEncodePlan(t *testing.T) {
 	t.Parallel()
-	p := &Plan{Hash: EmptyPlanHash, Add: 70, Change: 1, Destroy: 2, Outputs: 3, Import: 4, Move: 5}
+	p := &Plan{Hash: EmptyPlanHash, Create: 70, Update: 1, Replace: 6, Delete: 2, OutputChanges: 3, Import: 4, Move: 5, Forget: 7}
 	for i := range MaxPlanResources {
 		p.Resources = append(p.Resources, fmt.Sprintf("module.role.aws_security_group_rule.%s[%d] (create)", strings.Repeat("x", 60), i))
 	}
@@ -266,14 +266,27 @@ func TestEncodePlan(t *testing.T) {
 	if len(b) > MaxResultBytes || json.Unmarshal(b, &got) != nil {
 		t.Fatalf("encoded %d bytes", len(b))
 	}
-	if got.Plan == nil || got.Plan.Hash != p.Hash || got.Plan.Add != 70 || !got.Plan.Truncated ||
+	if got.Plan == nil || got.Plan.Hash != p.Hash || got.Plan.Create != 70 || !got.Plan.Truncated ||
 		len(got.Plan.Resources) == 0 || len(got.Plan.Resources) >= MaxPlanResources {
 		t.Errorf("plan = %+v", got.Plan)
 	}
 	huge := Result{Version: 1, Op: OpPlan, Image: ResultImage{Ref: strings.Repeat("r", 5000)}, Plan: p}
 	var minimal Result
-	if err := json.Unmarshal(Encode(huge), &minimal); err != nil || minimal.Plan == nil || minimal.Plan.Hash != p.Hash || minimal.Plan.Destroy != 2 ||
-		minimal.Plan.Outputs != 3 || minimal.Plan.Import != 4 || minimal.Plan.Move != 5 || !minimal.Plan.Truncated || minimal.Plan.Resources != nil {
+	if err := json.Unmarshal(Encode(huge), &minimal); err != nil || minimal.Plan == nil || minimal.Plan.Hash != p.Hash || minimal.Plan.Delete != 2 || minimal.Plan.Replace != 6 || minimal.Plan.Forget != 7 ||
+		minimal.Plan.OutputChanges != 3 || minimal.Plan.Import != 4 || minimal.Plan.Move != 5 || !minimal.Plan.Truncated || minimal.Plan.Resources != nil {
 		t.Errorf("minimal = %+v, %v", minimal.Plan, err)
+	}
+}
+
+// TestParsePlanForget: a resource a removed block takes out of the state
+// without destroying it counts in Forget, and in no other count.
+func TestParsePlanForget(t *testing.T) {
+	t.Parallel()
+	p := mustPlan(t, `{"resource_changes":[{"address":"a.b","change":{"actions":["forget"]}}]}`)
+	if p.Forget != 1 || p.Create+p.Update+p.Replace+p.Delete != 0 || p.Hash == EmptyPlanHash {
+		t.Errorf("forget plan = %+v", p)
+	}
+	if !strings.Contains(p.counts(), "1 to forget") {
+		t.Errorf("counts = %q", p.counts())
 	}
 }

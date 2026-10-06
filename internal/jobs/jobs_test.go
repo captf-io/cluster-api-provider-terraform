@@ -757,7 +757,7 @@ func TestParseResult(t *testing.T) {
 	t.Parallel()
 	valid := `{"version":1,"op":"drift","image":{"ref":"r:v1","providersMirror":true},"runtime":{"command":["/captf/runtime"],"version":"1.16.4"},` +
 		`"steps":[{"name":"init","exit":0,"seconds":4.1},{"name":"plan","exit":2,"seconds":9.8}],` +
-		`"drift":{"detected":true,"add":0,"change":1,"destroy":0,"resources":["module.role.x"]},"error":null}`
+		`"drift":{"detected":true,"create":0,"update":1,"replace":0,"delete":0,"resources":["module.role.x"]},"error":null}`
 	r, err := ParseResult(podWith(valid, ""))
 	if err != nil {
 		t.Fatalf("ParseResult: %v", err)

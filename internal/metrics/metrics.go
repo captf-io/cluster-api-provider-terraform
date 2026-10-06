@@ -130,9 +130,10 @@ const (
 
 // Actions, the action label of the resource counters.
 const (
-	ActionAdd     = "add"
-	ActionChange  = "change"
-	ActionDestroy = "destroy"
+	ActionCreate  = "create"
+	ActionUpdate  = "update"
+	ActionReplace = "replace"
+	ActionDelete  = "delete"
 	ActionImport  = "import"
 )
 
@@ -168,8 +169,8 @@ func Specs() []Spec {
 		{JobErrorsName, "counter", []string{"kind", "op", "error_kind", "step"}, "Jobs that did not succeed, by the runner's error kind (step, image-layout, interrupted, blocked, plan-changed; deadline or unknown without a result) and failing step (none when no step failed)."},
 		{JobsActiveName, "gauge", []string{"kind", "op"}, "Jobs currently running, counted from the Job cache at scrape time."},
 		{JobAttemptsName, "histogram", []string{"kind", "op"}, "Retry number of a Job that succeeded: 1 plus the failed Jobs of its op since that op last succeeded (interrupted Jobs do not count)."},
-		{ResourcesChangedName, "counter", []string{"kind", "op", "action"}, "Resources an apply or destroy Job changed, by action (add, change, destroy, import), from the runtime's final summary line."},
-		{DriftResourcesName, "counter", []string{"kind", "action"}, "Resources a drift Job that detected drift found to add, change or destroy."},
+		{ResourcesChangedName, "counter", []string{"kind", "op", "action"}, "Resources an apply or destroy Job changed, by action (create, update, delete, import), from the runtime's final summary line."},
+		{DriftResourcesName, "counter", []string{"kind", "action"}, "Resources a drift Job that detected drift found to create, update, replace or delete."},
 		{DecisionsName, "counter", []string{"kind", "op", "reason"}, "What the reconcile decided to run (op none: nothing) and why."},
 		{StateReadErrorsName, "counter", []string{"kind", "reason"}, "State reads that turned unreadable: inconsistent, encrypted or corrupt (an unsupported state version counts as corrupt), lost (a provisioned object's state is gone) or locked (held by a holder that is not this object's runner)."},
 		{OutputsInvalidName, "counter", []string{"kind", "reason"}, "Outputs that turned invalid against the module contract."},
@@ -389,12 +390,14 @@ type Step struct {
 
 // Changes counts resources by action.
 type Changes struct {
-	Add, Change, Destroy, Import int
+	Create, Update, Replace, Delete, Import int
 }
 
 // byAction returns c's counts keyed by their action label.
 func (c Changes) byAction() map[string]int {
-	return map[string]int{ActionAdd: c.Add, ActionChange: c.Change, ActionDestroy: c.Destroy, ActionImport: c.Import}
+	return map[string]int{
+		ActionCreate: c.Create, ActionUpdate: c.Update, ActionReplace: c.Replace, ActionDelete: c.Delete, ActionImport: c.Import,
+	}
 }
 
 // JobFinished records j, a Job seen finished for the first time: its
