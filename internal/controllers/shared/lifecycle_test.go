@@ -55,10 +55,11 @@ func TestPlanWaitKeptThroughChecks(t *testing.T) {
 	p := &runner.Plan{Hash: runner.PlanHash([]string{"module.role.tags|update"}), Update: 1, Resources: []string{"module.role.tags (update)"}}
 	e.finishRunner(t, plan, jobs.Succeeded, t0.Add(-time.Minute), planResult(runner.OpPlan, p, ""))
 
+	name := planName(testName, plan, p.Hash)
 	waits := func(pass string) {
 		t.Helper()
-		if c := planApplyReason(t, e); c == nil || c.Reason != infrav1.PlanAwaitingApprovalReason || !namesJob(c.Message, plan) {
-			t.Errorf("%s: ApplyJobSucceeded = %+v, want PlanAwaitingApproval for %s", pass, c, plan)
+		if c := planApplyReason(t, e); c == nil || c.Reason != infrav1.PlanAwaitingApprovalReason || !strings.HasPrefix(c.Message, "TerraformPlan "+name+" ") {
+			t.Errorf("%s: ApplyJobSucceeded = %+v, want PlanAwaitingApproval for %s", pass, c, name)
 		}
 	}
 	e.reconcile(t, remediate)
@@ -70,7 +71,7 @@ func TestPlanWaitKeptThroughChecks(t *testing.T) {
 	waits("drift running")
 
 	// Approved: the wait is over even before the next decision.
-	e.approvePlan(t, p.Hash)
+	e.approve(t, name, "alice")
 	e.reconcile(t, remediate)
 	if c := planApplyReason(t, e); c == nil || c.Reason != infrav1.ApplySucceededReason {
 		t.Errorf("approved: ApplyJobSucceeded = %+v, want the last apply's result", c)
@@ -144,9 +145,10 @@ func TestChecksWithoutDurableInputs(t *testing.T) {
 	}
 }
 
-// TestMismatchedApprovalNoted: an approval annotation that names another
-// hash than the one an apply waits for is named in the waiting condition,
-// once however many passes keep it, and the note goes with it.
+// TestMismatchedApprovalNoted: a destructive-plan approval annotation that
+// names another hash than the one an apply waits for is named in the
+// waiting condition, once however many passes keep it, and the note goes
+// with it.
 func TestMismatchedApprovalNoted(t *testing.T) {
 	t.Parallel()
 	t.Run("destructive plan", func(t *testing.T) {
@@ -181,24 +183,6 @@ func TestMismatchedApprovalNoted(t *testing.T) {
 		}
 		if c := reconcile(); strings.Contains(c.Message, "annotation names") {
 			t.Errorf("approval removed: ApplyJobSucceeded = %q", c.Message)
-		}
-	})
-	t.Run("plan", func(t *testing.T) {
-		t.Parallel()
-		e := newPlanEnv(t, "h1:old")
-		e.reconcile(t, nil)
-		plan := e.newest(t)
-		p := &runner.Plan{Hash: runner.PlanHash([]string{"module.role.lb|update"}), Update: 1, Resources: []string{"module.role.lb (update)"}}
-		e.finishRunner(t, plan, jobs.Succeeded, t0.Add(-time.Minute), planResult(runner.OpPlan, p, ""))
-		e.approvePlan(t, "p1:another")
-		e.reconcile(t, nil)
-		note := "resources). The " + infrav1.ApprovePlanAnnotation + ` annotation names "p1:another", which does not match ` + p.Hash + ". Nothing is applied"
-		for pass := range 2 {
-			if c := planApplyReason(t, e); c == nil || c.Reason != infrav1.PlanAwaitingApprovalReason || strings.Count(c.Message, note) != 1 ||
-				!strings.HasSuffix(c.Message, "="+p.Hash+" --overwrite") {
-				t.Errorf("pass %d: ApplyJobSucceeded = %+v, want one note %q before the command", pass, c, note)
-			}
-			e.reconcile(t, nil)
 		}
 	})
 }

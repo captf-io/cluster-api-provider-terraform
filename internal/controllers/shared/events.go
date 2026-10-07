@@ -81,18 +81,23 @@ const (
 	// succeeded and its approval annotation was removed.
 	EventDestructivePlanApprovalConsumed = "DestructivePlanApprovalConsumed"
 	// EventPlanReady: a plan Job planned a TerraformCluster's change under
-	// applyPolicy Manual (counts, plan hash, the approve command); once
-	// per plan Job.
+	// applyPolicy Manual, and its TerraformPlan waits for approval (counts,
+	// the plan, the approve command), or the plan changes nothing and needs
+	// none; once per plan.
 	EventPlanReady = "PlanReady"
-	// EventPlanApproved: the apply of an approved plan, or of an approved
-	// destructive plan, started.
+	// EventPlanApproved: a TerraformPlan of the object was approved (names
+	// the approver), or the apply of an approved destructive plan started.
 	EventPlanApproved = "PlanApproved"
-	// EventPlanApplied: the approved plan was applied and its approval
-	// annotation removed.
+	// EventPlanApplied: the apply of an approved TerraformPlan succeeded;
+	// the plan is Applied.
 	EventPlanApplied = "PlanApplied"
 	// EventPlanChanged: an approved apply planned other changes and stopped
-	// before applying them; once per such Job.
+	// before applying them; its TerraformPlan is Failed. Once per such Job.
 	EventPlanChanged = "PlanChanged"
+	// EventPlanSuperseded: a TerraformPlan of the object was superseded,
+	// by a newer plan or because it no longer applies; a Warning when it
+	// was approved, since its approval applied nothing.
+	EventPlanSuperseded = "PlanSuperseded"
 
 	// EventDeletionStarted: the first reconcile with a deletionTimestamp.
 	EventDeletionStarted = "DeletionStarted"
@@ -225,7 +230,7 @@ func DocumentedEvents() []string {
 	return []string{
 		EventJobCreated, EventJobSucceeded, EventJobFailed, EventJobInterrupted, EventJobDeadlineExceeded,
 		EventStuckJobDeleted, EventDestructivePlanBlocked, EventDestructivePlanApprovalConsumed,
-		EventPlanReady, EventPlanApproved, EventPlanApplied, EventPlanChanged,
+		EventPlanReady, EventPlanApproved, EventPlanApplied, EventPlanChanged, EventPlanSuperseded,
 		EventWaitingForRunLease, EventWaitingForClusterOperation, EventWaitingForMachineOperations,
 		EventDeletionStarted, EventDestroyed, EventFinalizerRemoved, EventInfrastructureAbandoned, EventPaused, EventResumed, EventProvisioned,
 		EventProviderIDSet, EventControlPlaneEndpointSet, EventFailureDomainsChanged, EventExportsNotPublished,

@@ -75,9 +75,18 @@ const (
 	// whose plan could not be read (no result: the pod was gone). It counts
 	// as a failure, so the next plan Job backs off instead of looping.
 	PlanUnreadableAnnotation = "captf.io/plan-unreadable"
-	// ApprovedPlanAnnotation records, on an apply Job under applyPolicy
-	// Manual, the plan hash it had to plan again (--expect-plan).
+	// ApprovedPlanAnnotation records, on an approved apply Job, the plan
+	// hash it had to plan again (--expect-plan).
 	ApprovedPlanAnnotation = "captf.io/approved-plan"
+	// PlanAnnotation names, on an apply Job started for an approved
+	// TerraformPlan, that plan: the Job's success applies it, and its
+	// finding the plan changed fails it (syncPlans).
+	PlanAnnotation = "captf.io/plan"
+	// PlanHashAnnotation records, on a bookkept Job whose result carried a
+	// plan (a plan Job, or a blocked or plan-changed apply), the plan's
+	// hash: its result is not read again, and an empty plan, which becomes
+	// no TerraformPlan, must still be seen (JobsView.EmptyPlan).
+	PlanHashAnnotation = "captf.io/plan-hash"
 	// ApprovalHashAnnotation records, on a TerraformMachinePool apply Job
 	// guarded for a change of the cluster's exports, the hash its approval
 	// must name (hash.Approval: the inputs hash without bootstrap_data).
@@ -180,10 +189,9 @@ type Bookkeeping struct {
 	CurrentHash string
 	// lastRestore is the newest finished restore Job; nil when none.
 	lastRestore *finished
-	// lastPlan is the newest finished Job that made a plan for review (a
-	// plan Job, or an apply whose approved plan changed) after the newest
-	// successful apply; nil when none.
-	lastPlan *finished
+	// madePlans names, by the finished Job read this pass that made it, the
+	// TerraformPlan of its plan (recordPlans); nil when none.
+	madePlans map[string]string
 	// newestJob names the newest finished Job, the source a state backup
 	// taken this pass records; "" when none.
 	newestJob string
@@ -306,7 +314,7 @@ func Bookkeep(ctx context.Context, d Deps, k Kind, eff EffectiveConfig, suffix s
 	}
 	setDriftJob(obj, done)
 	bk.restores(d, k, done)
-	bk.plans(d, k, done)
+	bk.View.EmptyPlan = emptyPlan(done)
 	if len(done) > 0 {
 		bk.newestJob = done[0].job.Name
 	}
@@ -407,6 +415,9 @@ func (bk *Bookkeeping) MarkBookkept(ctx context.Context, c client.Client) error 
 		}
 		if f.planUnreadable {
 			metav1.SetMetaDataAnnotation(&job.ObjectMeta, PlanUnreadableAnnotation, "true")
+		}
+		if f.result != nil && f.result.Plan != nil && f.result.Plan.Hash != "" {
+			metav1.SetMetaDataAnnotation(&job.ObjectMeta, PlanHashAnnotation, f.result.Plan.Hash)
 		}
 		err := c.Patch(ctx, job, client.MergeFrom(before))
 		switch {
@@ -645,12 +656,8 @@ func applyDestroyCondition(f finished, kind string, obj client.Object) metav1.Co
 		c.Message += ": " + blockedMessage(f, kind, obj)
 		return c
 	case f.planChanged:
-		if p, ok := previewOf(&f); ok {
-			return planCondition(p, true, kind, obj)
-		}
 		c.Status, c.Reason = metav1.ConditionUnknown, infrav1.PlanChangedReason
-		c.Message += ": the plan changed since it was approved, so nothing was applied; approve the new plan in status.plan with the " +
-			infrav1.ApprovePlanAnnotation + " annotation"
+		c.Message += ": " + planChangedLead(f.job)
 		return c
 	case f.ok && destroy:
 		c.Status, c.Reason = metav1.ConditionTrue, infrav1.DestroySucceededReason

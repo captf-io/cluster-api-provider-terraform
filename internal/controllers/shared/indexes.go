@@ -117,6 +117,7 @@ func SetupIndexes(ctx context.Context, mgr ctrl.Manager) error {
 		{&infrav1.TerraformMachine{}, VariablesSourceIndex, MachineVariablesSourceIndexer},
 		{&infrav1.TerraformMachinePool{}, IdentityIndex, PoolIdentityIndexer},
 		{&infrav1.TerraformMachinePool{}, VariablesSourceIndex, PoolVariablesSourceIndexer},
+		{&infrav1.TerraformPlan{}, PlanTargetIndex, PlanTargetIndexer},
 	} {
 		if err := mgr.GetFieldIndexer().IndexField(ctx, ix.obj, ix.field, ix.fn); err != nil {
 			return fmt.Errorf("index %T by %s: %w", ix.obj, ix.field, err)

@@ -19,9 +19,9 @@ package shared
 import (
 	"cmp"
 	"hash/fnv"
-	"strings"
 	"time"
 
+	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/jobs"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/runner"
 )
@@ -67,22 +67,32 @@ type Decision struct {
 	RequeueAfter time.Duration
 	// Reason explains the decision for logs.
 	Reason string
-	// ExpectPlan is the approved plan hash an apply under applyPolicy
-	// Manual must plan again before it applies (--expect-plan); "" for
-	// every other decision.
+	// ExpectPlan is the plan hash an approved apply must plan again before
+	// it applies (--expect-plan): the approved TerraformPlan's, or the empty
+	// plan's under applyPolicy Manual; "" for every other decision.
 	ExpectPlan string
+	// Plan names the live TerraformPlan the decision is about: the one an
+	// apply waits for, or applies once approved (recorded on its Job as
+	// PlanAnnotation); "" when none.
+	Plan string
 	// PlanFlow is true for every decision of a gated apply (applyPolicy
 	// Manual): its plan Job, the wait for the approval, the approved apply,
-	// or their backoff. status.plan is kept only while it is.
+	// or their backoff.
 	PlanFlow bool
 }
 
-// PlanView is what DecideOp needs from status.plan.
+// PlanView is what DecideOp needs from the object's live TerraformPlan.
 type PlanView struct {
+	// Name is the TerraformPlan's name.
+	Name string
+	// Reason is why the plan waits for an approval (spec.reason).
+	Reason infrav1.PlanReason
 	// InputsHash is the hash of the inputs the plan was made for.
 	InputsHash string
 	// PlanHash is the plan's fingerprint (runner.PlanHash).
 	PlanHash string
+	// Approved is spec.approved.
+	Approved bool
 }
 
 // StateView is what DecideOp needs from state.
@@ -135,6 +145,10 @@ type JobsView struct {
 	// pool apply guarded for a change of the cluster's exports
 	// (ApprovalHashAnnotation); "" otherwise.
 	BlockedApproval string
+	// EmptyPlan is the inputs hash the newest plan planned without any
+	// change, when no apply finished after it (emptyPlan): such a plan
+	// needs no approval, and makes no TerraformPlan. "" otherwise.
+	EmptyPlan string
 }
 
 // DecideInput is everything DecideOp reads.
@@ -200,14 +214,12 @@ type DecideInput struct {
 	// for a restore (which Restore then starts) or for the infrastructure
 	// to be abandoned.
 	StateHeld bool
-	// ManualApply is applyPolicy Manual: every apply but the first (no
-	// state) runs only once the plan of its inputs is approved.
+	// ManualApply is a TerraformCluster's applyPolicy Manual: every apply
+	// but the first (no state) runs only once the plan of its inputs is
+	// approved.
 	ManualApply bool
-	// Plan is status.plan; nil when no plan is recorded.
+	// Plan is the object's live TerraformPlan; nil when none.
 	Plan *PlanView
-	// ApprovedPlan is the object's captf.io/approve-plan annotation: the
-	// plan hash approved for an apply.
-	ApprovedPlan string
 }
 
 // ReasonRestoreRequested is the decision reason of a restore.
@@ -254,11 +266,12 @@ const ReasonDeletionHeld = "DeletionHeld"
 //
 // Under applyPolicy Manual (ManualApply) every apply but the first (no
 // state: nothing to break yet) is gated instead (gatedApply): a plan Job
-// plans the current inputs, the apply waits (PlanAwaitingApproval, at most
-// RetryMax) until ApprovedPlan names the plan's hash, and then runs with
-// ExpectPlan. A plan without changes needs no approval. The wait keeps or
-// pauses the schedule as a blocked apply does, and the destructive guard's
-// block does not apply: the plan's approval covers its deletes.
+// plans the current inputs, and its plan becomes a TerraformPlan; the
+// apply waits (PlanAwaitingApproval, at most RetryMax) until that plan is
+// approved, and then runs with ExpectPlan. A plan without changes needs no
+// approval. The wait keeps or pauses the schedule as a blocked apply does,
+// and the destructive guard's block does not apply: the plan's approval
+// covers its deletes.
 //
 // It returns the Decision for the reconciler to act on.
 func DecideOp(in DecideInput) Decision {
@@ -304,16 +317,16 @@ func decide(in DecideInput) (Decision, string) {
 		// until the next successful drift check resets the count.
 		apply = "DriftRemediation"
 	}
-	// waiting is the reason an apply waits for an approval; "" when none
-	// does.
-	var waiting string
+	// waiting is the reason an apply waits for an approval, "" when none
+	// does, and plan the TerraformPlan it waits for.
+	var waiting, plan string
 	switch {
 	case apply != "" && apply != "NoState" && in.ManualApply:
 		dec, wait := in.gatedApply(apply)
 		if !wait {
 			return dec, ""
 		}
-		waiting = ReasonPlanAwaitingApproval
+		waiting, plan = ReasonPlanAwaitingApproval, dec.Plan
 	case apply != "" && in.applyBlocked():
 		waiting = ReasonDestructivePlanBlocked
 	case apply != "":
@@ -323,12 +336,12 @@ func decide(in DecideInput) (Decision, string) {
 		// A waiting input change pauses checks like a backoff: refresh and
 		// drift render the current, unapplied inputs, and would report the
 		// waiting change as drift (and refresh its outputs into state).
-		return Decision{RequeueAfter: RetryMax, Reason: waiting, PlanFlow: waiting == ReasonPlanAwaitingApproval}, waiting
+		return Decision{RequeueAfter: RetryMax, Reason: waiting, Plan: plan, PlanFlow: waiting == ReasonPlanAwaitingApproval}, waiting
 	}
 	// A remediation waiting for its plan's approval keeps the schedule, and
 	// its plan: every decision meanwhile is part of the plan flow.
 	dec := in.schedule(waiting)
-	dec.PlanFlow = waiting == ReasonPlanAwaitingApproval
+	dec.PlanFlow, dec.Plan = waiting == ReasonPlanAwaitingApproval, plan
 	return dec, waiting
 }
 
@@ -393,29 +406,33 @@ func (in DecideInput) schedule(waiting string) Decision {
 	return Decision{RequeueAfter: next, Reason: "UpToDate"}
 }
 
-// gatedApply decides an apply (reason apply) under applyPolicy Manual: a
-// plan Job while status.plan is not of the current inputs, or carries a
-// plan hash of another fingerprint version than runner.PlanHashPrefix (a
-// plan recorded before an upgrade: the runner cannot reproduce its hash,
-// and an old empty-plan hash would wait for the approval of a plan that
-// changes nothing), the approved apply once ApprovedPlan names its hash
-// (or it changes nothing), else wait (true). Plan Jobs and the approved
-// apply back off like any op. It returns the Decision and whether the
-// caller must wait instead.
+// gatedApply decides an apply (reason apply) under applyPolicy Manual:
+// the apply, with ExpectPlan, once the plan of the current inputs is
+// approved (or planned no change: Jobs.EmptyPlan); wait (true) while the
+// live Manual plan of the current inputs is not approved; else a plan Job.
+// Plan Jobs and the approved apply back off like any op. The decision
+// names the plan it waits for or applies. It returns the Decision and
+// whether the caller must wait instead.
 func (in DecideInput) gatedApply(apply string) (Decision, bool) {
-	p := in.Plan
+	cur, p := in.State.CurrentHash, in.Plan
+	ours := p != nil && cur != "" && p.Reason == infrav1.PlanReasonManual && p.InputsHash == cur
 	var dec Decision
 	switch {
-	case p == nil || in.State.CurrentHash == "" || p.InputsHash != in.State.CurrentHash ||
-		!strings.HasPrefix(p.PlanHash, runner.PlanHashPrefix):
-		dec = in.job(jobs.OpPlan, apply)
-	case p.PlanHash == runner.EmptyPlanHash || p.PlanHash == in.ApprovedPlan:
+	case cur != "" && in.Jobs.EmptyPlan == cur:
 		dec = in.job(jobs.OpApply, apply)
+		if dec.Action == ActionJob {
+			dec.ExpectPlan = runner.EmptyPlanHash
+		}
+	case ours && p.Approved:
+		dec = in.job(jobs.OpApply, apply)
+		dec.Plan = p.Name
 		if dec.Action == ActionJob {
 			dec.ExpectPlan = p.PlanHash
 		}
+	case ours:
+		return Decision{Plan: p.Name}, true
 	default:
-		return Decision{}, true
+		dec = in.job(jobs.OpPlan, apply)
 	}
 	dec.PlanFlow = true
 	return dec, false

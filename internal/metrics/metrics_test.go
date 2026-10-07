@@ -374,7 +374,7 @@ func TestNilRecorder(t *testing.T) {
 	r.LeaseWait("k", LeaseWaitRunLease)
 	r.StateBackup("k", BackupTaken, 1)
 	r.StateRestore("k", ResultFailed)
-	r.PlanApproval("k", PlanChanged)
+	r.PlanApproval("k", PlanFailed)
 	r.ActiveJobs().Bind(nil)
 }
 
@@ -404,7 +404,7 @@ func TestUnregisteredRecorder(t *testing.T) {
 	r.LeaseWait("k", LeaseWaitRunLease)
 	r.StateBackup("k", BackupTaken, 1)
 	r.StateRestore("k", ResultFailed)
-	r.PlanApproval("k", PlanChanged)
+	r.PlanApproval("k", PlanFailed)
 	r.ActiveJobs().Bind(fakeJobs(t, runningJob("j1", "apply")))
 }
 
@@ -416,15 +416,22 @@ func TestPlanApprovals(t *testing.T) {
 	if err := r.Register(reg); err != nil {
 		t.Fatal(err)
 	}
+	r.PlanApproval("TerraformCluster", PlanCreated)
+	r.PlanApproval("TerraformCluster", PlanCreated)
 	r.PlanApproval("TerraformCluster", PlanApproved)
-	r.PlanApproval("TerraformCluster", PlanChanged)
-	r.PlanApproval("TerraformCluster", PlanChanged)
+	r.PlanApproval("TerraformCluster", PlanApplied)
+	r.PlanApproval("TerraformMachinePool", PlanSuperseded)
+	r.PlanApproval("TerraformCluster", PlanFailed)
+	r.PlanApproval("TerraformCluster", "changed")
 	r.PlanApproval("TerraformCluster", "bogus")
 	want := `
 # HELP captf_plan_approvals_total [ALPHA] ` + spec(PlanApprovalsName).Help + `
 # TYPE captf_plan_approvals_total counter
+captf_plan_approvals_total{kind="TerraformCluster",result="applied"} 1
 captf_plan_approvals_total{kind="TerraformCluster",result="approved"} 1
-captf_plan_approvals_total{kind="TerraformCluster",result="changed"} 2
+captf_plan_approvals_total{kind="TerraformCluster",result="created"} 2
+captf_plan_approvals_total{kind="TerraformCluster",result="failed"} 1
+captf_plan_approvals_total{kind="TerraformMachinePool",result="superseded"} 1
 `
 	if err := testutil.GatherAndCompare(reg, strings.NewReader(want), PlanApprovalsName); err != nil {
 		t.Error(err)

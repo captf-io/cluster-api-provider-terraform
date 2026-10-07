@@ -435,10 +435,11 @@ const (
 	// (the cluster's inputs hash; the pool's approval hash). Nothing was
 	// changed.
 	RunErrorKindBlocked RunErrorKind = "blocked"
-	// RunErrorKindPlanChanged means a TerraformCluster apply approved for
-	// one plan (applyPolicy Manual, captf.io/approve-plan) planned other
-	// changes and stopped before applying them. Nothing was changed; the
-	// new plan waits for its own approval in status.plan.
+	// RunErrorKindPlanChanged means an apply approved for one plan (an
+	// approved TerraformPlan) planned other changes and stopped before
+	// applying them. Nothing was changed; the plan is Failed, and under
+	// applyPolicy Manual the new plan waits for its own approval as a new
+	// TerraformPlan.
 	RunErrorKindPlanChanged RunErrorKind = "plan-changed"
 )
 

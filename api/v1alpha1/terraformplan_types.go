@@ -39,11 +39,6 @@ const (
 	PlanReasonLabel = "captf.io/plan-reason"
 )
 
-// PlanApprovedCondition is the condition type that reports whether the plan
-// was approved: True once spec.approved is set. Ready is the other type a
-// TerraformPlan carries.
-const PlanApprovedCondition = "Approved"
-
 // MaxPlanSummaryResources caps spec.summary.resources.
 const MaxPlanSummaryResources = 50
 
@@ -99,6 +94,16 @@ const (
 // can no longer be approved.
 func (p PlanPhase) Terminal() bool {
 	return p == PlanPhaseApplied || p == PlanPhaseSuperseded || p == PlanPhaseFailed
+}
+
+// PlanReference names a TerraformPlan in the namespace of the object that
+// holds the reference.
+type PlanReference struct {
+	// name of the TerraformPlan.
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Name string `json:"name,omitempty"`
 }
 
 // PlanTargetRef names the object, in the plan's namespace, the plan is for.

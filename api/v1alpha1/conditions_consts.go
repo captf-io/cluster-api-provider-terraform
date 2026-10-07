@@ -232,13 +232,50 @@ const (
 	WaitingForMachineOperationsReason = "WaitingForMachineOperations"
 	// PlanAwaitingApprovalReason is the Unknown reason while a
 	// TerraformCluster with applyPolicy Manual waits for the approval of
-	// the plan in status.plan (the captf.io/approve-plan annotation naming
-	// its hash). Unknown, so waiting never turns Ready False.
+	// its plan, a TerraformPlan (status.pendingPlanRef). Unknown, so
+	// waiting never turns Ready False.
 	PlanAwaitingApprovalReason = "PlanAwaitingApproval"
 	// PlanChangedReason is the Unknown reason when an approved apply
 	// planned other changes than the approved plan and stopped before
-	// applying them; the new plan in status.plan waits for its approval.
+	// applying them; the approved TerraformPlan is Failed, and the new
+	// plan waits for its approval as a new TerraformPlan.
 	PlanChangedReason = "PlanChanged"
+)
+
+// TerraformPlan conditions. Ready (positive polarity) is True while the
+// plan is live or applied, and False once it was superseded or failed;
+// Approved is True once spec.approved is set. Pending and Approved name
+// both a Ready and an Approved reason.
+const (
+	// PlanApprovedCondition reports whether the TerraformPlan was approved.
+	PlanApprovedCondition = "Approved"
+
+	// PlanPendingReason is the Ready True and the Approved False reason
+	// while the plan waits for an approval.
+	PlanPendingReason = "Pending"
+	// PlanApprovedReason is the Ready True reason while the approved plan
+	// waits for its apply to finish, and the Approved True reason of every
+	// approved plan that was not superseded.
+	PlanApprovedReason = "Approved"
+	// PlanAppliedReason is the Ready True reason once the apply of the
+	// approved plan succeeded.
+	PlanAppliedReason = "Applied"
+	// PlanSupersededReason is the Ready False reason once a newer plan of
+	// the target replaced the plan, or the plan became moot (the target's
+	// inputs changed, no apply is due any more, or its applyPolicy
+	// changed), before it was applied.
+	PlanSupersededReason = "Superseded"
+	// PlanFailedReason is the Ready False reason once the apply of the
+	// approved plan planned other changes and stopped before applying
+	// them.
+	PlanFailedReason = "Failed"
+	// PlanNotApprovedReason is the Approved False reason of a plan that
+	// was superseded before anyone approved it.
+	PlanNotApprovedReason = "NotApproved"
+	// PlanApprovalIgnoredReason is the Approved False reason of a plan
+	// approved too late: it was superseded before its apply ran, so the
+	// approval applied nothing.
+	PlanApprovalIgnoredReason = "ApprovalIgnored"
 )
 
 // StateReadable: positive polarity; not mirrored.
@@ -570,8 +607,8 @@ var (
 func ConditionReasons() map[string]map[metav1.ConditionStatus][]string {
 	return map[string]map[metav1.ConditionStatus][]string{
 		ReadyCondition: {
-			metav1.ConditionTrue:    {ReadyReason, SecretFoundReason},
-			metav1.ConditionFalse:   {NotReadyReason, SecretNotFoundReason},
+			metav1.ConditionTrue:    {ReadyReason, SecretFoundReason, PlanPendingReason, PlanApprovedReason, PlanAppliedReason},
+			metav1.ConditionFalse:   {NotReadyReason, SecretNotFoundReason, PlanSupersededReason, PlanFailedReason},
 			metav1.ConditionUnknown: {ReadyUnknownReason},
 		},
 		clusterv1.PausedCondition: {
@@ -647,6 +684,10 @@ func ConditionReasons() map[string]map[metav1.ConditionStatus][]string {
 		clusterv1.DeletingCondition: {
 			metav1.ConditionTrue:  {clusterv1.DeletingReason},
 			metav1.ConditionFalse: {clusterv1.NotDeletingReason},
+		},
+		PlanApprovedCondition: {
+			metav1.ConditionTrue:  {PlanApprovedReason},
+			metav1.ConditionFalse: {PlanPendingReason, PlanNotApprovedReason, PlanApprovalIgnoredReason},
 		},
 		CapacityResolvedCondition: {
 			metav1.ConditionTrue:  {CapacityResolvedReason, CapacityNotDeclaredReason},

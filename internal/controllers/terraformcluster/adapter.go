@@ -86,7 +86,7 @@ func (a *adapter) Spec() shared.SpecView {
 // Status returns the wrapped TerraformCluster's status as a
 // shared.CommonStatus.
 func (a *adapter) Status() shared.CommonStatus {
-	return shared.CommonStatus{WorkspaceStatus: &a.obj.Status.WorkspaceStatus, Plan: &a.obj.Status.Plan}
+	return shared.CommonStatus{WorkspaceStatus: &a.obj.Status.WorkspaceStatus, PendingPlanRef: &a.obj.Status.PendingPlanRef}
 }
 
 // Owner looks up the owning Cluster (util.GetOwnerCluster), using ctx for

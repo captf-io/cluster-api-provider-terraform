@@ -90,9 +90,9 @@ spec:
                           applied at reconcile) applies every change of the inputs, and a drift
                           remediation, as soon as it is seen; only a plan that deletes or
                           replaces resources waits for captf.io/approve-destructive-plan.
-                          Manual runs a plan Job first, reports the plan in status.plan and
-                          waits until the captf.io/approve-plan annotation names its hash; the
-                          apply then runs only if it plans the same changes again. The first
+                          Manual runs a plan Job first, records a plan with changes as a
+                          TerraformPlan and waits until that plan is approved; the apply then
+                          runs only if it plans the same changes again. The first
                           apply of a new cluster (no state yet) is never gated. Mutable.
                         enum:
                         - Automatic

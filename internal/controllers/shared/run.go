@@ -105,10 +105,12 @@ type JobRequest struct {
 	// successful apply while a change of them waits for approval
 	// (HeldClusterOutputsAnnotation).
 	HeldExports bool
-	// ExpectPlan is the approved plan hash an apply under applyPolicy
-	// Manual must plan again (Decision.ExpectPlan); recorded on the Job as
-	// ApprovedPlanAnnotation.
+	// ExpectPlan is the plan hash an approved apply must plan again
+	// (Decision.ExpectPlan); recorded on the Job as ApprovedPlanAnnotation.
 	ExpectPlan string
+	// Plan names the approved TerraformPlan an apply applies
+	// (Decision.Plan); recorded on the Job as PlanAnnotation.
+	Plan string
 	// Why is the decision reason (DecideOp), for the JobCreated event.
 	Why string
 	// Restore is the backup a restore pushes; nil for other ops.
@@ -313,6 +315,9 @@ func startJob(ctx context.Context, d Deps, k Kind, req JobRequest) (job *batchv1
 	if req.ExpectPlan != "" && req.Op == jobs.OpApply {
 		metav1.SetMetaDataAnnotation(&job.ObjectMeta, ApprovedPlanAnnotation, req.ExpectPlan)
 	}
+	if req.Plan != "" && req.Op == jobs.OpApply {
+		metav1.SetMetaDataAnnotation(&job.ObjectMeta, PlanAnnotation, req.Plan)
+	}
 	annotateExports(job, req)
 	if err := ensureFreshLeases(ctx, d, k, req, job.Name); err != nil {
 		return nil, false, err
@@ -361,6 +366,9 @@ func startJob(ctx context.Context, d Deps, k Kind, req JobRequest) (job *batchv1
 			note += planWhy
 		}
 		note += cmp.Or(whyNotes[req.Why], req.Why)
+	}
+	if req.Plan != "" && req.Op == jobs.OpApply {
+		note += "; it applies the approved TerraformPlan " + req.Plan
 	}
 	d.EmitRelated(obj, job, corev1.EventTypeNormal, EventJobCreated, "Run", "%s", note)
 	return job, true, nil

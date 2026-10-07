@@ -77,6 +77,9 @@ func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, opt
 				infrav1.GroupVersion.WithKind(state.KindTerraformCluster), c, &infrav1.TerraformCluster{})),
 			ClusterPredicates(scheme, logger), filter).
 		Owns(&batchv1.Job{}).
+		// An approval is a spec change; the controller's own phase labels
+		// and status writes are not.
+		Owns(&infrav1.TerraformPlan{}, predicate.GenerationChangedPredicate{}).
 		Watches(&corev1.Secret{},
 			handler.EnqueueRequestsFromMapFunc(shared.SecretToOwner(state.KindTerraformCluster)), shared.ManagedSecret()).
 		Watches(&infrav1.TerraformClusterIdentity{}, handler.EnqueueRequestsFromMapFunc(shared.IdentityToClusters(c))).

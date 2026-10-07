@@ -169,7 +169,8 @@ func newClusterEnv(t *testing.T) *clusterEnv {
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "captf-system", Name: "aws-creds"}, Data: map[string][]byte{"KEY": []byte("v")}},
 		testCluster(func(c *clusterv1.Cluster) { c.Spec.Topology.Version = "v1.36.2" }),
 		tc,
-	).WithStatusSubresource(&infrav1.TerraformCluster{}).Build()
+	).WithStatusSubresource(&infrav1.TerraformCluster{}, &infrav1.TerraformPlan{}).
+		WithIndex(&infrav1.TerraformPlan{}, shared.PlanTargetIndex, shared.PlanTargetIndexer).Build()
 	e := &clusterEnv{
 		t: t, c: c, st: &stateStore{}, runner: &jobStore{c: c, pods: map[string][]corev1.Pod{}},
 		clock: testingclock.NewFakePassiveClock(t0), req: ctrl.Request{NamespacedName: client.ObjectKeyFromObject(tc)},
@@ -623,13 +624,17 @@ func TestInterruptedApplyManual(t *testing.T) {
 		t.Errorf("%d JobFailed Warnings while the plan waits for approval, want 1", failed)
 	}
 
-	tc = e.cluster()
-	metav1.SetMetaDataAnnotation(&tc.ObjectMeta, infrav1.ApprovePlanAnnotation, planHash)
-	if err := e.c.Update(t.Context(), tc); err != nil {
+	tp := &infrav1.TerraformPlan{}
+	if err := e.c.Get(t.Context(), client.ObjectKey{Namespace: ns, Name: e.cluster().Status.PendingPlanRef.Name}, tp); err != nil {
+		t.Fatal(err)
+	}
+	tp.Spec.Approved, tp.Spec.ApprovedBy = new(true), "alice"
+	if err := e.c.Update(t.Context(), tp); err != nil {
 		t.Fatal(err)
 	}
 	a := e.reconcileStartsOp(jobs.OpApply)
-	if a.Annotations[shared.AfterInterruptedApplyAnnotation] != j.Name || !slices.Contains(args(a), "--expect-plan="+planHash) {
+	if a.Annotations[shared.AfterInterruptedApplyAnnotation] != j.Name || !slices.Contains(args(a), "--expect-plan="+planHash) ||
+		a.Annotations[shared.PlanAnnotation] != tp.Name {
 		t.Errorf("approved apply: args %v, annotations %v", args(a), a.Annotations)
 	}
 	e.succeed(a)

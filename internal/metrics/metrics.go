@@ -64,12 +64,21 @@ const (
 	PlanApprovalsName       = "captf_plan_approvals_total"
 )
 
-// Plan approval results, the result label of captf_plan_approvals_total.
+// TerraformPlan transitions, the result label of
+// captf_plan_approvals_total.
 const (
-	// PlanApproved: the apply of an approved plan succeeded.
+	// PlanCreated: a plan waiting for approval became a TerraformPlan.
+	PlanCreated = "created"
+	// PlanApproved: a TerraformPlan was approved (spec.approved).
 	PlanApproved = "approved"
-	// PlanChanged: an approved apply planned other changes and stopped.
-	PlanChanged = "changed"
+	// PlanApplied: the apply of an approved TerraformPlan succeeded.
+	PlanApplied = "applied"
+	// PlanSuperseded: a TerraformPlan was superseded before it was
+	// applied.
+	PlanSuperseded = "superseded"
+	// PlanFailed: the apply of an approved TerraformPlan planned other
+	// changes and stopped.
+	PlanFailed = "failed"
 )
 
 // State backup results, the result label of captf_state_backups_total.
@@ -191,7 +200,7 @@ func Specs() []Spec {
 		{LeaseWaitsName, "counter", []string{"kind", "reason"}, "Operations that started waiting for a run lease, once per wait: run_lease (another live Job of the object holds it), cluster_operation (a machine's apply or destroy waits for its TerraformCluster's) or machine_operations (a TerraformCluster's apply or destroy waits for its machines')."},
 		{StateBackupsName, "counter", []string{"kind", "result"}, "State backups: taken (a new state serial copied into captf-state-backup-* Secrets), pruned (a backup beyond --state-backups deleted) or skipped (a new serial not backed up: encrypted, unreadable or oversized state, or a failed copy)."},
 		{StateRestoresName, "counter", []string{"kind", "result"}, "State restores requested with captf.io/restore-state: succeeded or failed (a restore Job finished), or not_found (the annotation names no backup)."},
-		{PlanApprovalsName, "counter", []string{"kind", "result"}, "Plans approved with captf.io/approve-plan (applyPolicy Manual): approved (the apply of the approved plan succeeded and the annotation was removed) or changed (the approved apply planned other changes and stopped; the new plan waits for approval)."},
+		{PlanApprovalsName, "counter", []string{"kind", "result"}, "TerraformPlan transitions: created (a plan waits for approval), approved (spec.approved was set), applied (the approved plan was applied), superseded (replaced by a newer plan, or no longer applicable, before it was applied) or failed (the approved apply planned other changes and stopped)."},
 		{BuildInfoName, "gauge", []string{"version", "commit", "contract"}, "A metric with a constant '1' value labeled by the version, commit and module contract of the manager."},
 	}
 }
@@ -625,11 +634,11 @@ func (r *Recorder) StateBackup(kind, result string, n int) {
 	}
 }
 
-// PlanApproval records an approved plan of an object of kind that was
-// applied (PlanApproved) or found changed (PlanChanged); anything else in
-// result is dropped.
+// PlanApproval records a transition of a TerraformPlan of an object of
+// kind: PlanCreated, PlanApproved, PlanApplied, PlanSuperseded or
+// PlanFailed; anything else in result is dropped.
 func (r *Recorder) PlanApproval(kind, result string) {
-	if r != nil && slices.Contains([]string{PlanApproved, PlanChanged}, result) {
+	if r != nil && slices.Contains([]string{PlanCreated, PlanApproved, PlanApplied, PlanSuperseded, PlanFailed}, result) {
 		r.planApprovals.WithLabelValues(kind, result).Inc()
 	}
 }

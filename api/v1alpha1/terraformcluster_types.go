@@ -44,15 +44,6 @@ import (
 // command.
 const ApproveDestructivePlanAnnotation = "captf.io/approve-destructive-plan"
 
-// ApprovePlanAnnotation approves one plan of a TerraformCluster with
-// applyPolicy Manual. Its value is a plan hash (status.plan.planHash): the
-// apply waiting for that plan runs, and applies only if it plans exactly
-// the same changes again. Approving a plan also approves the deletes and
-// replacements it lists; ApproveDestructivePlanAnnotation is not needed on
-// top. The controller removes it once the apply succeeded.
-// ApplyJobSucceeded (PlanAwaitingApproval) gives the exact command.
-const ApprovePlanAnnotation = "captf.io/approve-plan"
-
 // ApplyPolicy decides whether a TerraformCluster applies a change on its
 // own or waits until its plan is approved.
 // +kubebuilder:validation:Enum=Automatic;Manual
@@ -62,9 +53,10 @@ const (
 	// ApplyPolicyAutomatic applies every change as soon as it is seen, only
 	// guarded against destructive plans.
 	ApplyPolicyAutomatic ApplyPolicy = "Automatic"
-	// ApplyPolicyManual plans every change first (a plan Job), shows the
-	// plan in status.plan and applies it only once ApprovePlanAnnotation
-	// names its hash. The first apply of a new cluster is not gated.
+	// ApplyPolicyManual plans every change first (a plan Job), records the
+	// plan as a TerraformPlan and applies it only once that plan is
+	// approved (spec.approved). The first apply of a new cluster is not
+	// gated.
 	ApplyPolicyManual ApplyPolicy = "Manual"
 )
 
@@ -117,9 +109,9 @@ type TerraformClusterSpec struct {
 	// applied at reconcile) applies every change of the inputs, and a drift
 	// remediation, as soon as it is seen; only a plan that deletes or
 	// replaces resources waits for captf.io/approve-destructive-plan.
-	// Manual runs a plan Job first, reports the plan in status.plan and
-	// waits until the captf.io/approve-plan annotation names its hash; the
-	// apply then runs only if it plans the same changes again. The first
+	// Manual runs a plan Job first, records a plan with changes as a
+	// TerraformPlan and waits until that plan is approved; the apply then
+	// runs only if it plans the same changes again. The first
 	// apply of a new cluster (no state yet) is never gated. Mutable.
 	// +optional
 	ApplyPolicy ApplyPolicy `json:"applyPolicy,omitempty"`
@@ -195,111 +187,16 @@ type TerraformClusterStatus struct {
 	// +kubebuilder:pruning:PreserveUnknownFields
 	Exports runtime.RawExtension `json:"exports,omitempty,omitzero"`
 
-	// plan is the plan of the change waiting for approval under
-	// applyPolicy Manual; empty when none waits. Approve it by setting the
-	// captf.io/approve-plan annotation to plan.planHash.
+	// pendingPlanRef names the live TerraformPlan of the cluster: the plan
+	// that waits for an approval, or whose approved apply has not finished
+	// yet. It is omitted when no plan is live.
 	// +optional
-	Plan PlanPreview `json:"plan,omitempty,omitzero"`
+	PendingPlanRef PlanReference `json:"pendingPlanRef,omitempty,omitzero"`
 }
 
 // MaxPublishedExportsBytes caps the compact JSON size of status.exports; a
 // larger exports output is not published.
 const MaxPublishedExportsBytes = 64 << 10
-
-// MaxPlanResources caps status.plan.resources.
-const MaxPlanResources = 50
-
-// PlanPreview summarizes a plan for review: counts and the address and
-// action of each changed resource, never a value.
-type PlanPreview struct {
-	// inputsHash is the hash of the inputs the plan was made for.
-	// +required
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=128
-	InputsHash string `json:"inputsHash,omitempty"`
-
-	// job is the Job that made the plan: a plan Job, or an approved apply
-	// that found the plan changed.
-	// +required
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=63
-	Job string `json:"job,omitempty"`
-
-	// planHash fingerprints the plan's changes: the value of the
-	// captf.io/approve-plan annotation that approves it.
-	// +required
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=128
-	PlanHash string `json:"planHash,omitempty"`
-
-	// create is the number of resources the plan creates.
-	// +optional
-	// +kubebuilder:validation:Minimum=0
-	Create *int32 `json:"create,omitempty"`
-
-	// update is the number of resources the plan updates in place.
-	// +optional
-	// +kubebuilder:validation:Minimum=0
-	Update *int32 `json:"update,omitempty"`
-
-	// replace is the number of resources the plan replaces: deletes and
-	// creates again. A replacement counts here only.
-	// +optional
-	// +kubebuilder:validation:Minimum=0
-	Replace *int32 `json:"replace,omitempty"`
-
-	// delete is the number of resources the plan deletes, not counting
-	// replacements.
-	// +optional
-	// +kubebuilder:validation:Minimum=0
-	Delete *int32 `json:"delete,omitempty"`
-
-	// import is the number of resources the plan imports into the state.
-	// +optional
-	// +kubebuilder:validation:Minimum=0
-	Import *int32 `json:"import,omitempty"`
-
-	// move is the number of resources a moved block moves to a new address.
-	// +optional
-	// +kubebuilder:validation:Minimum=0
-	Move *int32 `json:"move,omitempty"`
-
-	// forget is the number of resources the plan removes from the state
-	// without destroying them.
-	// +optional
-	// +kubebuilder:validation:Minimum=0
-	Forget *int32 `json:"forget,omitempty"`
-
-	// outputChanges is the number of root module outputs the plan changes.
-	// An output change alone still needs approval: cluster exports feed
-	// every machine and pool module.
-	// +optional
-	// +kubebuilder:validation:Minimum=0
-	OutputChanges *int32 `json:"outputChanges,omitempty"`
-
-	// resources are "<address> (<labels>)" of the changed resources, sorted
-	// by address, at most 50. The labels are the action (create, update,
-	// delete, replace, read or forget) unless the resource is otherwise
-	// unchanged, then "import" when the plan imports it and "move" when a
-	// moved block moves it, comma-separated: "aws_instance.a (import)",
-	// "aws_instance.b (update, move)".
-	// +optional
-	// +listType=atomic
-	// +kubebuilder:validation:MinItems=1
-	// +kubebuilder:validation:MaxItems=50
-	// +kubebuilder:validation:items:MinLength=1
-	// +kubebuilder:validation:items:MaxLength=600
-	Resources []string `json:"resources,omitempty"`
-
-	// truncated is true when resources lists fewer resources than the plan
-	// changes.
-	// +optional
-	Truncated *bool `json:"truncated,omitempty"`
-
-	// createdAt is when the plan was made.
-	// +optional
-	CreatedAt *metav1.Time `json:"createdAt,omitempty"`
-}
 
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:path=terraformclusters,scope=Namespaced,categories=cluster-api

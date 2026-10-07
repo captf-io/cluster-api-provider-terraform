@@ -107,9 +107,9 @@ type CommonStatus struct {
 	// UnhealthySamples is nil for kinds that do not count samples (the
 	// cluster).
 	UnhealthySamples *int32
-	// Plan is status.plan, the plan awaiting approval under applyPolicy
-	// Manual; nil for kinds without it (machines).
-	Plan *infrav1.PlanPreview
+	// PendingPlanRef is status.pendingPlanRef, the live TerraformPlan of a
+	// kind that keeps plans; nil for kinds without it (machines).
+	PendingPlanRef *infrav1.PlanReference
 }
 
 // Kind adapts one Job-running kind to the shared core. The cluster and

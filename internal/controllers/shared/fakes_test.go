@@ -95,10 +95,11 @@ type fakeKind struct {
 	// TerraformMachine.
 	asCluster    bool
 	clusterDrift *infrav1.DriftPolicy
-	// applyPolicy is the cluster kind's applyPolicy; plan, when set, is
-	// its status.plan (env.plan, so it outlives the adapter).
+	// applyPolicy is the cluster kind's applyPolicy; planRef, when set, is
+	// its status.pendingPlanRef (env.planRef, so it outlives the adapter),
+	// which makes it keep TerraformPlans.
 	applyPolicy infrav1.ApplyPolicy
-	plan        *infrav1.PlanPreview
+	planRef     *infrav1.PlanReference
 }
 
 // Object returns f's object.
@@ -138,10 +139,10 @@ func (f *fakeKind) Spec() SpecView {
 	}
 }
 
-// Status returns pointers into f.obj's status fields, with Plan set to
-// f.plan.
+// Status returns pointers into f.obj's status fields, with PendingPlanRef
+// set to f.planRef.
 func (f *fakeKind) Status() CommonStatus {
-	return CommonStatus{WorkspaceStatus: &f.obj.Status.WorkspaceStatus, UnhealthySamples: &f.obj.Status.UnhealthySamples, Plan: f.plan}
+	return CommonStatus{WorkspaceStatus: &f.obj.Status.WorkspaceStatus, UnhealthySamples: &f.obj.Status.UnhealthySamples, PendingPlanRef: f.planRef}
 }
 
 // Owner returns f.owner and f.ownerErr.
@@ -315,8 +316,9 @@ type env struct {
 	state  *fakeState
 	rec    *fakeRecorder
 	d      Deps
-	// plan is the cluster kind's status.plan (fakeKind.plan).
-	plan infrav1.PlanPreview
+	// planRef is the cluster kind's status.pendingPlanRef
+	// (fakeKind.planRef).
+	planRef infrav1.PlanReference
 }
 
 // recorded is one event the fakeRecorder saw.
@@ -380,7 +382,8 @@ func newEnvWith(t *testing.T, funcs interceptor.Funcs, objs ...client.Object) *e
 	t.Helper()
 	s := testScheme(t)
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).
-		WithStatusSubresource(&infrav1.TerraformMachine{}).WithInterceptorFuncs(funcs).Build()
+		WithStatusSubresource(&infrav1.TerraformMachine{}, &infrav1.TerraformPlan{}).
+		WithIndex(&infrav1.TerraformPlan{}, PlanTargetIndex, PlanTargetIndexer).WithInterceptorFuncs(funcs).Build()
 	e := &env{c: c, runner: &fakeRunner{pods: map[string][]corev1.Pod{}}, state: &fakeState{}}
 	e.rec = &fakeRecorder{}
 	e.d = Deps{

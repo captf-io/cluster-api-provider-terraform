@@ -110,7 +110,7 @@ func TestAdapterContract(t *testing.T) {
 	}
 	st := a.Status()
 	st.StateSecretSuffix = "sfx"
-	if tmp.Status.StateSecretSuffix != "sfx" || st.UnhealthySamples != nil || st.Plan != nil {
+	if tmp.Status.StateSecretSuffix != "sfx" || st.UnhealthySamples != nil || st.PendingPlanRef != nil {
 		t.Error("status pointers do not point into the object")
 	}
 }

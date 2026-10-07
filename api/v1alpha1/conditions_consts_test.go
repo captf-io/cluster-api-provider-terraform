@@ -47,6 +47,7 @@ var conditionStatuses = map[string][]metav1.ConditionStatus{
 	clusterv1.DeletingCondition:    {metav1.ConditionTrue, metav1.ConditionFalse},
 	CapacityResolvedCondition:      {metav1.ConditionTrue, metav1.ConditionFalse},
 	AutoscalingActiveCondition:     {metav1.ConditionTrue, metav1.ConditionFalse},
+	PlanApprovedCondition:          {metav1.ConditionTrue, metav1.ConditionFalse},
 }
 
 // TestEveryTypeHasReasonsForEachStatus proves ConditionReasons has an
@@ -195,12 +196,14 @@ func TestEveryReasonConstantIsInTheTable(t *testing.T) {
 // by two condition types. DriftNotChecked is shared by the drift types,
 // SecretNotFound by IdentityAllowed and the identity's own Ready, and
 // the lease waits by the Job conditions (the op that waits: the restore
-// condition shares all three with ApplyJobSucceeded).
+// condition shares all three with ApplyJobSucceeded), and a TerraformPlan's
+// Pending and Approved by its Ready and Approved conditions.
 func TestReasonsBelongToOneType(t *testing.T) {
 	t.Parallel()
 	shared := map[string]bool{
 		DriftNotCheckedReason: true, SecretNotFoundReason: true, WaitingForRunLeaseReason: true,
 		WaitingForClusterOperationReason: true, WaitingForMachineOperationsReason: true,
+		PlanPendingReason: true, PlanApprovedReason: true,
 	}
 	types := map[string]map[string]bool{}
 	for typ, byStatus := range ConditionReasons() {

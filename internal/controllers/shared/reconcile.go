@@ -46,7 +46,6 @@ import (
 	"github.com/captf-io/cluster-api-provider-terraform/internal/jobs"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/rbac"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/render"
-	"github.com/captf-io/cluster-api-provider-terraform/internal/runner"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/state"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/strutil"
 )
@@ -199,13 +198,16 @@ type reconciler struct {
 	// skipMark keeps the finished Jobs from being marked bookkept after a
 	// consumed annotation could not be removed.
 	skipMark bool
+	// plans are the object's TerraformPlans, newest first (loadPlans); nil
+	// for a kind that keeps none.
+	plans []infrav1.TerraformPlan
 	// guard is how an ExportsGuard kind guards an apply of the inputs built
 	// this pass (observeGuard); nil for other kinds, or when no inputs
 	// were built.
 	guard *Guard
 	// decided is true once DecideOp's decision was taken this pass;
 	// planWait is then ApplyJobSucceeded while an apply waits for the
-	// approval of its plan (waitCondition), nil otherwise. finish reports
+	// approval of its TerraformPlan (waitCondition), nil otherwise. finish reports
 	// it on every pass of the wait (planWaitCondition), also those that
 	// start a refresh or drift Job.
 	decided  bool
@@ -255,8 +257,11 @@ func (r *reconciler) readDurable(ctx context.Context) error {
 
 // bookkeep runs Bookkeep using ctx with the durable Secret read in setup,
 // and records a digest it pinned in memory instead of reading the Secret
-// again. It returns the resulting Bookkeeping, also stored on r.bk, or any
-// error from Bookkeep or from removing a consumed annotation.
+// again. It then reads the object's TerraformPlans, records the plans the
+// finished Jobs made, and moves the plans through their phases. It
+// returns the resulting Bookkeeping, also stored on r.bk, or any error
+// from Bookkeep, from removing a consumed annotation, or from reading or
+// writing a TerraformPlan.
 func (r *reconciler) bookkeep(ctx context.Context) (*Bookkeeping, error) {
 	bk, err := Bookkeep(ctx, r.d, r.k, r.eff, r.suffix, r.durable)
 	if err != nil {
@@ -290,10 +295,18 @@ func (r *reconciler) bookkeep(ctx context.Context) (*Bookkeeping, error) {
 	if err := r.consumeRestore(ctx, bk); err != nil {
 		return nil, err
 	}
-	r.recordPlan(bk)
-	if err := r.consumePlanApproval(ctx, bk); err != nil {
+	// The plans' own transitions first: a plan whose approved apply found
+	// it changed fails, before the new plan supersedes what is live.
+	if err := r.loadPlans(ctx); err != nil {
 		return nil, err
 	}
+	if err := r.syncPlans(ctx, bk); err != nil {
+		return nil, err
+	}
+	if err := r.recordPlans(ctx, bk); err != nil {
+		return nil, err
+	}
+	r.setPendingPlanRef()
 	return bk, nil
 }
 
@@ -375,22 +388,18 @@ func (r *reconciler) finish(bk *Bookkeeping, applyCond *metav1.Condition, res ct
 }
 
 // noteApproval adds to c, the ApplyJobSucceeded condition finish sets,
-// when it waits for an approval (DestructivePlanBlocked,
-// PlanAwaitingApproval, PlanChanged), that the approval annotation names
-// another hash than c's approve command: the runner and DecideOp ignore
-// such an approval, which otherwise looks like one that was not seen. The
-// note goes before the sentence that ends in the approve command, which
-// stays last, and the note of an earlier pass (a condition kept as it was
+// when it waits for an approval of its destructive plan
+// (DestructivePlanBlocked), that the approval annotation names another
+// hash than c's approve command: the runner and DecideOp ignore such an
+// approval, which otherwise looks like one that was not seen. The note
+// goes before the sentence that ends in the approve command, which stays
+// last, and the note of an earlier pass (a condition kept as it was
 // reported) is replaced. A mismatch is also logged, with both hashes.
 func (r *reconciler) noteApproval(c *metav1.Condition) {
-	approval := infrav1.ApprovePlanAnnotation
-	switch c.Reason {
-	case infrav1.DestructivePlanBlockedReason:
-		approval = infrav1.ApproveDestructivePlanAnnotation
-	case infrav1.PlanAwaitingApprovalReason, infrav1.PlanChangedReason:
-	default:
+	if c.Reason != infrav1.DestructivePlanBlockedReason {
 		return
 	}
+	approval := infrav1.ApproveDestructivePlanAnnotation
 	// cmdSentence returns where the sentence of the approve command
 	// ("… kubectl annotate … <approval>=<hash> --overwrite") starts in
 	// msg, and the hash it approves; ok is false when msg has no such
@@ -428,34 +437,6 @@ func (r *reconciler) noteApproval(c *metav1.Condition) {
 // condition message quotes: a hash is far shorter, and the value is
 // whatever the annotation holds.
 const maxNamedApproval = 100
-
-// planWaitCondition returns ApplyJobSucceeded while an apply waits for the
-// approval of its plan, for finish: on a pass that decided, the wait
-// DecideOp reported (planWait), also when it started a refresh or drift
-// Job meanwhile; on a pass that did not (a Job runs, the Job cache lags,
-// the state is held, the object is paused), the wait the condition
-// reported as the pass began, for the plan status.plan still records,
-// unless bk, the pass's bookkeeping, read an apply that finished since,
-// the approve-plan annotation names that plan, applyPolicy is no longer
-// Manual, or the object is deleting. It returns nil when no wait stands.
-func (r *reconciler) planWaitCondition(bk *Bookkeeping) *metav1.Condition {
-	if r.decided {
-		return r.planWait
-	}
-	prev, ok := r.before[infrav1.ApplyJobSucceededCondition]
-	if bk == nil || !ok || r.deleting || r.eff.ApplyPolicy != infrav1.ApplyPolicyManual || r.planView() == nil ||
-		!planWaitReasons.Has(prev.Reason) || !namesJob(prev.Message, r.st.Plan.Job) ||
-		r.annotation(infrav1.ApprovePlanAnnotation) == r.st.Plan.PlanHash {
-		return nil
-	}
-	if bk.LastApply != nil {
-		if f, ok := bk.finishedJob(bk.LastApply.Name); ok && !f.bookkept {
-			return nil
-		}
-	}
-	c := r.waitCondition(bk)
-	return &c
-}
 
 // paused is the branch run using ctx when the object is paused: Job
 // bookkeeping, a stuck Job deleted, and block-move cleared once no Job
@@ -621,16 +602,11 @@ func (r *reconciler) run(ctx context.Context) (ctrl.Result, error) {
 	dec, waiting := decide(di)
 	klog.FromContext(ctx).V(LogFlow).Info("Decided", "op", decisionOp(dec), "reason", dec.Reason, "requeueAfter", dec.RequeueAfter)
 	r.d.Metrics.Decision(r.k.Kind(), decisionOp(dec), dec.Reason)
-	if !dec.PlanFlow && gate == nil {
-		// No gated apply is pending: a recorded plan is stale (its change
-		// was applied, reverted, or the policy is Automatic again).
-		r.clearPlan()
-	}
 	r.decided = true
-	if waiting == ReasonPlanAwaitingApproval && r.planView() != nil {
+	if p := r.planNamed(dec.Plan); waiting == ReasonPlanAwaitingApproval && p != nil {
 		// Also while a refresh or drift Job runs meanwhile: the wait is
 		// what the condition reports until it ends.
-		c := r.waitCondition(bk)
+		c := r.waitCondition(bk, p)
 		r.planWait = &c
 	}
 
@@ -695,9 +671,8 @@ func (r *reconciler) decideInput(bk *Bookkeeping, view StateView) DecideInput {
 		ApprovedHash:       r.annotation(infrav1.ApproveDestructivePlanAnnotation),
 		ApprovalHash:       r.guardApprovalHash(),
 		Unheld:             r.guard != nil && r.guard.Guarded && (r.guard.Partial || r.guard.Unrecorded),
-		ManualApply:        r.eff.ApplyPolicy == infrav1.ApplyPolicyManual && r.st.Plan != nil,
+		ManualApply:        r.manualApply(),
 		Plan:               r.planView(),
-		ApprovedPlan:       r.annotation(infrav1.ApprovePlanAnnotation),
 	}
 }
 
@@ -806,6 +781,9 @@ func (r *reconciler) startOp(ctx context.Context, bk *Bookkeeping, dec Decision,
 			req.AllowDeletesHash = a
 		}
 		req.ExpectPlan = dec.ExpectPlan
+		if op == jobs.OpApply {
+			req.Plan = dec.Plan
+		}
 		req.AfterFailedApply = op == jobs.OpApply && r.lastApplyFailed(bk)
 		if op == jobs.OpApply {
 			req.AfterInterruptedApply = r.interruptedApply()
@@ -868,16 +846,12 @@ func (r *reconciler) startDeferred(ctx context.Context, bk *Bookkeeping, op jobs
 // jobStarted emits what starting job for the decided operation dec means
 // besides JobCreated, given the request req that started it and view, the
 // state as read this pass. Under applyPolicy Manual the plan Job reports
-// an input change (counted once per change) and the approved apply
-// reports its approval; an apply that a destructive-plan approval allows
-// to delete or replace resources reports that approval as it starts, not
-// only once it succeeded (DestructivePlanApprovalConsumed).
+// an input change (counted once per change); an apply that a
+// destructive-plan approval allows to delete or replace resources reports
+// that approval as it starts, not only once it succeeded
+// (DestructivePlanApprovalConsumed).
 func (r *reconciler) jobStarted(dec Decision, req JobRequest, view StateView, job *batchv1.Job) {
-	switch {
-	case dec.ExpectPlan != "" && dec.ExpectPlan != runner.EmptyPlanHash:
-		r.d.EmitRelated(r.obj, job, corev1.EventTypeNormal, EventPlanApproved, "Run",
-			"Plan %s is approved (%s); Job %s plans again and applies it only if the plan is unchanged", dec.ExpectPlan, infrav1.ApprovePlanAnnotation, job.Name)
-	case req.AllowDeletesHash != "":
+	if req.AllowDeletesHash != "" {
 		r.d.EmitRelated(r.obj, job, corev1.EventTypeNormal, EventPlanApproved, "Run",
 			"The destructive plan of hash %s is approved (%s); Job %s applies it, deletes and replacements included",
 			req.AllowDeletesHash, infrav1.ApproveDestructivePlanAnnotation, job.Name)
