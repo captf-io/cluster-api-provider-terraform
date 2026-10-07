@@ -33,6 +33,11 @@ spec:
       jsonPath: .status.conditions[?(@.type=="Ready")].status
       name: Ready
       type: string
+    - description: InputsApplied condition
+      jsonPath: .status.conditions[?(@.type=="InputsApplied")].status
+      name: InputsApplied
+      priority: 1
+      type: string
     - description: Time since creation
       jsonPath: .metadata.creationTimestamp
       name: Age

@@ -49,6 +49,7 @@ var conditionStatuses = map[string][]metav1.ConditionStatus{
 	AutoscalingActiveCondition:     {metav1.ConditionTrue, metav1.ConditionFalse},
 	PlanApprovedCondition:          {metav1.ConditionTrue, metav1.ConditionFalse},
 	VariablesValidCondition:        {metav1.ConditionTrue, metav1.ConditionFalse, metav1.ConditionUnknown},
+	InputsAppliedCondition:         {metav1.ConditionTrue, metav1.ConditionFalse, metav1.ConditionUnknown},
 }
 
 // TestEveryTypeHasReasonsForEachStatus proves ConditionReasons has an

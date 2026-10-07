@@ -181,6 +181,7 @@ type TerraformMachinePoolStatus struct {
 // +kubebuilder:printcolumn:name="MachinePool",type="string",JSONPath=`.metadata.ownerReferences[?(@.kind=="MachinePool")].name`,description="MachinePool owning this TerraformMachinePool"
 // +kubebuilder:printcolumn:name="Replicas",type="integer",JSONPath=".status.replicas",description="Desired replicas"
 // +kubebuilder:printcolumn:name="Ready",type="string",JSONPath=`.status.conditions[?(@.type=="Ready")].status`,description="Ready condition"
+// +kubebuilder:printcolumn:name="InputsApplied",type="string",JSONPath=`.status.conditions[?(@.type=="InputsApplied")].status`,description="InputsApplied condition",priority=1
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp",description="Time since creation"
 
 // TerraformMachinePool is the Schema for the terraformmachinepools API: the

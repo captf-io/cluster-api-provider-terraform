@@ -211,6 +211,7 @@ const MaxPublishedExportsBytes = 64 << 10
 // +kubebuilder:printcolumn:name="Provisioned",type="boolean",JSONPath=".status.initialization.provisioned",description="Infrastructure provisioned"
 // +kubebuilder:printcolumn:name="Endpoint",type="string",JSONPath=".spec.controlPlaneEndpoint.host",description="Control-plane endpoint host"
 // +kubebuilder:printcolumn:name="Image",type="string",JSONPath=".spec.source.image",description="Module image",priority=1
+// +kubebuilder:printcolumn:name="InputsApplied",type="string",JSONPath=`.status.conditions[?(@.type=="InputsApplied")].status`,description="InputsApplied condition",priority=1
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp",description="Time since creation"
 
 // TerraformCluster is the Schema for the terraformclusters API: the

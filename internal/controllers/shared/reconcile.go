@@ -214,6 +214,8 @@ type reconciler struct {
 	// start a refresh or drift Job.
 	decided  bool
 	planWait *metav1.Condition
+	// facts are what the pass learned about the inputs (InputsApplied).
+	facts inputsFacts
 }
 
 // setup sets up the reconcile using ctx: first-visit conditions, Deleting,
@@ -347,6 +349,9 @@ func (r *reconciler) finish(bk *Bookkeeping, applyCond *metav1.Condition, res ct
 	}
 	if c.Type != "" {
 		conditions.Set(r.obj, c)
+	}
+	if ia := r.inputsApplied(bk); ia != nil {
+		conditions.Set(r.obj, *ia)
 	}
 	if err := captfconds.SetReady(r.obj, r.k.Kind(), r.phase()); err != nil {
 		return ctrl.Result{}, err
@@ -587,6 +592,7 @@ func (r *reconciler) decideInput(bk *Bookkeeping, view StateView) DecideInput {
 	if m, ok := r.k.(MembershipObserver); ok && view.Exists {
 		converging = view.Pending || m.MembershipConverging()
 	}
+	r.facts.read, r.facts.view = true, view
 	jv := bk.View
 	jv.LastApplyFailed = r.lastApplyFailed(bk)
 	return DecideInput{

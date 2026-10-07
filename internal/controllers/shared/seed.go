@@ -72,11 +72,13 @@ func (r *reconciler) build(ctx context.Context, view *StateView) (any, *Gate, er
 	if err != nil {
 		return nil, nil, err
 	}
+	r.facts.gate = gate
 	if gate != nil {
 		captfconds.SetDependenciesReady(r.obj, gate.Status, gate.Reason, gate.Message)
 		return in, gate, nil
 	}
 	if gate = r.variablesSchemaGate(ctx, in); gate != nil {
+		r.facts.gate = gate
 		captfconds.SetDependenciesReady(r.obj, gate.Status, gate.Reason, gate.Message)
 		return in, gate, nil
 	}

@@ -573,6 +573,36 @@ const (
 	VariablesSchemaUnavailableReason = "VariablesSchemaUnavailable"
 )
 
+// InputsApplied: positive polarity; never in Ready. It tells a consumer
+// (kstatus, Flux, Argo) whether the inputs of the current generation are
+// what the infrastructure was last applied with, which Ready does not: a
+// provisioned object stays Ready while an edit waits for an approval.
+const (
+	// InputsAppliedCondition reports whether the state's last successful
+	// apply used the object's current inputs and no apply is pending.
+	InputsAppliedCondition = "InputsApplied"
+
+	// InputsAppliedReason is the True reason: the applied inputs hash equals
+	// the current one and no apply is pending.
+	InputsAppliedReason = "InputsApplied"
+	// ApplyPendingReason is the False reason when the current inputs differ
+	// from the applied ones (or nothing was applied yet) and no apply Job
+	// runs: it is not started yet, gated, or backing off.
+	ApplyPendingReason = "ApplyPending"
+	// AwaitingApprovalReason is the False reason while a TerraformPlan waits
+	// for its approval.
+	AwaitingApprovalReason = "AwaitingApproval"
+	// ApplyRunningReason is the False reason while an apply Job runs.
+	ApplyRunningReason = "ApplyRunning"
+	// InputsApplyFailedReason is the False reason when the last apply failed
+	// and none has succeeded since.
+	InputsApplyFailedReason = "InputsApplyFailed"
+	// InputsUnavailableReason is the Unknown reason when the current inputs
+	// cannot be built (a dependency or the variables gate them), so they
+	// cannot be compared with the applied ones.
+	InputsUnavailableReason = "InputsUnavailable"
+)
+
 // Ready of a TerraformClusterIdentity: positive polarity. The identity uses
 // ReadyCondition with its own reasons; the manager sets it from the
 // credentials Secret.
@@ -650,6 +680,7 @@ var (
 		EndpointAvailableCondition,
 		RestoreJobSucceededCondition,
 		AutoscalingActiveCondition,
+		InputsAppliedCondition,
 	}
 
 	// SetOnFirstVisit are set on the first reconcile so that
@@ -742,6 +773,11 @@ func ConditionReasons() map[string]map[metav1.ConditionStatus][]string {
 		AutoscalingActiveCondition: {
 			metav1.ConditionTrue:  {ReplicasManagedByModuleReason},
 			metav1.ConditionFalse: {AutoscalingDisabledReason, AutoscalingAnnotationsInvalidReason, ReplicasManagedExternallyReason},
+		},
+		InputsAppliedCondition: {
+			metav1.ConditionTrue:    {InputsAppliedReason},
+			metav1.ConditionFalse:   {ApplyPendingReason, AwaitingApprovalReason, ApplyRunningReason, InputsApplyFailedReason},
+			metav1.ConditionUnknown: {InputsUnavailableReason},
 		},
 		clusterv1.DeletingCondition: {
 			metav1.ConditionTrue:  {clusterv1.DeletingReason, DeletionPolicyUnresolvedReason},

@@ -105,6 +105,7 @@ type TerraformMachineStatus struct {
 // +kubebuilder:printcolumn:name="Provisioned",type="boolean",JSONPath=".status.initialization.provisioned",description="Infrastructure provisioned"
 // +kubebuilder:printcolumn:name="ProviderID",type="string",JSONPath=".spec.providerID",description="Provider ID"
 // +kubebuilder:printcolumn:name="Image",type="string",JSONPath=".spec.source.image",description="Module image",priority=1
+// +kubebuilder:printcolumn:name="InputsApplied",type="string",JSONPath=`.status.conditions[?(@.type=="InputsApplied")].status`,description="InputsApplied condition",priority=1
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp",description="Time since creation"
 
 // TerraformMachine is the Schema for the terraformmachines API: the

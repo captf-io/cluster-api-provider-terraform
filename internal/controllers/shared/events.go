@@ -435,6 +435,10 @@ func transitionFor(prev *metav1.Condition, c metav1.Condition, bk *Bookkeeping) 
 	switch c.Type {
 	case clusterv1.PausedCondition:
 		return transition{}, false
+	case infrav1.InputsAppliedCondition:
+		// The apply Job's own outcome, the plan wait and InputsChanged
+		// already emit; this one only summarizes them for status readers.
+		return transition{}, false
 	case infrav1.RestoreJobSucceededCondition:
 		if reason, ok := leaseWaitEvents[c.Reason]; ok {
 			if prev == nil || prev.Reason != c.Reason {
