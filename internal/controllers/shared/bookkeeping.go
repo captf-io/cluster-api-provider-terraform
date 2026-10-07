@@ -870,7 +870,19 @@ func (bk *Bookkeeping) promote(ctx context.Context, d Deps, k Kind, f *finished,
 		rec.Digest = prev.Digest
 	}
 	if err := inputs.Promote(ctx, d.Client, k.Object(), *rec); err != nil {
-		return err
+		if !promoteRefused(err) {
+			return err
+		}
+		// A quota or a policy that refuses the applied Secret refuses it
+		// on every pass: failing them all would block every other step,
+		// a destroy or a Retain among them. The attempt record keeps the
+		// same inputs, which a destroy renders when the state's hash is
+		// theirs (runRecord).
+		logger.Error(err, "Cannot write the applied inputs record; a destroy renders the attempt record")
+		d.EmitRelated(k.Object(), f.job, corev1.EventTypeWarning, EventAppliedInputsUnknown, "Pin",
+			"Job %s succeeded, but the applied inputs Secret cannot be written (%v): a destroy renders the attempt record. Allow the Secret (a ResourceQuota on Secrets, an admission policy) for the next apply to record it",
+			f.job.Name, err)
+		return nil
 	}
 	bk.Promoted = rec
 	if err := bk.clearUnpullable(ctx, d, k, durable); err != nil {
@@ -893,6 +905,13 @@ func (bk *Bookkeeping) promote(ctx context.Context, d Deps, k Kind, f *finished,
 		d.EmitRelated(k.Object(), f.job, corev1.EventTypeNormal, EventDigestPinned, "Pin", "Job %s ran %s; later operations run this digest", f.job.Name, rec.Digest)
 	}
 	return nil
+}
+
+// promoteRefused reports whether err, from writing the applied record, is
+// the API server refusing it (forbidden, invalid, too large): what a
+// retry gets again, unlike a conflict or an outage.
+func promoteRefused(err error) bool {
+	return apierrors.IsForbidden(err) || apierrors.IsInvalid(err) || apierrors.IsRequestEntityTooLargeError(err) || apierrors.IsBadRequest(err)
 }
 
 // clearUnpullable removes, using ctx and d, k's list of images non-apply

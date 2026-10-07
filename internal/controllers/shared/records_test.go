@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -273,6 +274,37 @@ func TestPromoteCrashBetweenSteps(t *testing.T) {
 	}
 	if err := r.c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: inputs.RunName(first)}, &corev1.Secret{}); !apierrors.IsNotFound(err) {
 		t.Errorf("per-run Secret: %v, want it deleted on the second pass", err)
+	}
+}
+
+// TestPromoteRefusedDoesNotWedge: an applied record the API server
+// refuses (a ResourceQuota on Secrets) fails no pass: the pass completes
+// with a Warning, and the attempt record still holds the inputs a destroy
+// renders.
+func TestPromoteRefusedDoesNotWedge(t *testing.T) {
+	t.Parallel()
+	appliedName := inputs.AppliedName("m", testName)
+	funcs := interceptor.Funcs{
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if obj.GetName() == appliedName {
+				return apierrors.NewForbidden(corev1.Resource("secrets"), appliedName, errors.New("exceeded quota: count/secrets"))
+			}
+			return c.Create(ctx, obj, opts...)
+		},
+	}
+	r := &recordsEnv{env: newEnvWith(t, funcs, world(machine(withFinalizer, notPaused, recordsMachine))...), in: machineIn()}
+	first := r.startsApply(t)
+	r.finishRunner(t, first, jobs.Succeeded, t0.Add(-time.Hour), "")
+	hash := r.jobNamed(t, first).Annotations[state.InputsHashAnnotation]
+	r.state.st = &state.State{Serial: 1, InputsHash: hash}
+	if _, err := reconcileOnce(t, r.env, r.kind(t)); err != nil {
+		t.Fatalf("a refused applied record failed the pass: %v", err)
+	}
+	if n := r.rec.count(EventAppliedInputsUnknown); n != 1 {
+		t.Errorf("AppliedInputsUnknown events = %d, want 1", n)
+	}
+	if d := r.records(t); d.Applied != nil || d.Attempt == nil || d.Attempt.InputsHash != hash {
+		t.Errorf("records = %+v, want no applied record and the attempt under %s", d, hash)
 	}
 }
 
