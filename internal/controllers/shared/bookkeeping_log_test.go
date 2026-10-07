@@ -75,7 +75,7 @@ func TestCheckLockLogs(t *testing.T) {
 			e := newEnv(t, world(machine(withFinalizer, notPaused), lease)...)
 			logger, u := capture(t, tt.verbosity)
 			bk := &Bookkeeping{}
-			if err := bk.checkLock(klog.NewContext(t.Context(), logger), e.d, e.kindFor(t, readyOwner), suffix); err != nil {
+			if err := bk.checkLock(klog.NewContext(t.Context(), logger), e.d, e.kindFor(t, readyOwner()), suffix); err != nil {
 				t.Fatal(err)
 			}
 			got := u.GetBuffer().String()

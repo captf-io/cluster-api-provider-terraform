@@ -85,7 +85,7 @@ func newRecordsEnv(t *testing.T, funcs interceptor.Funcs) *recordsEnv {
 // t fails the test when the object cannot be read.
 func (r *recordsEnv) kind(t *testing.T) *fakeKind {
 	t.Helper()
-	k := r.kindFor(t, readyOwner)
+	k := r.kindFor(t, readyOwner())
 	k.mutable, k.in = true, r.in
 	return k
 }

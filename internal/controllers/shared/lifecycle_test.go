@@ -86,7 +86,7 @@ func TestStuckJobDeleteFinishes(t *testing.T) {
 	e := newEnv(t, world(machine(withFinalizer, notPaused))...)
 	const name = "captf-m-m1-apply-a1-abcdef"
 	e.runner.jobs = append(e.runner.jobs, job(name, jobs.OpApply, jobs.Running, t0))
-	k := e.kindFor(t, readyOwner)
+	k := e.kindFor(t, readyOwner())
 	k.in = machineIn()
 	requeue, err := reconcileOnce(t, e, k)
 	if err != nil {
@@ -119,7 +119,7 @@ func TestChecksWithoutDurableInputs(t *testing.T) {
 	e.runner.jobs = append(e.runner.jobs, a)
 	e.state.st = &state.State{Serial: 1, InputsHash: "h1:x"}
 	for pass := range 2 {
-		k := e.kindFor(t, readyOwner)
+		k := e.kindFor(t, readyOwner())
 		k.refresh, k.health = true, &contract.Health{State: contract.HealthPending}
 		requeue, err := reconcileOnce(t, e, k)
 		if err != nil {
@@ -154,7 +154,7 @@ func TestUnreadableStateLogged(t *testing.T) {
 	logger := ktesting.NewLogger(t, ktesting.NewConfig(ktesting.Verbosity(0), ktesting.BufferLogs(true)))
 	ctx := klog.NewContext(t.Context(), logger)
 	for range 2 {
-		k := e.kindFor(t, readyOwner)
+		k := e.kindFor(t, readyOwner())
 		k.in = machineIn()
 		if _, err := Reconcile(ctx, e.d, k); err != nil {
 			t.Fatal(err)
@@ -180,7 +180,7 @@ func TestMirrorConflictNamed(t *testing.T) {
 	logger := ktesting.NewLogger(t, ktesting.NewConfig(ktesting.Verbosity(0), ktesting.BufferLogs(true)))
 	ctx := klog.NewContext(t.Context(), logger)
 	for pass := range 2 {
-		k := e.kindFor(t, readyOwner)
+		k := e.kindFor(t, readyOwner())
 		k.in = machineIn()
 		if _, err := Reconcile(ctx, e.d, k); err != nil {
 			t.Fatal(err)

@@ -276,7 +276,7 @@ func TestReconcileStartsDrift(t *testing.T) {
 	e := newEnv(t, world(machine(withFinalizer, notPaused, func(m *infrav1.TerraformMachine) {
 		m.Status.Initialization.Provisioned = new(true)
 	}))...)
-	k := e.kindFor(t, readyOwner)
+	k := e.kindFor(t, readyOwner())
 	k.in = machineIn()
 	digest := "registry.example/mod@sha256:" + strings.Repeat("c", 64)
 	if err := writeInputs(t.Context(), e.c, k.obj, renderMachine(t), testMeta{Image: "registry.example/mod:1.0", Identity: testIdentity, ImageDigest: digest}); err != nil {

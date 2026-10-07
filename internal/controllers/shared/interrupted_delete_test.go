@@ -138,7 +138,7 @@ func TestCleanupMirrorConflict(t *testing.T) {
 	if err := e.c.Create(t.Context(), mirror); err != nil {
 		t.Fatal(err)
 	}
-	k := e.kindFor(t, readyOwner)
+	k := e.kindFor(t, readyOwner())
 	suffix, err := state.Suffix(testNS, k.Kind(), testName)
 	if err != nil {
 		t.Fatal(err)
@@ -159,7 +159,7 @@ func TestCleanupMirrorConflict(t *testing.T) {
 
 	// The reconcile that runs the cleanup takes the race as a quiet
 	// requeue, not a reconcile error, and keeps the finalizer.
-	res, err := Reconcile(t.Context(), e.d, e.kindFor(t, readyOwner))
+	res, err := Reconcile(t.Context(), e.d, e.kindFor(t, readyOwner()))
 	if err != nil || res.RequeueAfter != LagRequeue {
 		t.Fatalf("Reconcile = %+v, %v; want a quiet requeue after %s", res, err, LagRequeue)
 	}

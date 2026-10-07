@@ -82,7 +82,7 @@ func TestHealthSamplesPerRefresh(t *testing.T) {
 	sick := &contract.Health{State: contract.HealthRunning, Healthy: false}
 	reconcile := func() int32 {
 		t.Helper()
-		k := e.kindFor(t, readyOwner)
+		k := e.kindFor(t, readyOwner())
 		k.health = sick
 		if _, err := reconcileOnce(t, e, k); err != nil {
 			t.Fatal(err)
@@ -121,7 +121,7 @@ func TestHealthCheckInterval(t *testing.T) {
 				m.Spec.Remediation = &infrav1.MachineRemediation{AnnotateMachine: new(tt.annotate)}
 				m.Status.LastRefresh = &metav1.Time{Time: t0.Add(-10 * time.Minute)}
 			}))...)
-			k := e.kindFor(t, readyOwner)
+			k := e.kindFor(t, readyOwner())
 			if err := writeInputs(t.Context(), e.c, k.obj, renderMachine(t), testMeta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
 				t.Fatal(err)
 			}
@@ -192,7 +192,7 @@ func TestRevertAfterFailedApply(t *testing.T) {
 			}
 			e.runner.jobs = append(e.runner.jobs, a, b)
 			e.state.st = &state.State{InputsHash: hA}
-			k := e.kindFor(t, readyOwner)
+			k := e.kindFor(t, readyOwner())
 			k.mutable = true
 			k.in = machineIn()
 			k.health = &contract.Health{State: contract.HealthRunning, Healthy: true}
@@ -223,7 +223,7 @@ func TestStartJobMarksRemediation(t *testing.T) {
 			Op: jobs.OpApply, Files: renderMachine(t), InputsHash: "h1:x", Source: infrav1.Source{Image: "registry.example/mod:1.0"},
 			Identity: testIdentity, Suffix: suffix, ClusterName: "c1", Attempt: int32(i + 1), Remediation: remediation,
 		}
-		created := e.startLeased(t, e.kindFor(t, readyOwner), req)
+		created := e.startLeased(t, e.kindFor(t, readyOwner()), req)
 		if got := created.Annotations[RemediationAnnotation] == "true"; got != remediation {
 			t.Errorf("remediation %v: annotation %v", remediation, got)
 		}
@@ -237,7 +237,7 @@ func TestStartJobMarksRemediation(t *testing.T) {
 func TestPromotePairsDigestWithItsImage(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, world(machine(withFinalizer, notPaused))...)
-	k := e.kindFor(t, readyOwner)
+	k := e.kindFor(t, readyOwner())
 	k.mutable = true
 	if err := writeInputs(t.Context(), e.c, k.obj, renderMachine(t), testMeta{Image: "registry.example/mod:2.0", Identity: testIdentity}); err != nil {
 		t.Fatal(err)
@@ -318,7 +318,7 @@ func TestStateLost(t *testing.T) {
 			t.Parallel()
 			e := newEnv(t, world(machine(withFinalizer, notPaused, provisioned))...)
 			e.state.st = tt.st
-			k := e.kindFor(t, readyOwner)
+			k := e.kindFor(t, readyOwner())
 			k.health = &contract.Health{State: contract.HealthRunning, Healthy: true}
 			requeue, err := reconcileOnce(t, e, k)
 			if err != nil {
@@ -351,7 +351,7 @@ func TestBookkeptJobCostsNoCalls(t *testing.T) {
 	r, reg := recorder(t)
 	e.d.Metrics = r
 
-	k := e.kindFor(t, readyOwner)
+	k := e.kindFor(t, readyOwner())
 	k.in = machineIn()
 	if _, err := reconcileOnce(t, e, k); err != nil {
 		t.Fatal(err)
@@ -375,7 +375,7 @@ func TestBookkeptJobCostsNoCalls(t *testing.T) {
 	if err := e.c.Create(t.Context(), runSecret()); err != nil {
 		t.Fatal(err)
 	}
-	k = e.kindFor(t, readyOwner)
+	k = e.kindFor(t, readyOwner())
 	k.in = machineIn()
 	if _, err := reconcileOnce(t, e, k); err != nil {
 		t.Fatal(err)
@@ -409,7 +409,7 @@ func TestBookkeptOnlyAfterStatusPatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.runner.jobs = append(e.runner.jobs, failed)
-	k := e.kindFor(t, readyOwner)
+	k := e.kindFor(t, readyOwner())
 	k.in = machineIn()
 	if _, err := reconcileOnce(t, e, k); !errors.Is(err, boom) {
 		t.Fatalf("Reconcile = %v, want the patch error", err)
@@ -435,7 +435,7 @@ func TestDurableReadOncePerReconcile(t *testing.T) {
 		}
 		return c.Get(ctx, key, obj, opts...)
 	}}, world(machine(withFinalizer, notPaused, provisioned))...)
-	k := e.kindFor(t, readyOwner)
+	k := e.kindFor(t, readyOwner())
 	k.mutable = true
 	k.in = machineIn()
 	if err := writeInputs(t.Context(), e.c, k.obj, renderMachine(t), testMeta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
@@ -493,7 +493,7 @@ func TestJobAttemptsIsTheRetryNumber(t *testing.T) {
 		job("f1", jobs.OpApply, jobs.Failed, t0.Add(-3*time.Hour)), job("f2", jobs.OpApply, jobs.Failed, t0.Add(-2*time.Hour)), ok)
 	r, reg := recorder(t)
 	e.d.Metrics = r
-	k := e.kindFor(t, readyOwner)
+	k := e.kindFor(t, readyOwner())
 	k.in = machineIn()
 	if _, err := reconcileOnce(t, e, k); err != nil {
 		t.Fatal(err)
@@ -638,7 +638,7 @@ func TestMirrorUpdateConflictRetried(t *testing.T) {
 		}
 		return c.Update(ctx, obj, opts...)
 	}}, world(machine(withFinalizer, notPaused), mirror)...)
-	k := e.kindFor(t, readyOwner)
+	k := e.kindFor(t, readyOwner())
 	k.in = machineIn()
 	if _, err := reconcileOnce(t, e, k); err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -660,7 +660,7 @@ func TestErrorWithoutRequeueAfter(t *testing.T) {
 		return c.Get(ctx, key, obj, opts...)
 	}}, world(machine(withFinalizer, notPaused))...)
 	e.runner.jobs = append(e.runner.jobs, job("running", jobs.OpApply, jobs.Running, t0))
-	k := e.kindFor(t, readyOwner)
+	k := e.kindFor(t, readyOwner())
 	k.in = machineIn()
 	res, err := Reconcile(t.Context(), e.d, k)
 	if !errors.Is(err, boom) || res.RequeueAfter != 0 {
@@ -686,7 +686,7 @@ func TestStateLockedVisible(t *testing.T) {
 	}
 	e := newEnv(t, world(machine(withFinalizer, notPaused, provisioned), lease)...)
 	e.state.st = &state.State{InputsHash: "h1:x"}
-	k := e.kindFor(t, readyOwner)
+	k := e.kindFor(t, readyOwner())
 	k.health = &contract.Health{State: contract.HealthRunning, Healthy: true}
 	if _, err := reconcileOnce(t, e, k); err != nil {
 		t.Fatal(err)
@@ -707,7 +707,7 @@ func TestStateLockedVisible(t *testing.T) {
 func TestInputsTooLarge(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, world(machine(withFinalizer, notPaused))...)
-	k := e.kindFor(t, readyOwner)
+	k := e.kindFor(t, readyOwner())
 	big := machineIn()
 	big.BootstrapData = base64.StdEncoding.EncodeToString(make([]byte, 1<<20))
 	k.in = big
@@ -735,7 +735,7 @@ func TestInvalidJobPolicy(t *testing.T) {
 	t.Run("provisioning is refused", func(t *testing.T) {
 		t.Parallel()
 		e := newEnv(t, world(machine(withFinalizer, notPaused, withShortDeadline))...)
-		k := e.kindFor(t, readyOwner)
+		k := e.kindFor(t, readyOwner())
 		k.in = machineIn()
 		requeue, err := reconcileOnce(t, e, k)
 		if err != nil {
@@ -756,7 +756,7 @@ func TestInvalidJobPolicy(t *testing.T) {
 			t.Fatal(err)
 		}
 		e.state.st = &state.State{InputsHash: "h1:x"}
-		reconcileMachine(t, e, readyOwner)
+		reconcileMachine(t, e, readyOwner())
 		if len(e.runner.created) != 1 {
 			t.Errorf("created %v, want one destroy Job", e.runner.created)
 		}
@@ -768,7 +768,7 @@ func TestInvalidJobPolicy(t *testing.T) {
 func TestSetInitialDriftNotChecked(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, world(machine(withFinalizer, notPaused))...)
-	k := e.kindFor(t, readyOwner)
+	k := e.kindFor(t, readyOwner())
 	k.in = machineIn()
 	if _, err := reconcileOnce(t, e, k); err != nil {
 		t.Fatal(err)

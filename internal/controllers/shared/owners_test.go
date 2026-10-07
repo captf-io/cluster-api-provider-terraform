@@ -276,7 +276,7 @@ func TestReconcileRepairsOwnersAfterRestore(t *testing.T) {
 			if stripped {
 				setRefs(t, e, nil, owned...)
 			}
-			reconcileM1(t, e, readyOwner)
+			reconcileM1(t, e, readyOwner())
 			want := []metav1.OwnerReference{ownerRefTo(testName, newUID)}
 			for _, s := range owned {
 				if got := secretRefs(t, e, s); !reflect.DeepEqual(got, want) {
@@ -298,7 +298,7 @@ func TestReconcileRepairsOwnersAfterRestore(t *testing.T) {
 			}
 
 			before, updates, _, _ := calls.snapshot()
-			reconcileM1(t, e, readyOwner)
+			reconcileM1(t, e, readyOwner())
 			if after, u, _, _ := calls.snapshot(); after != before || u != updates {
 				t.Errorf("second reconcile: %d owner-reference patches, %d updates", after-before, u-updates)
 			}
@@ -314,7 +314,7 @@ func TestReconcileOwnsLaterChunk(t *testing.T) {
 	e, calls, owned := ownedEnv(t, newUID, newUID)
 	part := owned[1]
 	setRefs(t, e, nil, part)
-	reconcileM1(t, e, readyOwner)
+	reconcileM1(t, e, readyOwner())
 	if got := secretRefs(t, e, part); !reflect.DeepEqual(got, []metav1.OwnerReference{ownerRefTo(testName, newUID)}) {
 		t.Errorf("chunk ownerRefs = %+v", got)
 	}
@@ -343,7 +343,7 @@ func TestReconcileLeavesForeignSecrets(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	reconcileM1(t, e, readyOwner)
+	reconcileM1(t, e, readyOwner())
 	for _, name := range foreign {
 		if got := secretRefs(t, e, name); !reflect.DeepEqual(got, []metav1.OwnerReference{ownerRefTo(testName, oldUID)}) {
 			t.Errorf("foreign %s: ownerRefs = %+v, want untouched", name, got)
@@ -362,7 +362,7 @@ func TestReconcileLeavesForeignSecrets(t *testing.T) {
 func TestReconcileOwnedCostsNothing(t *testing.T) {
 	t.Parallel()
 	e, calls, _ := ownedEnv(t, newUID, newUID)
-	reconcileM1(t, e, readyOwner)
+	reconcileM1(t, e, readyOwner())
 	if p, u, g, l := calls.snapshot(); p != 0 || u != 0 || g != 0 || l != 0 {
 		t.Errorf("owner-reference patches %d, Secret updates %d, plan key reads %d, backup listings %d; want none", p, u, g, l)
 	}
@@ -399,7 +399,7 @@ func TestReconcileChunksWaitForRunLease(t *testing.T) {
 	if err := e.c.Create(t.Context(), lease); err != nil {
 		t.Fatal(err)
 	}
-	reconcileM1(t, e, readyOwner)
+	reconcileM1(t, e, readyOwner())
 	want := map[bool][]metav1.OwnerReference{true: {ownerRefTo(testName, oldUID)}, false: {ownerRefTo(testName, newUID)}}
 	for i, name := range owned {
 		if got := secretRefs(t, e, name); !reflect.DeepEqual(got, want[i < 2]) {
@@ -409,7 +409,7 @@ func TestReconcileChunksWaitForRunLease(t *testing.T) {
 	if err := e.c.Delete(t.Context(), lease); err != nil {
 		t.Fatal(err)
 	}
-	reconcileM1(t, e, readyOwner)
+	reconcileM1(t, e, readyOwner())
 	for _, name := range owned[:2] {
 		if got := secretRefs(t, e, name); !reflect.DeepEqual(got, want[false]) {
 			t.Errorf("%s: ownerRefs = %+v after the lease is gone", name, got)
@@ -431,12 +431,12 @@ func TestReconcileRepairFailureTolerated(t *testing.T) {
 			t.Parallel()
 			e, calls, owned := ownedEnv(t, newUID, oldUID)
 			calls.fail.Store(&failure)
-			reconcileM1(t, e, readyOwner)
+			reconcileM1(t, e, readyOwner())
 			if p, _, _, _ := calls.snapshot(); p == 0 {
 				t.Fatal("no repair was attempted")
 			}
 			calls.fail.Store(nil)
-			reconcileM1(t, e, readyOwner)
+			reconcileM1(t, e, readyOwner())
 			for _, s := range owned {
 				if got := secretRefs(t, e, s); !reflect.DeepEqual(got, []metav1.OwnerReference{ownerRefTo(testName, newUID)}) {
 					t.Errorf("%s: ownerRefs = %+v after the retry", s, got)

@@ -75,7 +75,7 @@ func TestConsumedAnnotationKeepsNewValue(t *testing.T) {
 		e := newEnvWith(t, funcs, world(machine(withFinalizer, notPaused, restoring("5")), restored.DeepCopy())...)
 		e.runner.jobs = append(e.runner.jobs, restored)
 		e.state.st = &state.State{Serial: 5, InputsHash: "h1:x"}
-		k := e.kindFor(t, readyOwner)
+		k := e.kindFor(t, readyOwner())
 		k.in = machineIn()
 		res, err := Reconcile(t.Context(), e.d, k)
 		if err != nil {

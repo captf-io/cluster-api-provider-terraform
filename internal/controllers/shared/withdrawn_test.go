@@ -35,7 +35,7 @@ import (
 func clusterBlockedReconciler(t *testing.T, action infrav1.DriftAction, conds ...metav1.Condition) *reconciler {
 	t.Helper()
 	e := newEnv(t, machine())
-	k := e.kindFor(t, readyOwner)
+	k := e.kindFor(t, readyOwner())
 	k.asCluster, k.mutable = true, true
 	for _, c := range conds {
 		conditions.Set(k.obj, c)

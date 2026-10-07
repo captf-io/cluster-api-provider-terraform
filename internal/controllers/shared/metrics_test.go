@@ -212,7 +212,7 @@ func TestJobMetricsCountedOnce(t *testing.T) {
 	pod.Status.ContainerStatuses[0].State.Terminated.StartedAt = metav1.NewTime(applied.CreationTimestamp.Add(20 * time.Second))
 	e.runner.pods["a"] = []corev1.Pod{*pod}
 	e.state.st = &state.State{InputsHash: "h1:x", ManagedResources: 3, Bytes: 4096}
-	k := e.kindFor(t, readyOwner)
+	k := e.kindFor(t, readyOwner())
 	k.health = &contract.Health{State: contract.HealthRunning, Healthy: true}
 	if err := writeInputs(t.Context(), e.c, k.obj, renderMachine(t), testMeta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
 		t.Fatal(err)
@@ -230,7 +230,7 @@ func TestJobMetricsCountedOnce(t *testing.T) {
 			t.Fatalf("pass %d: Job not bookkept", pass)
 		}
 		e.jobNamed(t, "a").Annotations = stored.Annotations
-		k = e.kindFor(t, readyOwner)
+		k = e.kindFor(t, readyOwner())
 		k.health = &contract.Health{State: contract.HealthRunning, Healthy: true}
 
 		want := `
@@ -294,7 +294,7 @@ func TestObjectGaugesDeletedWithObject(t *testing.T) {
 	r.SetObject(state.KindTerraformMachine, testNS, testName, metrics.Object{})
 	e.state.st = &state.State{InputsHash: "h1:x"}
 	e.runner.jobs = append(e.runner.jobs, job("d", jobs.OpDestroy, jobs.Succeeded, t0))
-	if _, err := reconcileOnce(t, e, e.kindFor(t, readyOwner)); err != nil {
+	if _, err := reconcileOnce(t, e, e.kindFor(t, readyOwner())); err != nil {
 		t.Fatal(err)
 	}
 	if e.get(t) != nil {
@@ -337,7 +337,7 @@ func TestLastSuccessScheduled(t *testing.T) {
 			// A value from before: a paused reconcile removes it.
 			r.SetLastSuccess(state.KindTerraformMachine, testNS, testName, "drift", check)
 			e.state.st = &state.State{InputsHash: "h1:x"}
-			owner := readyOwner
+			owner := readyOwner()
 			if tt.paused {
 				owner = OwnerInfo{HasOwnerRef: true, Cluster: cluster(true)}
 			}
@@ -383,7 +383,7 @@ func TestInputsBytesTooLarge(t *testing.T) {
 	r, reg := recorder(t)
 	e := newEnv(t, world(machine(withFinalizer, notPaused))...)
 	e.d.Metrics = r
-	k := e.kindFor(t, readyOwner)
+	k := e.kindFor(t, readyOwner())
 	big := machineIn()
 	big.BootstrapData = base64.StdEncoding.EncodeToString(make([]byte, 800_000))
 	k.in = big

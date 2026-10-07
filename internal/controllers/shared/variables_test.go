@@ -374,7 +374,7 @@ func TestReconcileMutableReappliesOnSourceChange(t *testing.T) {
 	}
 	e := newEnv(t, world(machine(withFinalizer, notPaused, withVarsFrom, checked), cm)...)
 	e.state.st = &state.State{InputsHash: appliedHash(t, "t3.large")}
-	k := &varKind{fakeKind: e.kindFor(t, readyOwner), c: e.c}
+	k := &varKind{fakeKind: e.kindFor(t, readyOwner()), c: e.c}
 	k.mutable, k.asCluster = true, true
 	k.health = &contract.Health{State: contract.HealthRunning, Healthy: true}
 	if _, err := Reconcile(t.Context(), e.d, k); err != nil {
@@ -388,7 +388,7 @@ func TestReconcileMutableReappliesOnSourceChange(t *testing.T) {
 	if err := e.c.Update(t.Context(), cm); err != nil {
 		t.Fatal(err)
 	}
-	k.fakeKind = e.kindFor(t, readyOwner)
+	k.fakeKind = e.kindFor(t, readyOwner())
 	k.mutable, k.asCluster = true, true
 	if _, err := Reconcile(t.Context(), e.d, k); err != nil {
 		t.Fatal(err)
@@ -414,7 +414,7 @@ func TestReconcileProvisionedMachineIgnoresSourceChange(t *testing.T) {
 	provisioned := func(m *infrav1.TerraformMachine) { m.Status.Initialization.Provisioned = new(true) }
 	e := newEnv(t, world(machine(withFinalizer, notPaused, withVarsFrom, provisioned))...) // the ConfigMap is gone
 	e.state.st = &state.State{InputsHash: appliedHash(t, "t3.large")}
-	k := &varKind{fakeKind: e.kindFor(t, readyOwner), c: e.c}
+	k := &varKind{fakeKind: e.kindFor(t, readyOwner()), c: e.c}
 	k.health = &contract.Health{State: contract.HealthRunning, Healthy: true}
 	if _, err := Reconcile(t.Context(), e.d, k); err != nil {
 		t.Fatal(err)
@@ -433,7 +433,7 @@ func TestReconcileProvisionedMachineIgnoresSourceChange(t *testing.T) {
 func TestReconcileMissingSourceGates(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, world(machine(withFinalizer, notPaused, withVarsFrom))...)
-	k := &varKind{fakeKind: e.kindFor(t, readyOwner), c: e.c}
+	k := &varKind{fakeKind: e.kindFor(t, readyOwner()), c: e.c}
 	if _, err := Reconcile(t.Context(), e.d, k); err != nil {
 		t.Fatal(err)
 	}
@@ -445,7 +445,7 @@ func TestReconcileMissingSourceGates(t *testing.T) {
 	if err := e.c.Create(t.Context(), configMap("vars", varsLabel, map[string]string{"instance_type": "t3.large"})); err != nil {
 		t.Fatal(err)
 	}
-	k.fakeKind = e.kindFor(t, readyOwner)
+	k.fakeKind = e.kindFor(t, readyOwner())
 	if _, err := Reconcile(t.Context(), e.d, k); err != nil {
 		t.Fatal(err)
 	}
@@ -468,7 +468,7 @@ func TestReconcileVariablesTooLarge(t *testing.T) {
 	t.Parallel()
 	big := configMap("vars", varsLabel, map[string]string{"blob": strings.Repeat("x", 1_000_001)})
 	e := newEnv(t, world(machine(withFinalizer, notPaused, withVarsFrom), big)...)
-	k := &varKind{fakeKind: e.kindFor(t, readyOwner), c: e.c}
+	k := &varKind{fakeKind: e.kindFor(t, readyOwner()), c: e.c}
 	if _, err := Reconcile(t.Context(), e.d, k); err != nil {
 		t.Fatal(err)
 	}

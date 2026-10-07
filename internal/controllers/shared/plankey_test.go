@@ -76,7 +76,7 @@ func TestStartJobMountsPlanKey(t *testing.T) {
 			Op: tt.op, Files: renderMachine(t), InputsHash: "h1:x", Source: infrav1.Source{Image: "registry.example/mod:1.0"},
 			Identity: testIdentity, Suffix: suffix, ClusterName: "c1", Attempt: int32(i + 1), ExpectPlan: tt.expectPlan,
 		}
-		created := e.startLeased(t, e.kindFor(t, readyOwner), req)
+		created := e.startLeased(t, e.kindFor(t, readyOwner()), req)
 		if got := planKeyVolume(created); got != tt.secret {
 			t.Errorf("%s: plan key Secret %q, want %q", tt.name, got, tt.secret)
 		}

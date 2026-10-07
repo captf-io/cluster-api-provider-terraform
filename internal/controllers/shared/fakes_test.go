@@ -379,12 +379,18 @@ func newEnv(t *testing.T, objs ...client.Object) *env {
 }
 
 // newEnvWith is newEnv with funcs as the fake client's interceptors (for
-// injected failures), holding objs; it returns the built env, using t for
-// setup and cleanup.
+// injected failures), holding deep copies of objs, so parallel tests may
+// share fixtures (the fake client's builder writes resourceVersion into the
+// objects it is given); it returns the built env, using t for setup and
+// cleanup.
 func newEnvWith(t *testing.T, funcs interceptor.Funcs, objs ...client.Object) *env {
 	t.Helper()
 	s := testScheme(t)
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).
+	owned := make([]client.Object, len(objs))
+	for i, o := range objs {
+		owned[i] = o.DeepCopyObject().(client.Object)
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(owned...).
 		WithStatusSubresource(&infrav1.TerraformMachine{}, &infrav1.TerraformPlan{}).
 		WithIndex(&infrav1.TerraformPlan{}, PlanTargetIndex, PlanTargetIndexer).WithInterceptorFuncs(funcs).Build()
 	e := &env{c: c, runner: &fakeRunner{pods: map[string][]corev1.Pod{}}, state: &fakeState{}}
@@ -431,4 +437,35 @@ func job(name string, op jobs.Op, outcome jobs.Outcome, finished time.Time) batc
 		j.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, LastTransitionTime: metav1.NewTime(finished)}}
 	}
 	return j
+}
+
+// TestNewEnvCopiesFixtures: parallel subtests that hand one shared fixture
+// set to newEnv each reconcile their own copies, so the fake client's
+// builder never writes resourceVersion into a shared object. Under -race
+// this fails if newEnvWith stops copying (the bug fixed by 1d3252b).
+func TestNewEnvCopiesFixtures(t *testing.T) {
+	t.Parallel()
+	shared := world(machine(withFinalizer, notPaused))
+	// The group returns only when its parallel subtests have finished.
+	t.Run("group", func(t *testing.T) {
+		for i := range 8 {
+			t.Run(fmt.Sprintf("subtest-%d", i), func(t *testing.T) {
+				t.Parallel()
+				e := newEnv(t, shared...)
+				k := e.kindFor(t, readyOwner())
+				k.in = machineIn()
+				if _, err := reconcileOnce(t, e, k); err != nil {
+					t.Fatal(err)
+				}
+				if len(e.runner.created) != 1 {
+					t.Errorf("created %v, want one Job", e.runner.created)
+				}
+			})
+		}
+	})
+	for _, o := range shared {
+		if o.GetResourceVersion() != "" {
+			t.Errorf("%T %s: the shared fixture was given resourceVersion %q", o, o.GetName(), o.GetResourceVersion())
+		}
+	}
 }

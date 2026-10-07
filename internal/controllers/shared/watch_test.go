@@ -333,7 +333,7 @@ func TestEvents(t *testing.T) {
 		e.runner.jobs = append(e.runner.jobs, job("a", jobs.OpApply, jobs.Failed, t0))
 		reconcile := func() {
 			t.Helper()
-			k := e.kindFor(t, readyOwner)
+			k := e.kindFor(t, readyOwner())
 			k.in = machineIn()
 			if _, err := reconcileOnce(t, e, k); err != nil {
 				t.Fatal(err)
@@ -357,7 +357,7 @@ func TestEvents(t *testing.T) {
 		e := newEnv(t, world(machine(deleting, notPaused))...)
 		e.state.st = &state.State{InputsHash: "h1:x"}
 		e.runner.jobs = append(e.runner.jobs, job("d", jobs.OpDestroy, jobs.Succeeded, t0))
-		if _, err := reconcileOnce(t, e, e.kindFor(t, readyOwner)); err != nil {
+		if _, err := reconcileOnce(t, e, e.kindFor(t, readyOwner())); err != nil {
 			t.Fatal(err)
 		}
 		if e.rec.count(EventDestroyed) != 1 {
@@ -367,7 +367,7 @@ func TestEvents(t *testing.T) {
 	t.Run("deleting without state drops the finalizer without Destroyed", func(t *testing.T) {
 		t.Parallel()
 		e := newEnv(t, world(machine(deleting, notPaused))...)
-		if _, err := reconcileOnce(t, e, e.kindFor(t, readyOwner)); err != nil {
+		if _, err := reconcileOnce(t, e, e.kindFor(t, readyOwner())); err != nil {
 			t.Fatal(err)
 		}
 		if e.rec.count(EventDestroyed) != 0 {
@@ -379,7 +379,7 @@ func TestEvents(t *testing.T) {
 		objs := world(machine(withFinalizer, notPaused))
 		objs[1].(*infrav1.TerraformClusterIdentity).Spec.AllowedNamespaces = nil
 		e := newEnv(t, objs...)
-		k := e.kindFor(t, readyOwner)
+		k := e.kindFor(t, readyOwner())
 		k.in = machineIn()
 		if _, err := reconcileOnce(t, e, k); err != nil {
 			t.Fatal(err)

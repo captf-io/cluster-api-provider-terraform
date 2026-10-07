@@ -65,7 +65,7 @@ func TestStartJobAdoptsOnlyOwnRunning(t *testing.T) {
 				Source: infrav1.Source{Image: "registry.example/mod:1.0"}, Identity: testIdentity,
 				Suffix: suffix, ClusterName: "c1", Attempt: 1,
 			}
-			k := e.kindFor(t, readyOwner)
+			k := e.kindFor(t, readyOwner())
 			existing := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: testNS, Name: JobName(k, req), UID: "existing-uid"}}
 			owner := client.Object(k.obj)
 			if !tt.ours {
@@ -115,7 +115,7 @@ func TestCreatePlanAlreadyExistsInserts(t *testing.T) {
 		t.Run(map[bool]string{true: "ours", false: "another object's"}[ours], func(t *testing.T) {
 			t.Parallel()
 			e := newEnv(t, world(machine(withFinalizer, notPaused))...)
-			k := e.kindFor(t, readyOwner)
+			k := e.kindFor(t, readyOwner())
 			r := &reconciler{d: e.d, k: k, obj: k.obj, st: k.Status()}
 			f := &finished{
 				job:    &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: testNS, Name: "captf-m-m1-plan-a1-abcdef"}},

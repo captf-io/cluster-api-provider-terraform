@@ -73,7 +73,7 @@ func TestCredentialErrorKeepsBookkeeping(t *testing.T) {
 	applied.Annotations = map[string]string{state.InputsHashAnnotation: "h1:applied"}
 	e.runner.jobs = append(e.runner.jobs, applied)
 	e.state.st = &state.State{Serial: 7}
-	k := e.kindFor(t, readyOwner)
+	k := e.kindFor(t, readyOwner())
 	k.in = machineIn()
 	k.health = &contract.Health{State: contract.HealthRunning, Healthy: true}
 	if _, err := reconcileOnce(t, e, k); !errors.Is(err, boom) {
@@ -115,14 +115,14 @@ func TestCredentialsSkippedWhileJobActive(t *testing.T) {
 			return cl.Create(ctx, obj, opts...)
 		},
 	}, world(machine(withFinalizer, notPaused))...)
-	reconcileMachine(t, e, readyOwner) // starts the apply; creates the RBAC
+	reconcileMachine(t, e, readyOwner()) // starts the apply; creates the RBAC
 	if saCreates.Load() != 1 || len(e.runner.created) != 1 {
 		t.Fatalf("SA creates %d, Jobs %v", saCreates.Load(), e.runner.created)
 	}
 	// The Job is running: no credential call.
 	e.runner.jobs[0].Labels[jobs.AttemptLabel] = "1"
 	gets, rbs := saGets.Load(), rbGets.Load()
-	reconcileMachine(t, e, readyOwner)
+	reconcileMachine(t, e, readyOwner())
 	if saGets.Load() != gets || rbGets.Load() != rbs || saCreates.Load() != 1 {
 		t.Errorf("credential calls while a Job runs: SA gets %d->%d, RB gets %d->%d", gets, saGets.Load(), rbs, rbGets.Load())
 	}
@@ -133,7 +133,7 @@ func TestCredentialsSkippedWhileJobActive(t *testing.T) {
 	}
 	// Idle again: credentials run, and the existing ServiceAccount is not created again.
 	completeJobs(e)
-	reconcileMachine(t, e, readyOwner)
+	reconcileMachine(t, e, readyOwner())
 	if saGets.Load() == gets || saCreates.Load() != 1 {
 		t.Errorf("idle pass: SA gets %d (was %d), creates %d, want the RBAC read and no new Create", saGets.Load(), gets, saCreates.Load())
 	}
@@ -176,7 +176,7 @@ func TestConcurrentFirstUseOfNamespace(t *testing.T) {
 					return cl.Update(ctx, obj, opts...)
 				},
 			}, append(world(machine(withFinalizer, notPaused)), tt.objs...)...)
-			reconcileMachine(t, e, readyOwner)
+			reconcileMachine(t, e, readyOwner())
 			if c := conditions.Get(e.get(t), infrav1.RunnerRBACReadyCondition); c == nil || c.Status != metav1.ConditionTrue {
 				t.Errorf("RunnerRBACReady = %+v, want True", c)
 			}
@@ -201,7 +201,7 @@ func TestDeletedIdentityRevokesMirror(t *testing.T) {
 	t.Run("cluster identity", func(t *testing.T) {
 		t.Parallel()
 		e := newEnv(t, world(machine(withFinalizer, notPaused))...)
-		reconcileMachine(t, e, readyOwner)
+		reconcileMachine(t, e, readyOwner())
 		if err := e.c.Get(t.Context(), mirrorKey, &corev1.Secret{}); err != nil {
 			t.Fatalf("mirror: %v", err)
 		}
@@ -209,8 +209,8 @@ func TestDeletedIdentityRevokesMirror(t *testing.T) {
 			t.Fatal(err)
 		}
 		completeJobs(e)
-		reconcileMachine(t, e, readyOwner)
-		reconcileMachine(t, e, readyOwner)
+		reconcileMachine(t, e, readyOwner())
+		reconcileMachine(t, e, readyOwner())
 		if err := e.c.Get(t.Context(), mirrorKey, &corev1.Secret{}); !apierrors.IsNotFound(err) {
 			t.Errorf("mirror: %v, want not found", err)
 		}
@@ -231,7 +231,7 @@ func TestDeletedIdentityRevokesMirror(t *testing.T) {
 		bystander := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: testNS, Name: identity.MirrorName(secretName)}}
 		creds := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: testNS, Name: secretName}, Data: map[string][]byte{"KEY": []byte("v")}}
 		e := newEnv(t, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNS}}, creds, bystander, local)
-		reconcileMachine(t, e, readyOwner)
+		reconcileMachine(t, e, readyOwner())
 		if err := e.c.Get(t.Context(), mirrorKey, &corev1.Secret{}); err != nil {
 			t.Errorf("Secret: %v, want it untouched", err)
 		}

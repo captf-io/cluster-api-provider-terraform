@@ -100,7 +100,7 @@ func TestInputsApplied(t *testing.T) {
 func TestReconcileSetsInputsApplied(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, world(machine(withFinalizer, notPaused))...)
-	k := e.kindFor(t, readyOwner)
+	k := e.kindFor(t, readyOwner())
 	k.gate = &Gate{Status: metav1.ConditionUnknown, Reason: infrav1.WaitingForBootstrapDataReason, Message: "waiting"}
 	if _, err := reconcileOnce(t, e, k); err != nil {
 		t.Fatal(err)
@@ -112,7 +112,7 @@ func TestReconcileSetsInputsApplied(t *testing.T) {
 	}
 
 	e = newEnv(t, world(machine(withFinalizer, notPaused))...)
-	k = e.kindFor(t, readyOwner)
+	k = e.kindFor(t, readyOwner())
 	k.in = machineIn()
 	if _, err := reconcileOnce(t, e, k); err != nil {
 		t.Fatal(err)

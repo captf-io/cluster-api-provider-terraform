@@ -291,8 +291,8 @@ func TestJobOutcomeEvents(t *testing.T) {
 			if tt.result != "" {
 				e.runner.pods["a"] = []corev1.Pod{*podWith(tt.result, "")}
 			}
-			reconcileMachine(t, e, readyOwner)
-			reconcileMachine(t, e, readyOwner)
+			reconcileMachine(t, e, readyOwner())
+			reconcileMachine(t, e, readyOwner())
 			got := e.rec.only(tt.reason)
 			if len(got) != 1 || got[0].eventType != tt.typ || !strings.HasPrefix(got[0].note, tt.note) {
 				t.Fatalf("%s events = %+v, want one %s with %q (all: %v)", tt.reason, got, tt.typ, tt.note, e.rec.reasons)
@@ -318,8 +318,8 @@ func TestLifecycleEvents(t *testing.T) {
 			t.Fatal(err)
 		}
 		e.state.st = &state.State{InputsHash: "h1:x"}
-		reconcileMachine(t, e, readyOwner)
-		reconcileMachine(t, e, readyOwner)
+		reconcileMachine(t, e, readyOwner())
+		reconcileMachine(t, e, readyOwner())
 		if n := e.rec.count(EventDeletionStarted); n != 1 {
 			t.Errorf("DeletionStarted = %d, want 1 (%v)", n, e.rec.reasons)
 		}
@@ -345,7 +345,7 @@ func TestLifecycleEvents(t *testing.T) {
 		if _, _, err := identity.EnsureMirror(t.Context(), e.c, e.c, id, testNS, e.get(t)); err != nil {
 			t.Fatal(err)
 		}
-		reconcileMachine(t, e, readyOwner)
+		reconcileMachine(t, e, readyOwner())
 		// The object was the mirror's only user: cleanup deletes it.
 		if e.rec.count(EventDestroyed) != 1 || e.rec.count(EventFinalizerRemoved) != 1 || e.rec.count(EventMirrorRemoved) != 1 || e.rec.count(EventMirrorCreated) != 0 {
 			t.Errorf("events = %v", e.rec.reasons)
@@ -356,7 +356,7 @@ func TestLifecycleEvents(t *testing.T) {
 		for _, on := range []bool{true, false} {
 			e := newEnv(t, world(machine(withFinalizer, notPaused))...)
 			e.d.RunnerEvents = on
-			reconcileMachine(t, e, readyOwner)
+			reconcileMachine(t, e, readyOwner())
 			if len(e.runner.jobs) != 1 {
 				t.Fatalf("jobs = %v", e.runner.created)
 			}
@@ -376,7 +376,7 @@ func TestLifecycleEvents(t *testing.T) {
 	t.Run("deletion without state removes the finalizer", func(t *testing.T) {
 		t.Parallel()
 		e := newEnv(t, world(machine(deleting, notPaused))...)
-		reconcileMachine(t, e, readyOwner)
+		reconcileMachine(t, e, readyOwner())
 		if e.rec.count(EventDestroyed) != 0 || e.rec.count(EventFinalizerRemoved) != 1 {
 			t.Errorf("events = %v", e.rec.reasons)
 		}
@@ -390,8 +390,8 @@ func TestLifecycleEvents(t *testing.T) {
 		if n, m := e.rec.count(EventPaused), e.rec.count(EventResumed); n != 1 || m != 0 {
 			t.Errorf("after pausing: %d Paused, %d Resumed (%v)", n, m, e.rec.reasons)
 		}
-		reconcileMachine(t, e, readyOwner)
-		reconcileMachine(t, e, readyOwner)
+		reconcileMachine(t, e, readyOwner())
+		reconcileMachine(t, e, readyOwner())
 		if n, m := e.rec.count(EventPaused), e.rec.count(EventResumed); n != 1 || m != 1 {
 			t.Errorf("after resuming: %d Paused, %d Resumed (%v)", n, m, e.rec.reasons)
 		}
@@ -399,7 +399,7 @@ func TestLifecycleEvents(t *testing.T) {
 	t.Run("a first visit that is not paused is quiet", func(t *testing.T) {
 		t.Parallel()
 		e := newEnv(t, world(machine(withFinalizer))...)
-		reconcileMachine(t, e, readyOwner)
+		reconcileMachine(t, e, readyOwner())
 		if e.rec.count(EventPaused)+e.rec.count(EventResumed) != 0 {
 			t.Errorf("events = %v", e.rec.reasons)
 		}
@@ -408,7 +408,7 @@ func TestLifecycleEvents(t *testing.T) {
 		t.Parallel()
 		e := newEnv(t, world(machine(withFinalizer, notPaused))...)
 		e.runner.jobs = append(e.runner.jobs, job("stuck", jobs.OpApply, jobs.Running, t0.Add(-time.Minute)))
-		reconcileMachine(t, e, readyOwner)
+		reconcileMachine(t, e, readyOwner())
 		if got := e.rec.only(EventStuckJobDeleted); len(got) != 1 || got[0].eventType != warning || !strings.Contains(got[0].note, "stuck") {
 			t.Errorf("StuckJobDeleted = %+v", got)
 		}
@@ -418,8 +418,8 @@ func TestLifecycleEvents(t *testing.T) {
 		e := newEnv(t, world(machine(withFinalizer, notPaused))...)
 		e.state.st = &state.State{InputsHash: "h1:old"}
 		mutable := func(k *fakeKind) { k.mutable = true }
-		reconcileMachine(t, e, readyOwner, mutable)
-		reconcileMachine(t, e, readyOwner, mutable) // the Job runs: nothing new
+		reconcileMachine(t, e, readyOwner(), mutable)
+		reconcileMachine(t, e, readyOwner(), mutable) // the Job runs: nothing new
 		if got := e.rec.only(EventInputsChanged); len(got) != 1 || !strings.Contains(got[0].note, "h1:old") {
 			t.Errorf("InputsChanged = %+v", got)
 		}
@@ -446,8 +446,8 @@ func TestLifecycleEvents(t *testing.T) {
 		e.runner.jobs = append(e.runner.jobs, applied)
 		e.state.st = &state.State{Serial: 7}
 		healthy := func(k *fakeKind) { k.health = &contract.Health{State: contract.HealthRunning, Healthy: true} }
-		reconcileMachine(t, e, readyOwner, healthy)
-		reconcileMachine(t, e, readyOwner, healthy)
+		reconcileMachine(t, e, readyOwner(), healthy)
+		reconcileMachine(t, e, readyOwner(), healthy)
 		if got := e.rec.only(EventStateAdopted); len(got) != 1 || !strings.Contains(got[0].note, "h1:applied") {
 			t.Errorf("StateAdopted = %+v", got)
 		}
@@ -460,8 +460,8 @@ func TestLifecycleEvents(t *testing.T) {
 	t.Run("mirror created once, removed when the identity stops allowing", func(t *testing.T) {
 		t.Parallel()
 		e := newEnv(t, world(machine(withFinalizer, notPaused))...)
-		reconcileMachine(t, e, readyOwner)
-		reconcileMachine(t, e, readyOwner)
+		reconcileMachine(t, e, readyOwner())
+		reconcileMachine(t, e, readyOwner())
 		if n := e.rec.count(EventMirrorCreated); n != 1 {
 			t.Errorf("MirrorCreated = %d (%v)", n, e.rec.reasons)
 		}
@@ -479,8 +479,8 @@ func TestLifecycleEvents(t *testing.T) {
 				Type: batchv1.JobComplete, Status: corev1.ConditionTrue, LastTransitionTime: metav1.NewTime(t0),
 			}}
 		}
-		reconcileMachine(t, e, readyOwner)
-		reconcileMachine(t, e, readyOwner)
+		reconcileMachine(t, e, readyOwner())
+		reconcileMachine(t, e, readyOwner())
 		if n, m := e.rec.count(EventMirrorRemoved), e.rec.count(EventIdentityNotAllowed); n != 1 || m != 1 {
 			t.Errorf("MirrorRemoved = %d, IdentityNotAllowed = %d (%v)", n, m, e.rec.reasons)
 		}
@@ -490,10 +490,10 @@ func TestLifecycleEvents(t *testing.T) {
 		e := newEnv(t, world(machine(withFinalizer, notPaused))...)
 		e.runner.jobs = append(e.runner.jobs, job("running", jobs.OpApply, jobs.Running, t0))
 		e.runner.pods["running"] = []corev1.Pod{{Status: corev1.PodStatus{Phase: corev1.PodRunning}}}
-		reconcileMachine(t, e, readyOwner)
+		reconcileMachine(t, e, readyOwner())
 		n := len(e.rec.reasons)
 		for range 3 {
-			reconcileMachine(t, e, readyOwner)
+			reconcileMachine(t, e, readyOwner())
 		}
 		if len(e.rec.reasons) != n {
 			t.Errorf("repeated reconciles emitted %v", e.rec.reasons[n:])

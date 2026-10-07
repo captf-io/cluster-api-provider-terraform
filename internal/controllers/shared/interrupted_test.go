@@ -40,7 +40,7 @@ func TestInterruptedApplyMachine(t *testing.T) {
 			t.Parallel()
 			e := newEnv(t, world(machine(withFinalizer, notPaused))...)
 			kind := func() *fakeKind {
-				k := e.kindFor(t, readyOwner)
+				k := e.kindFor(t, readyOwner())
 				k.in, k.mutable = machineIn(), mutable
 				return k
 			}

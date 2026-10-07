@@ -106,7 +106,7 @@ func TestNoChangeClusterApply(t *testing.T) {
 	e.state.st = &state.State{Serial: 3, InputsHash: "h1:old"}
 	healthy := &contract.Health{State: contract.HealthRunning, Healthy: true}
 	kind := func() *fakeKind {
-		return &fakeKind{obj: e.get(t), owner: readyOwner, in: machineIn(), mutable: true, asCluster: true, health: healthy}
+		return &fakeKind{obj: e.get(t), owner: readyOwner(), in: machineIn(), mutable: true, asCluster: true, health: healthy}
 	}
 	if _, err := reconcileOnce(t, e, kind()); err != nil {
 		t.Fatal(err)
@@ -252,7 +252,7 @@ func (b *bringup) kind(name string) *fakeKind {
 	if err := b.e.c.Get(b.t.Context(), client.ObjectKey{Namespace: testNS, Name: name}, m); err != nil {
 		b.t.Fatal(err)
 	}
-	k := &fakeKind{obj: m, owner: readyOwner, in: b.in[name], health: b.health[name]}
+	k := &fakeKind{obj: m, owner: readyOwner(), in: b.in[name], health: b.health[name]}
 	if name == bringupCluster {
 		k.asCluster, k.mutable = true, true
 	} else {

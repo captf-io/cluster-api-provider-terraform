@@ -64,7 +64,7 @@ func TestCrashedFirstApplyHolds(t *testing.T) {
 			t.Parallel()
 			e := newEnv(t, world(machine(withFinalizer, notPaused, recordsMachine))...)
 			kind := func() *fakeKind {
-				k := e.kindFor(t, readyOwner)
+				k := e.kindFor(t, readyOwner())
 				k.in, k.mutable = machineIn(), tt.mutable
 				return k
 			}
@@ -143,7 +143,7 @@ func TestRestoreClearsUnconfirmedApply(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			e := newEnv(t, world(machine(withFinalizer, notPaused))...)
-			k := e.kindFor(t, readyOwner)
+			k := e.kindFor(t, readyOwner())
 			e.writeUnapplied(t, k.obj, seedJob)
 			if err := inputs.SetMayHaveApplied(t.Context(), e.c, k.obj); err != nil {
 				t.Fatal(err)

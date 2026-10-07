@@ -72,10 +72,10 @@ func TestReconcileActiveJobCacheLag(t *testing.T) {
 		// lag is whether the reconcile must wait for the cache.
 		lag bool
 	}{
-		{"running: cache lags", readyOwner, []func(*infrav1.TerraformMachine){withFinalizer, notPaused}, true, true},
+		{"running: cache lags", readyOwner(), []func(*infrav1.TerraformMachine){withFinalizer, notPaused}, true, true},
 		{"paused: cache lags", pausedOwner, []func(*infrav1.TerraformMachine){withFinalizer}, true, true},
-		{"deleting without state: cache lags", readyOwner, []func(*infrav1.TerraformMachine){deleting, notPaused}, true, true},
-		{"the Job is gone", readyOwner, []func(*infrav1.TerraformMachine){withFinalizer, notPaused}, false, false},
+		{"deleting without state: cache lags", readyOwner(), []func(*infrav1.TerraformMachine){deleting, notPaused}, true, true},
+		{"the Job is gone", readyOwner(), []func(*infrav1.TerraformMachine){withFinalizer, notPaused}, false, false},
 		{"paused, the Job is gone", pausedOwner, []func(*infrav1.TerraformMachine){withFinalizer}, false, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -175,7 +175,7 @@ func TestCacheLagReadsLeaseOnlyWhenItMatters(t *testing.T) {
 			t.Parallel()
 			var rc readCounter
 			e := liveHolderEnv(t, &rc, append([]func(*infrav1.TerraformMachine){withFinalizer}, tt.mut...)...)
-			k := e.kindFor(t, readyOwner)
+			k := e.kindFor(t, readyOwner())
 			rc.leases.Store(0)
 			rc.jobs.Store(0)
 			r := &reconciler{d: e.d, k: k, obj: k.Object(), st: k.Status(), suffix: suffixOf(t, state.KindTerraformMachine, testName), deleting: tt.deleting}
@@ -241,7 +241,7 @@ func TestReconcileLiveRunLeaseKeepsFinalizer(t *testing.T) {
 	if err := e.c.Create(t.Context(), foreignLease(runLeaseOf(t, state.KindTerraformMachine, testName), "j1", jobs.OpApply, t0)); err != nil {
 		t.Fatal(err)
 	}
-	k := e.kindFor(t, readyOwner)
+	k := e.kindFor(t, readyOwner())
 	requeue, err := reconcileOnce(t, e, k)
 	if err != nil {
 		t.Fatal(err)

@@ -129,7 +129,7 @@ func (e blockedEnv) syncMarks(t *testing.T) map[string]string {
 // status.pendingPlanRef.
 func (e blockedEnv) kind(t *testing.T, drift *infrav1.DriftPolicy) *fakeKind {
 	t.Helper()
-	k := e.kindFor(t, readyOwner)
+	k := e.kindFor(t, readyOwner())
 	k.asCluster, k.mutable, k.in = true, true, machineIn()
 	k.health = &contract.Health{State: contract.HealthRunning, Healthy: true}
 	if drift == nil {

@@ -152,7 +152,7 @@ func TestApplyReadingReplacesRefresh(t *testing.T) {
 			e := appliedMachineEnv(t)
 			reconcile := func() *infrav1.TerraformMachine {
 				t.Helper()
-				k := e.kindFor(t, readyOwner)
+				k := e.kindFor(t, readyOwner())
 				k.refresh, k.health = true, tt.health
 				if tt.invalid {
 					k.result = outputs.Result{Missing: []string{"addresses"}}
@@ -191,7 +191,7 @@ func TestApplyReadingReplacesRefresh(t *testing.T) {
 	// A kind that does not refresh after an apply (the cluster) keeps
 	// lastRefresh unset: its drift and health schedule is unchanged.
 	e := appliedMachineEnv(t)
-	k := e.kindFor(t, readyOwner)
+	k := e.kindFor(t, readyOwner())
 	k.health = &contract.Health{State: contract.HealthRunning, Healthy: true}
 	if _, err := reconcileOnce(t, e, k); err != nil {
 		t.Fatal(err)
@@ -211,7 +211,7 @@ func TestPendingRefreshBackoff(t *testing.T) {
 	pending := &contract.Health{State: contract.HealthPending}
 	reconcile := func(h *contract.Health) (time.Duration, *infrav1.TerraformMachine) {
 		t.Helper()
-		k := e.kindFor(t, readyOwner)
+		k := e.kindFor(t, readyOwner())
 		k.refresh, k.health = true, h
 		requeue, err := reconcileOnce(t, e, k)
 		if err != nil {

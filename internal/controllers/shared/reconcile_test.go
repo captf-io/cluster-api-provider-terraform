@@ -287,10 +287,14 @@ func world(objs ...client.Object) []client.Object {
 	}, objs...)
 }
 
-// readyOwner is an OwnerInfo with a Machine ownerRef, an unpaused Cluster
-// and its TerraformCluster, which sets no policy for its machines.
-var readyOwner = OwnerInfo{HasOwnerRef: true, Cluster: cluster(false),
-	InfraCluster: &infrav1.TerraformCluster{ObjectMeta: metav1.ObjectMeta{Namespace: testNS, Name: "c1"}}}
+// readyOwner returns a fresh OwnerInfo with a Machine ownerRef, an
+// unpaused Cluster and its TerraformCluster, which sets no policy for its
+// machines. It is a constructor, not a shared value, so parallel tests
+// never share (and race on) the objects it holds.
+func readyOwner() OwnerInfo {
+	return OwnerInfo{HasOwnerRef: true, Cluster: cluster(false),
+		InfraCluster: &infrav1.TerraformCluster{ObjectMeta: metav1.ObjectMeta{Namespace: testNS, Name: "c1"}}}
+}
 
 // reconcileOnce runs one Reconcile of k against e.d, using t for context,
 // and returns the requeue duration and any error.
@@ -313,7 +317,7 @@ func TestReconcileStartsApply(t *testing.T) {
 		// Block-move is persisted before the Job exists.
 		sawBlockMove = HasBlockMove(e.get(t))
 	}
-	k := e.kindFor(t, readyOwner)
+	k := e.kindFor(t, readyOwner())
 	k.in = machineIn()
 	requeue, err := reconcileOnce(t, e, k)
 	if err != nil {
@@ -379,7 +383,7 @@ func TestReconcileLocalSecretIdentity(t *testing.T) {
 		// Each parallel subtest gets its own copies: the fake client's
 		// builder writes resourceVersion into the objects it is given.
 		e := newEnv(t, ns.DeepCopy(), creds.DeepCopy(), local.DeepCopy())
-		k := e.kindFor(t, readyOwner)
+		k := e.kindFor(t, readyOwner())
 		k.in = machineIn()
 		if _, err := reconcileOnce(t, e, k); err != nil {
 			t.Fatal(err)
@@ -406,7 +410,7 @@ func TestReconcileLocalSecretIdentity(t *testing.T) {
 	t.Run("missing", func(t *testing.T) {
 		t.Parallel()
 		e := newEnv(t, ns.DeepCopy(), local.DeepCopy())
-		k := e.kindFor(t, readyOwner)
+		k := e.kindFor(t, readyOwner())
 		k.in = machineIn()
 		requeue, err := reconcileOnce(t, e, k)
 		if err != nil {
@@ -452,7 +456,7 @@ func TestReconcileJobActive(t *testing.T) {
 			running.Labels[jobs.AttemptLabel] = "1"
 			e.runner.jobs = append(e.runner.jobs, running)
 			e.runner.pods[name] = tt.pods
-			k := e.kindFor(t, readyOwner)
+			k := e.kindFor(t, readyOwner())
 			k.in = machineIn()
 			requeue, err := reconcileOnce(t, e, k)
 			if err != nil {
@@ -569,7 +573,7 @@ func TestReconcileGatedAndIdentity(t *testing.T) {
 	t.Run("gate: DependenciesReady, no Job, Ready Unknown", func(t *testing.T) {
 		t.Parallel()
 		e := newEnv(t, world(machine(withFinalizer, notPaused))...)
-		k := e.kindFor(t, readyOwner)
+		k := e.kindFor(t, readyOwner())
 		k.gate = &Gate{Status: metav1.ConditionUnknown, Reason: infrav1.WaitingForBootstrapDataReason, Message: "waiting"}
 		requeue, err := reconcileOnce(t, e, k)
 		if err != nil {
@@ -593,7 +597,7 @@ func TestReconcileGatedAndIdentity(t *testing.T) {
 			Annotations: map[string]string{inputs.IdentityAnnotation: testIdentity},
 		}}
 		e := newEnv(t, append(objs, mirror)...)
-		k := e.kindFor(t, readyOwner)
+		k := e.kindFor(t, readyOwner())
 		k.in = machineIn()
 		if _, err := reconcileOnce(t, e, k); err != nil {
 			t.Fatal(err)
@@ -612,7 +616,7 @@ func TestReconcileGatedAndIdentity(t *testing.T) {
 		objs[1].(*infrav1.TerraformClusterIdentity).Spec.AllowedNamespaces = nil
 		e := newEnv(t, objs...)
 		e.state.st = &state.State{InputsHash: "h1:x"}
-		k := e.kindFor(t, readyOwner)
+		k := e.kindFor(t, readyOwner())
 		if _, err := reconcileOnce(t, e, k); err != nil {
 			t.Fatal(err)
 		}
@@ -637,7 +641,7 @@ func TestReconcileDestroy(t *testing.T) {
 	t.Run("deleting with state starts destroy from the durable inputs", func(t *testing.T) {
 		t.Parallel()
 		e := newEnv(t, world(machine(deleting, notPaused))...)
-		k := e.kindFor(t, readyOwner)
+		k := e.kindFor(t, readyOwner())
 		if err := writeInputs(t.Context(), e.c, k.obj, renderMachine(t), testMeta{Image: "registry.example/mod:0.9", Identity: testIdentity, ImageDigest: "registry.example/mod@sha256:abc"}); err != nil {
 			t.Fatal(err)
 		}
@@ -658,7 +662,7 @@ func TestReconcileDestroy(t *testing.T) {
 		e := newEnv(t, world(machine(deleting, notPaused))...)
 		e.state.st = &state.State{InputsHash: "h1:x"}
 		e.runner.jobs = append(e.runner.jobs, job("d", jobs.OpDestroy, jobs.Succeeded, t0))
-		k := e.kindFor(t, readyOwner)
+		k := e.kindFor(t, readyOwner())
 		if _, err := reconcileOnce(t, e, k); err != nil {
 			t.Fatal(err)
 		}
@@ -670,7 +674,7 @@ func TestReconcileDestroy(t *testing.T) {
 		t.Parallel()
 		e := newEnv(t, world(machine(deleting, notPaused))...)
 		e.state.st = &state.State{InputsHash: "h1:x"}
-		k := e.kindFor(t, readyOwner)
+		k := e.kindFor(t, readyOwner())
 		requeue, err := reconcileOnce(t, e, k)
 		if err != nil {
 			t.Fatal(err)
@@ -683,7 +687,7 @@ func TestReconcileDestroy(t *testing.T) {
 	t.Run("owned, deleting, no state and no Job: finalizer dropped without a Job", func(t *testing.T) {
 		t.Parallel()
 		e := newEnv(t, world(machine(deleting, notPaused))...)
-		k := e.kindFor(t, readyOwner)
+		k := e.kindFor(t, readyOwner())
 		if _, err := reconcileOnce(t, e, k); err != nil {
 			t.Fatal(err)
 		}
@@ -750,7 +754,7 @@ func TestReconcileAdoptsAndProvisions(t *testing.T) {
 	applied.Annotations = map[string]string{state.InputsHashAnnotation: "h1:applied"}
 	e.runner.jobs = append(e.runner.jobs, applied)
 	e.state.st = &state.State{Serial: 7}
-	k := e.kindFor(t, readyOwner)
+	k := e.kindFor(t, readyOwner())
 	k.in = machineIn()
 	k.health = &contract.Health{State: contract.HealthRunning, Healthy: true}
 	requeue, err := reconcileOnce(t, e, k)
@@ -789,7 +793,7 @@ func TestReconcileStateUnreadable(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, world(machine(withFinalizer, notPaused))...)
 	e.state.err = state.ErrStateEncrypted
-	k := e.kindFor(t, readyOwner)
+	k := e.kindFor(t, readyOwner())
 	k.in = machineIn()
 	requeue, err := reconcileOnce(t, e, k)
 	if err != nil {
@@ -821,7 +825,7 @@ func TestReconcileFailedLimitZeroBacksOff(t *testing.T) {
 	e := newEnv(t, world(machine(withFinalizer, notPaused, func(m *infrav1.TerraformMachine) {
 		m.Spec.Jobs = &infrav1.JobPolicy{FailedJobsHistoryLimit: &zero}
 	}))...)
-	k := e.kindFor(t, readyOwner)
+	k := e.kindFor(t, readyOwner())
 	k.in = machineIn()
 	e.runner.jobs = append(e.runner.jobs, job("f1", jobs.OpApply, jobs.Failed, t0.Add(-time.Minute)))
 	requeue, err := reconcileOnce(t, e, k)
@@ -841,7 +845,7 @@ func TestReconcileFailedLimitZeroBacksOff(t *testing.T) {
 func TestReconcileBookkeepingPinsDigest(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, world(machine(withFinalizer, notPaused))...)
-	k := e.kindFor(t, readyOwner)
+	k := e.kindFor(t, readyOwner())
 	k.in = machineIn()
 	if err := writeInputs(t.Context(), e.c, k.obj, renderMachine(t), testMeta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
 		t.Fatal(err)
@@ -884,7 +888,7 @@ func TestReconcileMutableDestroyWithoutDurable(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, world(machine(deleting, notPaused))...)
 	e.state.st = &state.State{InputsHash: "h1:x"}
-	k := e.kindFor(t, readyOwner)
+	k := e.kindFor(t, readyOwner())
 	k.mutable = true
 	k.in = machineIn()
 	if _, err := reconcileOnce(t, e, k); err != nil {
@@ -905,7 +909,7 @@ func TestReconcileMutableApplyOnHashChange(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, world(machine(withFinalizer, notPaused))...)
 	e.state.st = &state.State{InputsHash: "h1:old"}
-	k := e.kindFor(t, readyOwner)
+	k := e.kindFor(t, readyOwner())
 	k.mutable = true
 	k.in = machineIn()
 	if _, err := reconcileOnce(t, e, k); err != nil {
@@ -946,7 +950,7 @@ func TestReconcileIdentityFailures(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			e := newEnv(t, tt.mutate(world(machine(withFinalizer, notPaused)))...)
-			k := e.kindFor(t, readyOwner)
+			k := e.kindFor(t, readyOwner())
 			k.in = machineIn()
 			requeue, err := reconcileOnce(t, e, k)
 			if err != nil {
@@ -1043,7 +1047,7 @@ func TestBookkeepForceUnlock(t *testing.T) {
 			e := newEnv(t, objs...)
 			r, reg := recorder(t)
 			e.d.Metrics = r
-			k := e.kindFor(t, readyOwner)
+			k := e.kindFor(t, readyOwner())
 			k.in = machineIn()
 			if _, err := reconcileOnce(t, e, k); err != nil {
 				t.Fatal(err)
@@ -1103,7 +1107,7 @@ func TestSetDriftJobDeadlineExceeded(t *testing.T) {
 func TestPromoteDigestUnknown(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, world(machine(withFinalizer, notPaused))...)
-	k := e.kindFor(t, readyOwner)
+	k := e.kindFor(t, readyOwner())
 	if err := writeInputs(t.Context(), e.c, k.obj, renderMachine(t), testMeta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
 		t.Fatal(err)
 	}
@@ -1182,7 +1186,7 @@ func TestStartJobRetryAfterCrash(t *testing.T) {
 		Source: infrav1.Source{Image: "registry.example/mod:1.0"}, Identity: testIdentity,
 		Suffix: suffix, ClusterName: "c1", Attempt: 1,
 	}
-	k := e.kindFor(t, readyOwner)
+	k := e.kindFor(t, readyOwner())
 	first, err := StartJob(t.Context(), e.d, k, req)
 	if err != nil {
 		t.Fatalf("first StartJob: %v", err)
@@ -1201,7 +1205,7 @@ func TestStartJobRetryAfterCrash(t *testing.T) {
 	}
 	e.runner.createErr = apierrors.NewAlreadyExists(schema.GroupResource{Resource: "jobs"}, first.Name)
 
-	k2 := e.kindFor(t, readyOwner)
+	k2 := e.kindFor(t, readyOwner())
 	second, err := StartJob(t.Context(), e.d, k2, req)
 	if err != nil {
 		t.Fatalf("second StartJob: %v", err)
@@ -1238,7 +1242,7 @@ func TestReconcileRunnerRBACReady(t *testing.T) {
 		sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Namespace: testNS, Name: "deployer"}}
 		withOverride := func(m *infrav1.TerraformMachine) { m.Spec.Jobs = &infrav1.JobPolicy{ServiceAccountName: "deployer"} }
 		e := newEnv(t, world(machine(withFinalizer, notPaused, withOverride), sa)...)
-		k := e.kindFor(t, readyOwner)
+		k := e.kindFor(t, readyOwner())
 		k.in = machineIn()
 		if _, err := reconcileOnce(t, e, k); err != nil {
 			t.Fatal(err)
@@ -1268,7 +1272,7 @@ func TestReconcileRunnerRBACReady(t *testing.T) {
 			Client: c, APIReader: c, Scheme: s, Jobs: e.runner, State: e.state, Recorder: e.rec,
 			Clock: testingclock.NewFakePassiveClock(t0), RunnerImage: "registry.example/captf:dev", DriftDefault: 30 * time.Minute,
 		}
-		k := e.kindFor(t, readyOwner)
+		k := e.kindFor(t, readyOwner())
 		k.in = machineIn()
 		_, err := reconcileOnce(t, e, k)
 		if err == nil {
@@ -1293,7 +1297,7 @@ func TestReconcileMirrorConflict(t *testing.T) {
 	t.Parallel()
 	conflict := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: testNS, Name: identity.MirrorName(testIdentity)}, Data: map[string][]byte{"x": []byte("y")}}
 	e := newEnv(t, world(machine(withFinalizer, notPaused), conflict)...)
-	k := e.kindFor(t, readyOwner)
+	k := e.kindFor(t, readyOwner())
 	k.in = machineIn()
 	if _, err := reconcileOnce(t, e, k); err != nil {
 		t.Fatal(err)
@@ -1335,7 +1339,7 @@ func TestReconcileStateReadErrors(t *testing.T) {
 			t.Parallel()
 			e := newEnv(t, world(machine(withFinalizer, notPaused))...)
 			e.state.err = tt.err
-			k := e.kindFor(t, readyOwner)
+			k := e.kindFor(t, readyOwner())
 			k.in = machineIn()
 			requeue, err := reconcileOnce(t, e, k)
 			if err != nil {

@@ -97,8 +97,8 @@ func TestJobFailedRetryNoteOnce(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, world(machine(withFinalizer, notPaused))...)
 	e.runner.jobs = append(e.runner.jobs, job("a", jobs.OpApply, jobs.Failed, t0))
-	reconcileMachine(t, e, readyOwner)
-	reconcileMachine(t, e, readyOwner)
+	reconcileMachine(t, e, readyOwner())
+	reconcileMachine(t, e, readyOwner())
 	got := e.rec.only(EventJobFailed)
 	if len(got) != 1 || !strings.Contains(got[0].note, "; next attempt not before 2026-09-25T12:01:00Z (backoff 1m0s after 1 failure)") {
 		t.Fatalf("JobFailed = %+v, want one with the retry time (all: %v)", got, e.rec.reasons)

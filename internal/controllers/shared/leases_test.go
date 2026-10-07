@@ -154,7 +154,7 @@ func (e *env) kindNamed(t *testing.T, name string) *fakeKind {
 	if err := e.c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: name}, m); err != nil {
 		t.Fatal(err)
 	}
-	return &fakeKind{obj: m, owner: readyOwner, in: machineIn(), asCluster: name == "tc"}
+	return &fakeKind{obj: m, owner: readyOwner(), in: machineIn(), asCluster: name == "tc"}
 }
 
 // reconcileNamed reconciles name with d, failing t on error, and returns

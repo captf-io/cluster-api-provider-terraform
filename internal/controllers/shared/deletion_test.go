@@ -85,7 +85,7 @@ func TestAppliedMarker(t *testing.T) {
 	t.Run("a successful apply without a digest", func(t *testing.T) {
 		t.Parallel()
 		e := newEnv(t, world(machine(withFinalizer, notPaused))...)
-		k := e.kindFor(t, readyOwner)
+		k := e.kindFor(t, readyOwner())
 		if err := writeInputs(t.Context(), e.c, k.obj, renderMachine(t), testMeta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
 			t.Fatal(err)
 		}
@@ -104,7 +104,7 @@ func TestAppliedMarker(t *testing.T) {
 	t.Run("a state with an inputs hash", func(t *testing.T) {
 		t.Parallel()
 		e := newEnv(t, world(machine(withFinalizer, notPaused))...)
-		k := e.kindFor(t, readyOwner)
+		k := e.kindFor(t, readyOwner())
 		if err := writeInputs(t.Context(), e.c, k.obj, renderMachine(t), testMeta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
 			t.Fatal(err)
 		}
@@ -120,7 +120,7 @@ func TestAppliedMarker(t *testing.T) {
 		t.Parallel()
 		e := newEnv(t, world(machine(withFinalizer, notPaused))...)
 		e.writeApplied(t, e.get(t))
-		k := e.kindFor(t, readyOwner)
+		k := e.kindFor(t, readyOwner())
 		k.in = machineIn()
 		requeue, err := reconcileOnce(t, e, k)
 		if err != nil {
@@ -372,7 +372,7 @@ func TestReconcileDestroyCannotStartNamesRetain(t *testing.T) {
 				e.writeDurable(t, e.get(t))
 			}
 			e.state.st = &state.State{Serial: 3, InputsHash: "h1:x"}
-			if _, err := reconcileOnce(t, e, e.kindFor(t, readyOwner)); err != nil {
+			if _, err := reconcileOnce(t, e, e.kindFor(t, readyOwner())); err != nil {
 				t.Fatal(err)
 			}
 			m := e.get(t)
@@ -385,7 +385,7 @@ func TestReconcileDestroyCannotStartNamesRetain(t *testing.T) {
 				t.Errorf("ApplyJobSucceeded message %q does not name deletionPolicy Retain", c.Message)
 			}
 			e.setRetain(t)
-			if _, err := reconcileOnce(t, e, e.kindFor(t, readyOwner)); err != nil {
+			if _, err := reconcileOnce(t, e, e.kindFor(t, readyOwner())); err != nil {
 				t.Fatal(err)
 			}
 			retainedWith(t, e)
@@ -416,7 +416,7 @@ func TestReconcileDestroyCannotStartNamesRetain(t *testing.T) {
 		e := newEnv(t, world(machine(deleting, notPaused, provisioned))...)
 		e.writeDurable(t, e.get(t))
 		e.state.st = &state.State{Serial: 3, InputsHash: "h1:x"}
-		if _, err := reconcileOnce(t, e, e.kindFor(t, readyOwner)); err != nil {
+		if _, err := reconcileOnce(t, e, e.kindFor(t, readyOwner())); err != nil {
 			t.Fatal(err)
 		}
 		if len(e.runner.created) != 1 || !strings.Contains(e.runner.created[0], "-destroy-") || e.get(t) == nil {

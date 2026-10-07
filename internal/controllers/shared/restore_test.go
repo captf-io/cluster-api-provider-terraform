@@ -331,7 +331,7 @@ func TestReconcileBackupRetriedAfterAPIError(t *testing.T) {
 	suffix := suffixOf(t, state.KindTerraformMachine, testName)
 	e.setState(t, suffix, 7, "h1:x")
 	for pass := range 2 {
-		k := e.kindFor(t, readyOwner)
+		k := e.kindFor(t, readyOwner())
 		k.health = &contract.Health{State: contract.HealthRunning, Healthy: true}
 		if _, err := reconcileOnce(t, e, k); err != nil {
 			t.Fatal(err)
@@ -405,7 +405,7 @@ func TestReconcileBackupSkipsUnreadable(t *testing.T) {
 	e := newEnv(t, world(machine(withFinalizer, notPaused, provisioned), garbage)...)
 	e.d.Metrics, e.d.StateBackups = r, 5
 	e.state.st = &state.State{Serial: 7, InputsHash: "h1:x"}
-	k := e.kindFor(t, readyOwner)
+	k := e.kindFor(t, readyOwner())
 	k.health = &contract.Health{State: contract.HealthRunning, Healthy: true}
 	if _, err := reconcileOnce(t, e, k); err != nil {
 		t.Fatalf("a skipped backup failed the reconcile: %v", err)
@@ -417,7 +417,7 @@ func TestReconcileBackupSkipsUnreadable(t *testing.T) {
 	enc := newEnv(t, world(machine(withFinalizer, notPaused, provisioned), stateSecret(t, suffix, 7, "h1:x"))...)
 	enc.d.StateBackups = 5
 	enc.state.err = state.ErrStateEncrypted
-	if _, err := reconcileOnce(t, enc, enc.kindFor(t, readyOwner)); err != nil {
+	if _, err := reconcileOnce(t, enc, enc.kindFor(t, readyOwner())); err != nil {
 		t.Fatal(err)
 	}
 	if list, _ := state.ListBackups(t.Context(), enc.c, testNS, suffix); len(list) != 0 {

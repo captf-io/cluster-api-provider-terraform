@@ -45,7 +45,7 @@ var heldPending = inputs.Pending{ExportsHash: "h2:e1", ApprovalHash: "h2:a", Job
 func heldReconciler(t *testing.T, p *inputs.Pending, prev *metav1.Condition) *reconciler {
 	t.Helper()
 	e := newEnv(t, machine())
-	k := e.kindFor(t, readyOwner)
+	k := e.kindFor(t, readyOwner())
 	if prev != nil {
 		conditions.Set(k.obj, *prev)
 	}
@@ -115,7 +115,7 @@ func TestApplyJobConditionHeld(t *testing.T) {
 func exportsEnv(t *testing.T, exports string) (*env, *fakeKind, *inputs.Durable, string) {
 	t.Helper()
 	e := newEnv(t, machine())
-	k := e.kindFor(t, readyOwner)
+	k := e.kindFor(t, readyOwner())
 	in := machineIn()
 	in.ClusterOutputs = json.RawMessage(exports)
 	files, err := render.Root(contract.RoleMachine, in)

@@ -148,7 +148,7 @@ func newPlanEnv(t *testing.T, stateHash string, mut ...func(*infrav1.TerraformMa
 // drift as its DriftPolicy (or a disabled policy when drift is nil).
 func (e planEnv) kind(t *testing.T, drift *infrav1.DriftPolicy) *fakeKind {
 	t.Helper()
-	k := e.kindFor(t, readyOwner)
+	k := e.kindFor(t, readyOwner())
 	k.asCluster, k.mutable, k.in = true, true, machineIn()
 	k.health = &contract.Health{State: contract.HealthRunning, Healthy: true}
 	if drift == nil {
