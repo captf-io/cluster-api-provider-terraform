@@ -98,7 +98,8 @@ type Options struct {
 // PlanSummary, ResourcesChanged and, on every path, RunFinished).
 func Run(ctx context.Context, o Options) (Result, int) {
 	start := time.Now()
-	r, code := run(ctx, o)
+	// run sets o.red, which RunFinished redacts with too.
+	r, code := run(ctx, &o)
 	o.runFinished(ctx, r, code, time.Since(start))
 	return r, code
 }
@@ -133,9 +134,9 @@ func (o Options) runFinished(ctx context.Context, r Result, code int, took time.
 }
 
 // run is Run without the RunFinished event: it executes o's operation
-// under ctx, step by step, and returns the result and the process exit
-// code.
-func run(ctx context.Context, o Options) (Result, int) {
+// under ctx, step by step, sets o.red once the environment is prepared,
+// and returns the result and the process exit code.
+func run(ctx context.Context, o *Options) (Result, int) {
 	logger := klog.FromContext(ctx)
 	r := Result{Version: ResultVersion, Op: o.Op, Image: ResultImage{Ref: o.Image}, Runtime: Runtime{Command: slices.Clone(o.Bin)}, Steps: []Step{}}
 	steps, err := Steps(o.Op, PlanOptions{
