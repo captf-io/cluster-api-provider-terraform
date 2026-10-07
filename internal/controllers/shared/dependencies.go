@@ -26,6 +26,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/annotations"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -99,8 +100,10 @@ func ReadBootstrapSecret(ctx context.Context, r client.Reader, namespace string,
 func LookupCluster(ctx context.Context, c client.Client, obj metav1.ObjectMeta, owner *OwnerInfo) error {
 	cluster, err := util.GetClusterFromMetadata(ctx, c, obj)
 	switch {
-	case errors.Is(err, util.ErrNoCluster), apierrors.IsNotFound(err):
+	case errors.Is(err, util.ErrNoCluster):
 		return nil
+	case apierrors.IsNotFound(err):
+		return lookupOrphanedCluster(ctx, c, obj, owner)
 	case err != nil:
 		return fmt.Errorf("get Cluster: %w", err)
 	}
@@ -125,6 +128,29 @@ func LookupCluster(ctx context.Context, c client.Client, obj metav1.ObjectMeta, 
 		return fmt.Errorf("get TerraformCluster: %w", err)
 	default:
 		owner.InfraCluster = tc
+	}
+	return nil
+}
+
+// lookupOrphanedCluster sets owner.InfraCluster, for obj whose Cluster is
+// gone (force-deleted, its finalizer stripped), to the TerraformCluster
+// labeled with obj's cluster name, listed through c using ctx, when
+// exactly one is: what obj inherits its deletionPolicy, identity and
+// runner ServiceAccount from. Without it every machine and pool of that
+// cluster waited forever on DeletionPolicyUnresolved, and the
+// TerraformCluster on them. The gates still wait for the Cluster itself
+// (owner.Cluster stays nil). It returns any list error.
+func lookupOrphanedCluster(ctx context.Context, c client.Client, obj metav1.ObjectMeta, owner *OwnerInfo) error {
+	name := obj.Labels[clusterv1.ClusterNameLabel]
+	if name == "" {
+		return nil
+	}
+	var list infrav1.TerraformClusterList
+	if err := c.List(ctx, &list, client.InNamespace(obj.Namespace), client.MatchingLabels{clusterv1.ClusterNameLabel: name}); err != nil {
+		return fmt.Errorf("list TerraformClusters of Cluster %s: %w", name, err)
+	}
+	if len(list.Items) == 1 {
+		owner.InfraCluster = &list.Items[0]
 	}
 	return nil
 }
