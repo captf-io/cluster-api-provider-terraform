@@ -23,7 +23,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -231,6 +234,11 @@ func run(ctx context.Context, o Options) (Result, int) {
 				kind = ErrorKindInterrupted
 			}
 			o.stepFailed(ctx, s.Name, res, summary)
+			if s.Name == StepApply || s.Name == StepDestroy {
+				if push, ok := o.pushErroredState(ctx, prep); ok {
+					r.Steps = append(r.Steps, push)
+				}
+			}
 			// The step's own code is in r.Steps; the process reports a
 			// failure. Passing a runtime's code through would make a
 			// Terraform panic (exit 2) look like ExitUsage.
@@ -409,6 +417,37 @@ func lastBytes(s string, n int) string {
 		return s
 	}
 	return s[len(s)-n:]
+}
+
+// ErroredStateFile is the file Terraform and OpenTofu write the state to,
+// in the working directory, when an apply or destroy cannot persist it to
+// the backend at the end of the run.
+const ErroredStateFile = "errored.tfstate"
+
+// pushErroredState pushes ErroredStateFile, when the failed apply or
+// destroy step left one in prep's root directory, to the backend with
+// `state push`, so the resources that step created are recorded and the
+// next run finds them instead of no state. It runs even when ctx is
+// canceled (the pod is stopping: this is the last chance to persist),
+// bounded by o.StopTimeout. It returns the push as a step for the result,
+// and false when there was nothing to push.
+func (o Options) pushErroredState(ctx context.Context, prep Prepared) (Step, bool) {
+	file := filepath.Join(prep.RootDir, ErroredStateFile)
+	if _, err := os.Stat(file); err != nil {
+		return Step{}, false
+	}
+	logger := klog.FromContext(ctx)
+	logger.Info("The state could not be saved; pushing the errored state to the backend", "file", ErroredStateFile)
+	pushCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cmp.Or(o.StopTimeout, DefaultStopTimeout))
+	defer cancel()
+	lock := "-lock-timeout=" + strconv.FormatInt(int64(o.LockTimeout/time.Second), 10) + "s"
+	inv := Invocation{Name: StepStatePush, Args: []string{"state", "push", "-input=false", lock, file}}
+	res := Exec(pushCtx, o.Bin, inv, prep.Env, prep.RootDir, o.Stdout, o.Stderr, o.StopTimeout)
+	logger.Info("Step finished", "step", inv.Name, "exit", res.Exit, "seconds", res.Seconds)
+	if res.Failed(inv) {
+		o.emit(ctx, EventTypeWarning, EventStepFailed, inv.Name, "step %s exited %d: the state the failed step left was not saved", inv.Name, res.Exit)
+	}
+	return Step{Name: inv.Name, Exit: res.Exit, Seconds: round(res.Seconds)}, true
 }
 
 // round returns s rounded to one decimal place.

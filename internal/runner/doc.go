@@ -42,4 +42,9 @@ limitations under the License.
 //     replace as ["delete","create"] (or ["create","delete"] under
 //     create_before_destroy) and a removal as ["delete"] (checked with
 //     OpenTofu 1.11.5).
+//   - An apply or destroy that cannot write the state to the backend at
+//     its end writes it to errored.tfstate in the working directory
+//     instead and exits non-zero; the runner then pushes that file with
+//     `state push` (pushErroredState), so the resources the step created
+//     are recorded rather than lost with the pod.
 package runner

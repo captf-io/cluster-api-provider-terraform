@@ -74,6 +74,11 @@ func TestHelperProcess(t *testing.T) {
 		_ = f.Close()
 	}
 	fake := fakeBehavior()
+	if name := fake["FAKE_WRITE_"+key]; name != "" {
+		// A file the subcommand leaves in its working directory, as
+		// errored.tfstate after a failed state write.
+		_ = os.WriteFile(name, []byte("{}"), 0o600)
+	}
 	fmt.Fprint(os.Stdout, fake["FAKE_STDOUT_"+key])
 	fmt.Fprint(os.Stderr, fake["FAKE_STDERR_"+key])
 	code, _ := strconv.Atoi(fake["FAKE_EXIT_"+key])
@@ -235,6 +240,22 @@ func TestRunSequences(t *testing.T) {
 			env:   []string{"FAKE_EXIT_FORCE_UNLOCK=1", "FAKE_STDERR_FORCE_UNLOCK=Failed to unlock state: connection refused"},
 			steps: []string{"init", "force-unlock"}, calls: []string{"VERSION", "INIT", "FORCE_UNLOCK"}},
 		{name: "destroy", op: OpDestroy, steps: []string{"init", "destroy"}, calls: []string{"VERSION", "INIT", "DESTROY"}},
+		// A failed apply that could not save its state leaves
+		// errored.tfstate; the runner pushes it, and still fails.
+		{name: "apply pushes an errored state", op: OpApply, code: 1,
+			env:   []string{"FAKE_EXIT_APPLY=1", "FAKE_WRITE_APPLY=" + ErroredStateFile},
+			steps: []string{"init", "validate", "apply", StepStatePush}, calls: []string{"VERSION", "INIT", "VALIDATE", "APPLY", "STATE_PUSH"},
+			check: func(t *testing.T, r Result, _ fixture) {
+				if r.Error == nil || r.Error.Step == nil || *r.Error.Step != StepApply {
+					t.Errorf("error = %+v, want the apply step's", r.Error)
+				}
+			}},
+		{name: "destroy pushes an errored state", op: OpDestroy, code: 1,
+			env:   []string{"FAKE_EXIT_DESTROY=1", "FAKE_WRITE_DESTROY=" + ErroredStateFile},
+			steps: []string{"init", "destroy", StepStatePush}, calls: []string{"VERSION", "INIT", "DESTROY", "STATE_PUSH"}},
+		{name: "a failed apply without an errored state pushes nothing", op: OpApply, code: 1,
+			env:   []string{"FAKE_EXIT_APPLY=1"},
+			steps: []string{"init", "validate", "apply"}, calls: []string{"VERSION", "INIT", "VALIDATE", "APPLY"}},
 		{name: "refresh", op: OpRefresh, steps: []string{"init", "apply-refresh-only"}, calls: []string{"VERSION", "INIT", "APPLY_REFRESH_ONLY"}},
 		{name: "drift without changes", op: OpDrift, steps: []string{"init", "apply-refresh-only", "plan"}, calls: []string{"VERSION", "INIT", "APPLY_REFRESH_ONLY", "PLAN"},
 			check: func(t *testing.T, r Result, _ fixture) {
@@ -347,7 +368,9 @@ func TestRunSequences(t *testing.T) {
 			entries, _ := os.ReadDir(root)
 			var names []string
 			for _, e := range entries {
-				names = append(names, e.Name())
+				if e.Name() != ErroredStateFile {
+					names = append(names, e.Name())
+				}
 			}
 			if !slices.Equal(names, []string{"main.tf.json", "terraform.tfvars.json"}) {
 				t.Errorf("root = %v", names)
