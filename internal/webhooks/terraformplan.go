@@ -57,14 +57,49 @@ func (w *TerraformPlan) SetupWebhookWithManager(mgr ctrl.Manager) error {
 var _ admission.Validator[*infrav1.TerraformPlan] = &TerraformPlan{}
 
 // ValidateCreate checks that obj names an approver exactly when it is
-// approved. It accepts approved: true, whoever the creator is and whatever
-// approvedBy says: clusterctl move creates the plans again as the mover, so
-// the right to create a TerraformPlan is the right to approve one, and RBAC
-// on terraformplans is the access control. ctx supplies the logger and
-// requesting user of the denial log. It returns no warnings and an Invalid
-// error listing every violation found, or a nil error when obj is valid.
-func (*TerraformPlan) ValidateCreate(ctx context.Context, obj *infrav1.TerraformPlan) (admission.Warnings, error) {
-	return nil, invalid(ctx, terraformPlanKind, obj.Name, validateApprover(field.NewPath("spec"), &obj.Spec))
+// approved, and that nobody but the manager (ManagerUser) forges a live
+// approval. A creator other than the manager may set approved: true only
+// with approvedBy equal to their own username, as ValidateUpdate demands
+// of an approval; otherwise a user with create but not update on
+// terraformplans could mint a newer, "approved" plan that names someone
+// else and have the destructive apply run in that person's name. That
+// creator may also set the captf.io/plan-phase label only to Pending, or
+// to Approved together with approved: true, or to a terminal phase.
+//
+// clusterctl move re-creates plans as the mover, with the approvedBy and
+// the phase label of the source but without status. A plan whose label is
+// terminal (Applied, Superseded or Failed) is therefore accepted with any
+// approvedBy: no controller selects a terminal plan, so the attribution
+// cannot start an apply. A plan that is still live (Pending or Approved)
+// must be approved by the mover themselves, so a move of an in-flight plan
+// is re-approved by whoever runs it. ctx supplies the logger and
+// requesting user. It returns no warnings and an Invalid error listing
+// every violation found, or a nil error when obj is valid; a create
+// without an admission request is an InternalError.
+func (w *TerraformPlan) ValidateCreate(ctx context.Context, obj *infrav1.TerraformPlan) (admission.Warnings, error) {
+	req, err := admission.RequestFromContext(ctx)
+	if err != nil {
+		return nil, apierrors.NewInternalError(fmt.Errorf("read admission request: %w", err))
+	}
+	specPath := field.NewPath("spec")
+	errs := validateApprover(specPath, &obj.Spec)
+	if user := req.UserInfo.Username; w.ManagerUser == "" || user != w.ManagerUser {
+		phase, labelled := obj.Labels[infrav1.PlanPhaseLabel]
+		switch p := infrav1.PlanPhase(phase); {
+		case p.Terminal():
+			// A moved plan that is over: harmless whoever approved it.
+		default:
+			if approved(&obj.Spec) && obj.Spec.ApprovedBy != user {
+				errs = append(errs, field.Forbidden(specPath.Child("approvedBy"),
+					"approvedBy must be the username of the user that creates an approved plan"))
+			}
+			if labelled && p != infrav1.PlanPhasePending && (p != infrav1.PlanPhaseApproved || !approved(&obj.Spec)) {
+				errs = append(errs, field.Forbidden(field.NewPath("metadata", "labels").Key(infrav1.PlanPhaseLabel),
+					"only the provider's controller may set the plan phase, other than Pending or Approved on an approved plan"))
+			}
+		}
+	}
+	return nil, invalid(ctx, terraformPlanKind, obj.Name, errs)
 }
 
 // ValidateUpdate rejects a change to any spec field but approved and

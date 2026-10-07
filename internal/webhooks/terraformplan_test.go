@@ -163,19 +163,70 @@ func TestTerraformPlanPhaseLabel(t *testing.T) {
 	})
 }
 
-// TestTerraformPlanCreate proves create accepts an approved plan, as
-// clusterctl move re-creates it, but not an approval without an approver.
+// TestTerraformPlanCreate proves create accepts an unapproved plan and an
+// approval by the creator, and rejects an approval without an approver.
 func TestTerraformPlanCreate(t *testing.T) {
 	t.Parallel()
 	w := &TerraformPlan{ManagerUser: testManagerUser}
-	_, err := w.ValidateCreate(userContext("system:serviceaccount:capi:mover"), planFixture(infrav1.PlanPhaseApproved, "alice"))
-	wantInvalid(t, err, false)
-	_, err = w.ValidateCreate(userContext(testManagerUser), planFixture(infrav1.PlanPhasePending, ""))
+	_, err := w.ValidateCreate(userContext(testManagerUser), planFixture(infrav1.PlanPhasePending, ""))
 	wantInvalid(t, err, false)
 	p := planFixture(infrav1.PlanPhaseApproved, "alice")
 	p.Spec.ApprovedBy = ""
 	_, err = w.ValidateCreate(userContext("alice"), p)
 	wantInvalid(t, err, true, "spec.approvedBy: Required")
+}
+
+// TestTerraformPlanCreateForgedApproval proves a creator other than the
+// manager cannot name someone else as approver of a live plan, nor set a
+// phase only the controller owns, while an approval by themselves, a move
+// of a finished plan and the manager's own creates pass.
+func TestTerraformPlanCreateForgedApproval(t *testing.T) {
+	t.Parallel()
+	w := &TerraformPlan{ManagerUser: testManagerUser}
+	const mover = "system:serviceaccount:capi:mover"
+	unlabelled := func(approvedBy string) *infrav1.TerraformPlan {
+		p := planFixture("", approvedBy)
+		p.Labels = nil
+		return p
+	}
+	tests := []struct {
+		name    string
+		user    string
+		plan    *infrav1.TerraformPlan
+		invalid string
+	}{
+		{name: "approved by another user", user: "mallory", plan: planFixture(infrav1.PlanPhasePending, "alice"),
+			invalid: "spec.approvedBy: Forbidden"},
+		{name: "approved by another user, no label", user: "mallory", plan: unlabelled("alice"),
+			invalid: "spec.approvedBy: Forbidden"},
+		{name: "approved by another user, Approved label", user: mover, plan: planFixture(infrav1.PlanPhaseApproved, "alice"),
+			invalid: "spec.approvedBy: Forbidden"},
+		{name: "approved by self", user: "alice", plan: planFixture(infrav1.PlanPhaseApproved, "alice")},
+		{name: "approved by self, no label", user: "alice", plan: unlabelled("alice")},
+		{name: "unapproved Pending", user: "mallory", plan: planFixture(infrav1.PlanPhasePending, "")},
+		{name: "unapproved with Approved label", user: "mallory", plan: planFixture(infrav1.PlanPhaseApproved, ""),
+			invalid: "metadata.labels[captf.io/plan-phase]: Forbidden"},
+		{name: "move of an applied plan", user: mover, plan: planFixture(infrav1.PlanPhaseApplied, "alice")},
+		{name: "move of a superseded plan", user: mover, plan: planFixture(infrav1.PlanPhaseSuperseded, "alice")},
+		{name: "move of a failed plan", user: mover, plan: planFixture(infrav1.PlanPhaseFailed, "alice")},
+		{name: "manager approved", user: testManagerUser, plan: planFixture(infrav1.PlanPhaseApproved, "alice")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := w.ValidateCreate(userContext(tt.user), tt.plan)
+			if tt.invalid == "" {
+				wantInvalid(t, err, false)
+				return
+			}
+			wantInvalid(t, err, true, tt.invalid)
+		})
+	}
+	t.Run("unknown manager", func(t *testing.T) {
+		t.Parallel()
+		_, err := (&TerraformPlan{}).ValidateCreate(userContext(testManagerUser), planFixture(infrav1.PlanPhaseApproved, "alice"))
+		wantInvalid(t, err, true, "spec.approvedBy: Forbidden")
+	})
 }
 
 // TestTerraformPlanNoAdmissionRequest proves an update outside the webhook
@@ -186,6 +237,9 @@ func TestTerraformPlanNoAdmissionRequest(t *testing.T) {
 	_, err := (&TerraformPlan{}).ValidateUpdate(context.Background(), old, old.DeepCopy())
 	if !apierrors.IsInternalError(err) {
 		t.Fatalf("error = %v, want InternalError", err)
+	}
+	if _, err := (&TerraformPlan{}).ValidateCreate(context.Background(), old); !apierrors.IsInternalError(err) {
+		t.Errorf("ValidateCreate error = %v, want InternalError", err)
 	}
 	if _, err := (&TerraformPlan{}).ValidateDelete(context.Background(), old); err != nil {
 		t.Errorf("ValidateDelete = %v", err)
