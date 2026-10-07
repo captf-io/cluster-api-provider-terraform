@@ -41,7 +41,6 @@ rules:
   - delete
   - get
   - list
-  - watch
 - apiGroups:
   - authentication.k8s.io
   resources:
@@ -102,7 +101,6 @@ rules:
   - get
   - list
   - update
-  - watch
 - apiGroups:
   - events.k8s.io
   resources:
@@ -169,4 +167,3 @@ rules:
   - get
   - list
   - update
-  - watch
