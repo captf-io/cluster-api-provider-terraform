@@ -33,8 +33,9 @@ header:
   paths:
     - "**"
 
-  # Not source: docs, data, lock and module files, test fixtures, and the
-  # manifests controller-gen writes without a header.
+  # Not source: docs, data, lock and module files, test fixtures, the
+  # manifests controller-gen writes without a header, build output in bin/,
+  # and the .git file of a worktree.
   paths-ignore:
     - "**/*.md"
     - "**/*.json"
@@ -54,5 +55,7 @@ header:
     - "config/webhook/manifests.yaml"
     - "hack/coverage-floors.txt"
     - "hack/ci/requirements.*"
+    - ".git"
+    - "bin/**"
 
   comment: never
