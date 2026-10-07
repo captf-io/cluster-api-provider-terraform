@@ -17,12 +17,17 @@ limitations under the License.
 package shared
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"sigs.k8s.io/cluster-api/util/conditions"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
+	"github.com/captf-io/cluster-api-provider-terraform/internal/inputs"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/jobs"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/state"
 )
@@ -81,5 +86,40 @@ func TestHashlessRestoreClearsHash(t *testing.T) {
 	adopted := e.rec.only(EventStateAdopted)
 	if len(adopted) != 1 || !strings.Contains(adopted[0].note, "without an inputs hash") {
 		t.Errorf("StateAdopted events = %+v, want one naming the missing hash", adopted)
+	}
+}
+
+// TestHashlessRestoreReappliesImmutable proves a provisioned immutable
+// object whose restored state carries no inputs hash is not held as
+// StateLost, which a restore was just the fix for: it builds no inputs,
+// so it re-applies what its inputs record holds, under that record's
+// hash, which records the hash in the state again.
+func TestHashlessRestoreReappliesImmutable(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, world(machine(withFinalizer, notPaused, provisioned))...)
+	e.d.Jobs, e.d.State = &clientRunner{c: e.c}, state.NewReader(e.c)
+	e.writeDurable(t, e.get(t))
+	suffix := suffixOf(t, state.KindTerraformMachine, testName)
+	e.setState(t, suffix, 7, "")
+	k := func() *fakeKind {
+		k := healthyKind(t, e, testName)
+		k.mutable = false
+		return k
+	}
+	for range 2 {
+		if _, err := Reconcile(t.Context(), e.d, k()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if c := conditions.Get(e.get(t), infrav1.StateReadableCondition); c != nil && c.Reason == infrav1.StateLostReason {
+		t.Fatalf("StateReadable = %+v, want no StateLost hold", c)
+	}
+	d, err := inputs.Read(t.Context(), e.c, testNS, "m", testName)
+	if err != nil || d.AppliedOrAttempt() == nil {
+		t.Fatalf("records = %+v, %v", d, err)
+	}
+	applies := slices.DeleteFunc(e.jobsOf(t), func(j batchv1.Job) bool { return jobs.OpOf(&j) != jobs.OpApply })
+	if len(applies) != 1 || applies[0].Annotations[state.InputsHashAnnotation] != d.AppliedOrAttempt().InputsHash {
+		t.Errorf("apply Jobs = %d, want one under the record's hash %q", len(applies), d.AppliedOrAttempt().InputsHash)
 	}
 }

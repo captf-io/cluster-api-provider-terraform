@@ -710,14 +710,22 @@ func (r *reconciler) startOp(ctx context.Context, bk *Bookkeeping, dec Decision,
 	if gate != nil {
 		return r.finish(bk, nil, ctrl.Result{RequeueAfter: GateRequeue})
 	}
+	// A provisioned immutable object builds no inputs. Its state lacking the
+	// inputs hash (a backup restored without one) is re-applied from the
+	// inputs record instead, the files it was applied with, which records
+	// the hash again; only without a record is there nothing to apply.
+	var reapply *inputs.Record
 	if (op == jobs.OpApply || op == jobs.OpPlan) && in == nil {
-		// A provisioned immutable object builds no inputs: its state lacks
-		// the inputs hash, and re-applying is impossible.
-		conditions.Set(r.obj, metav1.Condition{
-			Type: infrav1.StateReadableCondition, Status: metav1.ConditionFalse, Reason: infrav1.StateLostReason,
-			Message: "The state carries no inputs hash although the object is provisioned; it cannot be re-applied. Restore a state backup with the " + infrav1.RestoreStateAnnotation + " annotation; see https://captf.io/docs/operator-guide/runbooks/state-restore.html",
-		})
-		return r.finish(bk, nil, ctrl.Result{RequeueAfter: StateRequeue})
+		if rec := r.durable.AppliedOrAttempt(); op == jobs.OpApply && !r.k.Mutable() && rec != nil {
+			reapply = rec
+		} else {
+			conditions.Set(r.obj, metav1.Condition{
+				Type: infrav1.StateReadableCondition, Status: metav1.ConditionFalse, Reason: infrav1.StateLostReason,
+				Message: "The state carries no inputs hash although the object is provisioned, and no inputs record holds what it was applied with; it cannot be re-applied. " +
+					"Restore a state backup with the " + infrav1.RestoreStateAnnotation + " annotation; see https://captf.io/docs/operator-guide/runbooks/state-restore.html",
+			})
+			return r.finish(bk, nil, ctrl.Result{RequeueAfter: StateRequeue})
+		}
 	}
 
 	if op != jobs.OpDestroy {
@@ -763,6 +771,9 @@ func (r *reconciler) startOp(ctx context.Context, bk *Bookkeeping, dec Decision,
 	}
 
 	files, rec, ok, err := r.files(ctx, op, in, view.InputsHash)
+	if reapply != nil {
+		files, rec, ok, err = reapply.Files, reapply, true, nil
+	}
 	if errors.Is(err, render.ErrInputsTooLarge) {
 		// Retrying cannot help until the inputs change, which re-triggers
 		// the reconcile.
@@ -786,7 +797,9 @@ func (r *reconciler) startOp(ctx context.Context, bk *Bookkeeping, dec Decision,
 	req.Files = files
 	switch op {
 	case jobs.OpApply, jobs.OpPlan:
-		if req.InputsHash, err = r.inputsHash(in); err != nil {
+		if reapply != nil {
+			req.InputsHash = reapply.InputsHash
+		} else if req.InputsHash, err = r.inputsHash(in); err != nil {
 			return ctrl.Result{}, err
 		}
 		// A pool's apply is guarded only for a change of the cluster's
