@@ -180,11 +180,23 @@ func (r *Reconciler) resolve(ctx context.Context, t *infrav1.TerraformMachineTem
 			Type: infrav1.VariablesValidCondition, Status: metav1.ConditionUnknown, Reason: infrav1.VariablesSchemaUnavailableReason, Message: msg,
 			LastTransitionTime: metav1.NewTime(now),
 		})
+		// What status holds describes the image it was resolved from: for
+		// another image (spec.source.image changed) it would size nodes for
+		// the wrong instance type, which is worse than none. One resolved
+		// with no image recorded is of unknown origin, and kept.
+		stale := t.Status.CapacitySource.Image != "" && t.Status.CapacitySource.Image != spec.Source.Image
+		if stale {
+			t.Status.NodeInfo = infrav1.NodeInfo{}
+		}
 		if len(t.Spec.Capacity) > 0 {
 			// The override does not depend on the registry: apply it, keep
-			// the last known nodeInfo, and keep retrying for the image.
+			// the last known nodeInfo of this image, and keep retrying.
+			image := t.Status.CapacitySource.Image
+			if stale {
+				image = ""
+			}
 			t.Status.Capacity = t.Spec.Capacity.DeepCopy()
-			t.Status.CapacitySource = infrav1.CapacitySource{Source: infrav1.CapacitySourceSpec}
+			t.Status.CapacitySource = infrav1.CapacitySource{Source: infrav1.CapacitySourceSpec, Image: image}
 			msg = notInspected + ": " + msg
 			if firstFailure {
 				r.Deps.Emit(t, corev1.EventTypeWarning, shared.EventImageInspectFailed, "Inspect", "%s", msg)
@@ -198,6 +210,19 @@ func (r *Reconciler) resolve(ctx context.Context, t *infrav1.TerraformMachineTem
 		if firstFailure {
 			r.Deps.Emit(t, corev1.EventTypeWarning, shared.EventImageInspectFailed, "Inspect", "%s", msg)
 			r.Deps.Metrics.ImageInspectError(infrav1.ImageInspectFailedReason)
+		}
+		if prev := conditions.Get(t, infrav1.CapacityResolvedCondition); !stale && prev != nil && prev.Status == metav1.ConditionTrue {
+			// A re-check of the same image failing (a registry blip at the
+			// TTL poll) changes nothing that was resolved: the condition
+			// stays True, and says the re-check failed.
+			conditions.Set(t, metav1.Condition{
+				Type: infrav1.CapacityResolvedCondition, Status: metav1.ConditionTrue, Reason: prev.Reason,
+				Message: "The image could not be inspected again, so the capacity resolved from it before is kept: " + msg,
+			})
+			return ctrl.Result{RequeueAfter: retry}, nil
+		}
+		if stale {
+			t.Status.Capacity, t.Status.CapacitySource.Image = nil, ""
 		}
 		conditions.Set(t, metav1.Condition{
 			Type: infrav1.CapacityResolvedCondition, Status: metav1.ConditionFalse, Reason: infrav1.ImageInspectFailedReason, Message: msg,

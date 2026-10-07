@@ -303,6 +303,45 @@ func TestReconcileInspectFailed(t *testing.T) {
 	}
 }
 
+// TestReconcileInspectFailedImageChanged proves a failed inspection of a
+// new image clears the capacity and nodeInfo resolved from the old one,
+// which would size nodes for the wrong instance type, and reports False.
+func TestReconcileInspectFailedImageChanged(t *testing.T) {
+	t.Parallel()
+	tpl := template(func(tpl *infrav1.TerraformMachineTemplate) {
+		tpl.Status.Capacity = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2")}
+		tpl.Status.NodeInfo = infrav1.NodeInfo{Architecture: infrav1.ArchitectureArm64}
+		tpl.Status.CapacitySource = infrav1.CapacitySource{Source: infrav1.CapacitySourceImage, Image: "registry.example/machine:0.9"}
+	})
+	insp := &fakeInspector{err: &transport.Error{StatusCode: http.StatusServiceUnavailable}}
+	got, _ := run(t, tpl, insp)
+	c := conditions.Get(got, infrav1.CapacityResolvedCondition)
+	if c == nil || c.Status != metav1.ConditionFalse || len(got.Status.Capacity) != 0 || got.Status.NodeInfo.Architecture != "" || got.Status.CapacitySource.Image != "" {
+		t.Errorf("condition %+v, status %+v; want False and the old image's capacity cleared", c, got.Status)
+	}
+}
+
+// TestReconcileInspectRecheckFailed proves a failed re-check of the image
+// the capacity was resolved from keeps the capacity and CapacityResolved
+// True, saying the re-check failed.
+func TestReconcileInspectRecheckFailed(t *testing.T) {
+	t.Parallel()
+	now := t0
+	insp := &fakeInspector{now: func() time.Time { return now }, cfg: &imageinspect.Config{Labels: map[string]string{imageinspect.CapacityLabel: `{"cpu":"2"}`}}}
+	got, _ := run(t, template(), insp)
+	if reasonOf(got) != infrav1.CapacityResolvedReason {
+		t.Fatalf("first resolution: %+v", got.Status)
+	}
+	// Past the tag's TTL, the image is read again, and that fails.
+	now = now.Add(imageinspect.SchemaTagTTL + time.Second)
+	insp.cfg, insp.err = nil, &transport.Error{StatusCode: http.StatusServiceUnavailable}
+	got, _ = run(t, got, insp)
+	c := conditions.Get(got, infrav1.CapacityResolvedCondition)
+	if c == nil || c.Status != metav1.ConditionTrue || !strings.Contains(c.Message, "could not be inspected again") || !got.Status.Capacity.Cpu().Equal(resource.MustParse("2")) {
+		t.Errorf("condition %+v, capacity %v; want True and the capacity kept", c, got.Status.Capacity)
+	}
+}
+
 // TestReconcileSpecCapacityInspectFailed proves spec.capacity is applied
 // when the image cannot be inspected: source Spec, no image recorded, the
 // last known nodeInfo kept, CapacityResolved True with a message noting the
