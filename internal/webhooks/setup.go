@@ -24,7 +24,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
-// SetupWebhooks registers the validating webhooks of all seven kinds with
+// SetupWebhooks registers the validating webhooks of all eight kinds with
 // mgr. There are no defaulting or mutating webhooks: every default is
 // resolved at reconcile time instead. The TerraformMachine delete check
 // lists Machines and reads Clusters, and the TerraformClusterIdentity
@@ -34,8 +34,8 @@ import (
 // SubjectAccessReviews.
 // managerUser is the manager's ServiceAccount username
 // (system:serviceaccount:<namespace>:<name>), the only caller that may set
-// providerID on an existing TerraformMachine; empty refuses that update for
-// everyone. It returns nil once every webhook is registered, or an error
+// providerID on an existing TerraformMachine and change the plan-phase label
+// of a TerraformPlan; empty refuses those updates for everyone. It returns nil once every webhook is registered, or an error
 // from the first registration or scheme check that fails.
 func SetupWebhooks(mgr ctrl.Manager, managerUser string) error {
 	// Without CAPI core types every owned TerraformMachine delete would fail
@@ -54,6 +54,7 @@ func SetupWebhooks(mgr ctrl.Manager, managerUser string) error {
 		{terraformMachinePoolKind, (&TerraformMachinePool{}).SetupWebhookWithManager},
 		{terraformMachinePoolTemplateKind, (&TerraformMachinePoolTemplate{}).SetupWebhookWithManager},
 		{terraformClusterIdentityKind, (&TerraformClusterIdentity{Client: mgr.GetClient(), Reader: mgr.GetAPIReader()}).SetupWebhookWithManager},
+		{terraformPlanKind, (&TerraformPlan{ManagerUser: managerUser}).SetupWebhookWithManager},
 	}
 	for _, s := range setups {
 		if err := s.setup(mgr); err != nil {

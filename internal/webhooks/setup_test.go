@@ -54,7 +54,7 @@ func TestSetupWebhooks(t *testing.T) {
 		"terraformcluster.go", "terraformclustertemplate.go",
 		"terraformmachine.go", "terraformmachinetemplate.go",
 		"terraformmachinepool.go", "terraformmachinepooltemplate.go",
-		"terraformclusteridentity.go",
+		"terraformclusteridentity.go", "terraformplan.go",
 	} {
 		src, err := os.ReadFile(f)
 		if err != nil {
@@ -68,8 +68,8 @@ func TestSetupWebhooks(t *testing.T) {
 		}
 	}
 	// One validating webhook per kind, and no defaulting webhook.
-	if len(markers) != 7 {
-		t.Fatalf("found %d webhook markers, want 7: %v", len(markers), markers)
+	if len(markers) != 8 {
+		t.Fatalf("found %d webhook markers, want 8: %v", len(markers), markers)
 	}
 	for _, path := range markers {
 		if _, pattern := mux.Handler(httptest.NewRequest(http.MethodPost, path, http.NoBody)); pattern != path {

@@ -15,9 +15,13 @@ limitations under the License.
 */
 
 // Package webhooks holds the validating admission webhooks for CAPTF's
-// seven v1 kinds: TerraformCluster, TerraformClusterTemplate,
+// eight v1 kinds: TerraformCluster, TerraformClusterTemplate,
 // TerraformMachine, TerraformMachineTemplate, TerraformMachinePool,
-// TerraformMachinePoolTemplate and TerraformClusterIdentity. Each kind has
+// TerraformMachinePoolTemplate, TerraformClusterIdentity and TerraformPlan.
+// The TerraformPlan webhook is the access control of an approval: it checks
+// that approvedBy names the approving user, that an approval is never
+// withdrawn or given to a finished plan, and that only the manager moves the
+// plan-phase label. Each kind has
 // its own file and its own type implementing
 // controller-runtime's admission.Validator, registered on the manager by
 // SetupWebhooks; setup.go also refuses to start if the manager's scheme
