@@ -464,7 +464,9 @@ func (r *reconciler) planOf(f *finished) (madePlan, bool) {
 // next pass reads them, and their plans, again. It returns any create or
 // supersede error.
 func (r *reconciler) recordPlans(ctx context.Context, bk *Bookkeeping) error {
-	if !r.tracksPlans() {
+	// A deleting object only destroys: a plan Job that finished since
+	// asks nobody to approve anything. Its Jobs are still marked bookkept.
+	if !r.tracksPlans() || r.deleting {
 		return nil
 	}
 	fresh := slices.Clone(bk.unmarked)

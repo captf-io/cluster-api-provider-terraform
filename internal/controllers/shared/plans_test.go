@@ -271,6 +271,30 @@ func checkPlan(t *testing.T, p *infrav1.TerraformPlan, phase infrav1.PlanPhase, 
 	}
 }
 
+// TestPlanAfterDeletionNotRecorded proves a plan Job that finishes once
+// its object is deleting records no TerraformPlan: the object only
+// destroys, and nothing asks for an approval.
+func TestPlanAfterDeletionNotRecorded(t *testing.T) {
+	t.Parallel()
+	e := newPlanEnv(t, "h1:old")
+	if requeue := e.reconcile(t, nil); requeue != ActiveJobRequeue {
+		t.Fatalf("requeue = %s", requeue)
+	}
+	planJob := e.newest(t)
+	if err := e.c.Delete(t.Context(), e.get(t)); err != nil {
+		t.Fatal(err)
+	}
+	p := &runner.Plan{Hash: runner.PlanHash([]string{"module.role.lb|update"}), Update: 1, Resources: []string{"module.role.lb (update)"}}
+	e.finishRunner(t, planJob, jobs.Succeeded, t0.Add(-time.Minute), planResult(runner.OpPlan, p, ""))
+	e.reconcile(t, nil)
+	if plans := e.plans(t); len(plans) != 0 {
+		t.Errorf("TerraformPlans = %d, want none for a deleting object", len(plans))
+	}
+	if n := e.rec.count(EventPlanReady); n != 0 {
+		t.Errorf("PlanReady events = %d", n)
+	}
+}
+
 // TestPlanFlow walks a change through applyPolicy Manual: a plan Job (run
 // lease only, nothing applied), its TerraformPlan (labels, owner, summary,
 // status, status.pendingPlanRef), the condition with the approve command
