@@ -164,7 +164,8 @@ func ownerName(c client.Client, owner client.Object) (name, kind string, err err
 }
 
 // appliedName returns owner's applied Secret name and Kubernetes kind, as
-// ownerName returns the durable Secret's.
+// ownerName returns the durable Secret's; c supplies the scheme that
+// resolves owner's kind. It returns an error when the kind is unknown.
 func appliedName(c client.Client, owner client.Object) (name, kind string, err error) {
 	gvk, err := apiutil.GVKForObject(owner, c.Scheme())
 	if err != nil {

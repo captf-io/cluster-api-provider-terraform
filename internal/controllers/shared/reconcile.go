@@ -961,7 +961,8 @@ func (r *reconciler) destroyFiles(ctx context.Context, s string) (render.Files, 
 }
 
 // mismatchWhy explains, for DestroyInputsMismatch, why the destroy renders
-// rec although its inputs hash is not the state's.
+// rec although its inputs hash is not the state's. It returns the
+// explanation as a clause for the event message.
 func mismatchWhy(rec *inputs.Record) string {
 	if rec.MayHaveApplied {
 		return "that apply failed after it may have changed resources, which only its inputs describe; check the infrastructure once the destroy ran"

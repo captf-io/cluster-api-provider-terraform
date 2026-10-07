@@ -81,7 +81,8 @@ func newRecordsEnv(t *testing.T, funcs interceptor.Funcs) *recordsEnv {
 	return r
 }
 
-// kind returns the adapter of e's stored object: mutable, building r.in.
+// kind returns the adapter of e's stored object: mutable, building r.in;
+// t fails the test when the object cannot be read.
 func (r *recordsEnv) kind(t *testing.T) *fakeKind {
 	t.Helper()
 	k := r.kindFor(t, readyOwner)

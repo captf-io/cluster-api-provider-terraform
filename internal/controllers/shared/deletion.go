@@ -56,8 +56,9 @@ import (
 // read (nil when none). That Job ended without a result or vanished
 // before any state was written, so it may have created resources: for
 // every kind, a deletion is held rather than released, and no second
-// first apply runs (ApplyOutcomeUnknown). It returns any error listing
-// the backups.
+// first apply runs (ApplyOutcomeUnknown). suffix is the object's state
+// suffix, which names its backups. It returns whether the object ever
+// applied or may have, and any error listing the backups.
 func everApplied(ctx context.Context, d Deps, k Kind, suffix string, durable *inputs.Durable) (bool, error) {
 	if durable != nil && durable.InterruptedApply != "" {
 		return true, nil
