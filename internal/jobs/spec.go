@@ -260,10 +260,12 @@ func Build(s Spec, runnerImage string) (*batchv1.Job, []string) {
 	// An apply Job records the inputs hash it renders, so the controller can
 	// adopt the state with that hash once the Job succeeded.
 	// A restore Job records the backup's serial and the inputs hash the
-	// backup was taken with, which the controller adopts after it. A plan
-	// Job records the inputs hash it planned, which its TerraformPlan names.
+	// backup was taken with, which the controller adopts after it; an
+	// empty one too, so a backup taken without a hash removes the newer
+	// hash the backend keeps across the push. A plan Job records the
+	// inputs hash it planned, which its TerraformPlan names.
 	var annotations map[string]string
-	if (s.Op == OpApply || s.Op == OpRestore || s.Op == OpPlan) && s.InputsHash != "" {
+	if ((s.Op == OpApply || s.Op == OpPlan) && s.InputsHash != "") || s.Op == OpRestore {
 		annotations = map[string]string{state.InputsHashAnnotation: s.InputsHash}
 	}
 	if s.Op == OpRestore && s.Restore != nil {

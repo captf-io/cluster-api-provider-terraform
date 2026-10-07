@@ -1385,12 +1385,21 @@ func (r *reconciler) readState(ctx context.Context, bk *Bookkeeping, prevRefresh
 	// chunks' owner references are checked by repairOwners.
 	r.chunks = st.Metadata
 	if src := adoptSource(bk); src != nil {
-		if h := src.Annotations[state.InputsHashAnnotation]; h != "" && h != st.InputsHash {
+		// A restore records its backup's hash even when that is empty: the
+		// push keeps the newer hash on the backend's Secret, which would then
+		// pass a partial state off as the newer apply's.
+		h, ok := src.Annotations[state.InputsHashAnnotation]
+		if ok && h != st.InputsHash && (h != "" || jobs.OpOf(src) == jobs.OpRestore) {
 			if err := state.Adopt(ctx, r.d.Client, r.obj, r.suffix, h); err != nil {
 				return StateView{}, err
 			}
-			r.d.EmitRelated(r.obj, src, corev1.EventTypeNormal, EventStateAdopted, "Reconcile",
-				"Adopted the state Job %s wrote, with inputs hash %s", src.Name, h)
+			if h == "" {
+				r.d.EmitRelated(r.obj, src, corev1.EventTypeNormal, EventStateAdopted, "Reconcile",
+					"Adopted the state Job %s wrote, without an inputs hash: its backup was taken without one, so the state no longer shows a completed apply", src.Name)
+			} else {
+				r.d.EmitRelated(r.obj, src, corev1.EventTypeNormal, EventStateAdopted, "Reconcile",
+					"Adopted the state Job %s wrote, with inputs hash %s", src.Name, h)
+			}
 			st.InputsHash = h
 			r.chunks = nil
 		}

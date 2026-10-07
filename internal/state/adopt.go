@@ -28,7 +28,9 @@ import (
 
 // Adopt marks every state Secret of suffix as owned by owner (ownerRef with
 // blockOwnerDeletion=false, so state moves with the cluster and is garbage
-// collected with the object) and records inputsHash on the base Secret. It
+// collected with the object) and records inputsHash on the base Secret,
+// or removes the hash there when inputsHash is "" (a restored backup that
+// was taken without one: the state no longer shows what applied it). It
 // uses ctx for the list and patch calls through c and returns any error from
 // them, or ErrNoState if suffix names no state Secret.
 //
@@ -54,7 +56,11 @@ func Adopt(ctx context.Context, c client.Client, owner client.Object, suffix, in
 		if err := controllerutil.SetOwnerReference(owner, s, c.Scheme(), noBlockOwnerDeletion); err != nil {
 			return fmt.Errorf("state: owner reference on %s: %w", s.Name, err)
 		}
-		if s.Name == base {
+		switch {
+		case s.Name != base:
+		case inputsHash == "":
+			delete(s.Annotations, InputsHashAnnotation)
+		default:
 			metav1.SetMetaDataAnnotation(&s.ObjectMeta, InputsHashAnnotation, inputsHash)
 		}
 		if err := c.Patch(ctx, s, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{})); err != nil {
