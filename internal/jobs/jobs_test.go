@@ -463,10 +463,13 @@ func TestBuild(t *testing.T) {
 	wantQty(t, init.Resources.Limits, corev1.ResourceMemory, InitContainerMemoryLimit)
 	defSrc := def.Spec.Template.Spec.Containers[0]
 	wantQty(t, defSrc.Resources.Requests, corev1.ResourceCPU, DefaultSourceCPURequest)
-	wantQty(t, defSrc.Resources.Requests, corev1.ResourceMemory, DefaultSourceMemoryRequest)
-	wantQty(t, defSrc.Resources.Limits, corev1.ResourceMemory, DefaultSourceMemoryLimit)
+	wantQty(t, defSrc.Resources.Requests, corev1.ResourceMemory, DefaultSourceMemory)
+	wantQty(t, defSrc.Resources.Limits, corev1.ResourceMemory, DefaultSourceMemory)
 	if _, ok := defSrc.Resources.Limits[corev1.ResourceCPU]; ok {
 		t.Error("default resources set a CPU limit, want none")
+	}
+	if defSrc.Resources.Requests.Memory().Cmp(*defSrc.Resources.Limits.Memory()) != 0 {
+		t.Error("default memory request differs from its limit")
 	}
 	// A policy that sets resources replaces the default entirely, never merges.
 	custom := spec(OpApply)
@@ -879,5 +882,44 @@ func TestArgsParseInRunner(t *testing.T) {
 				t.Errorf("events off, but the Job passes %s", a)
 			}
 		}
+	}
+}
+
+// TestBuildSafeToEvict checks that only the Jobs that mutate infrastructure
+// carry the cluster-autoscaler safe-to-evict=false pod annotation.
+func TestBuildSafeToEvict(t *testing.T) {
+	t.Parallel()
+	for op, want := range map[Op]bool{OpApply: true, OpDestroy: true, OpRestore: true, OpPlan: false, OpRefresh: false, OpDrift: false} {
+		job, _ := Build(spec(op), "runner:img")
+		got, ok := job.Spec.Template.Annotations[SafeToEvictAnnotation]
+		if ok != want || (ok && got != "false") {
+			t.Errorf("%s: annotation = %q (present %v), want present %v", op, got, ok, want)
+		}
+	}
+}
+
+// TestBuildReservedEnvWins checks that user env named like a variable the
+// Job sets itself is dropped, so the built-in value is the only one.
+func TestBuildReservedEnvWins(t *testing.T) {
+	t.Parallel()
+	s := spec(OpApply)
+	s.Policy.Env = []corev1.EnvVar{
+		{Name: "HOME", Value: "/evil"}, {Name: "TMPDIR", Value: "/evil"},
+		{Name: "KUBERNETES_SERVICE_HOST", Value: "evil"}, {Name: "CHECKPOINT_DISABLE", Value: "0"},
+		{Name: "AWS_REGION", Value: "x"},
+	}
+	job, dropped := Build(s, "runner:img")
+	if len(dropped) != 4 {
+		t.Errorf("dropped = %v, want 4 names", dropped)
+	}
+	counts := map[string]int{}
+	for _, e := range job.Spec.Template.Spec.Containers[0].Env {
+		counts[e.Name]++
+		if e.Value == "evil" || (e.Name == "CHECKPOINT_DISABLE" && e.Value != "1") {
+			t.Errorf("env %s = %q overrides the built-in", e.Name, e.Value)
+		}
+	}
+	if counts["HOME"] != 1 || counts["TMPDIR"] != 1 || counts["AWS_REGION"] != 1 || counts["KUBERNETES_SERVICE_HOST"] != 0 {
+		t.Errorf("env counts = %v", counts)
 	}
 }

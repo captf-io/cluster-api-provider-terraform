@@ -53,16 +53,19 @@ const (
 // spec.jobs.resources is unset: BestEffort is exactly wrong for a Terraform
 // process with several large providers, the first thing OOM-killed or
 // evicted in a crowded node. No default CPU limit: throttling a slow apply
-// is worse than a slow apply.
+// is worse than a slow apply. The default memory request equals its limit:
+// the kubelet ranks pods for node-pressure eviction by usage over request,
+// and an apply pod evicted mid-run leaves resources that are not in state,
+// so it should never exceed its request. QoS stays Burstable, not
+// Guaranteed, because Guaranteed would need a CPU limit too.
 const (
 	InitContainerCPURequest    = "10m"
 	InitContainerCPULimit      = "100m"
 	InitContainerMemoryRequest = "32Mi"
 	InitContainerMemoryLimit   = "64Mi"
 
-	DefaultSourceCPURequest    = "250m"
-	DefaultSourceMemoryRequest = "512Mi"
-	DefaultSourceMemoryLimit   = "2Gi"
+	DefaultSourceCPURequest = "250m"
+	DefaultSourceMemory     = "2Gi"
 )
 
 // TerminationGracePeriodSeconds is the Job pod's grace period. A deletion,
@@ -204,9 +207,16 @@ func (s Spec) Name() string {
 	return Name(s.KindShort, s.OwnerName, s.Op, s.Attempt, Hash6(s.InputsHash, s.Op, s.Attempt, s.DriftTick))
 }
 
-// reservedEnv reports whether a jobs.env name is owned by the runner.
-func reservedEnv(name string) bool {
-	return strings.HasPrefix(name, "TF_") || strings.HasPrefix(name, "KUBE_")
+// ReservedEnv reports whether a jobs.env name is owned by the runner: the
+// TF_* and KUBE_* prefixes, the KUBERNETES_* variables the kubelet injects
+// for the in-cluster client (KUBERNETES_SERVICE_HOST and _PORT among them),
+// and HOME, TMPDIR and CHECKPOINT_DISABLE, which Build sets itself.
+func ReservedEnv(name string) bool {
+	switch name {
+	case "HOME", "TMPDIR", "CHECKPOINT_DISABLE":
+		return true
+	}
+	return strings.HasPrefix(name, "TF_") || strings.HasPrefix(name, "KUBE_") || strings.HasPrefix(name, "KUBERNETES_")
 }
 
 // Build returns the Job for s, running runnerImage as the init container,
@@ -234,7 +244,7 @@ func Build(s Spec, runnerImage string) (*batchv1.Job, []string) {
 	}
 	var dropped []string
 	for _, e := range s.Policy.Env {
-		if reservedEnv(e.Name) {
+		if ReservedEnv(e.Name) {
 			dropped = append(dropped, e.Name)
 			continue
 		}
@@ -272,7 +282,7 @@ func Build(s Spec, runnerImage string) (*batchv1.Job, []string) {
 			BackoffLimit:          new(BackoffLimit),
 			ActiveDeadlineSeconds: &deadline,
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: maps.Clone(labels)},
+				ObjectMeta: metav1.ObjectMeta{Labels: maps.Clone(labels), Annotations: podAnnotations(s.Op)},
 				Spec: corev1.PodSpec{
 					ServiceAccountName:            s.ServiceAccount,
 					RestartPolicy:                 corev1.RestartPolicyNever,
@@ -452,6 +462,22 @@ func volumes(runSecret, credsSecret string, restore []string, planKey string) []
 	return vols
 }
 
+// SafeToEvictAnnotation is the cluster-autoscaler pod annotation that
+// keeps a node from being scaled down under the pod.
+const SafeToEvictAnnotation = "cluster-autoscaler.kubernetes.io/safe-to-evict"
+
+// podAnnotations returns the pod template annotations for op: apply,
+// destroy and restore pods are marked not safe to evict, because an
+// autoscaler scale-down mid-run orphans the resources it created. Plan,
+// refresh and drift only read, so a retry is free and they stay evictable.
+func podAnnotations(op Op) map[string]string {
+	switch op {
+	case OpApply, OpDestroy, OpRestore:
+		return map[string]string{SafeToEvictAnnotation: "false"}
+	}
+	return nil
+}
+
 // podSecurityContext returns user, or a zero value when user is nil, with
 // seccomp defaulted to RuntimeDefault; runAsNonRoot is not defaulted,
 // because images built FROM hashicorp/terraform run as root.
@@ -498,10 +524,10 @@ func defaultSourceResources() corev1.ResourceRequirements {
 	return corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{
 			corev1.ResourceCPU:    resource.MustParse(DefaultSourceCPURequest),
-			corev1.ResourceMemory: resource.MustParse(DefaultSourceMemoryRequest),
+			corev1.ResourceMemory: resource.MustParse(DefaultSourceMemory),
 		},
 		Limits: corev1.ResourceList{
-			corev1.ResourceMemory: resource.MustParse(DefaultSourceMemoryLimit),
+			corev1.ResourceMemory: resource.MustParse(DefaultSourceMemory),
 		},
 	}
 }

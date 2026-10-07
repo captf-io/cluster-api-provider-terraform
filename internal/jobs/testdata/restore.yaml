@@ -18,6 +18,8 @@ spec:
   backoffLimit: 0
   template:
     metadata:
+      annotations:
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
       labels:
         captf.infrastructure.cluster.x-k8s.io/attempt: "1"
         captf.infrastructure.cluster.x-k8s.io/op: restore
@@ -72,7 +74,7 @@ spec:
             memory: 2Gi
           requests:
             cpu: 250m
-            memory: 512Mi
+            memory: 2Gi
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
