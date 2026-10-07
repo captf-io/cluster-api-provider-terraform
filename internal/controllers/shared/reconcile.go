@@ -17,6 +17,7 @@ limitations under the License.
 package shared
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -299,6 +300,9 @@ func (r *reconciler) bookkeep(ctx context.Context) (*Bookkeeping, error) {
 	}
 	if bk.MarkedApplied && r.durable != nil {
 		r.durable.AppliedMark = true
+	}
+	if a := r.durable.LastAttempt(); a != nil && (bk.MayHaveAppliedSet || bk.MayHaveAppliedCleared) {
+		a.MayHaveApplied = bk.MayHaveAppliedSet
 	}
 	if bk.ExportsRecorded && r.durable != nil {
 		r.durable.AppliedClusterOutputs, r.durable.AppliedExportsHash = bk.AppliedExports, bk.AppliedExportsHash
@@ -727,7 +731,7 @@ func (r *reconciler) startOp(ctx context.Context, bk *Bookkeeping, dec Decision,
 		req.PinnedDigest = a.Digest
 	}
 
-	files, ok, err := r.files(ctx, op, in)
+	files, rec, ok, err := r.files(ctx, op, in, view.InputsHash)
 	if errors.Is(err, render.ErrInputsTooLarge) {
 		// Retrying cannot help until the inputs change, which re-triggers
 		// the reconcile.
@@ -742,6 +746,11 @@ func (r *reconciler) startOp(ctx context.Context, bk *Bookkeeping, dec Decision,
 	}
 	if !ok {
 		return r.noFiles(ctx, bk, op)
+	}
+	if rec != nil {
+		// The digest that ran the files: the applied record's, none for an
+		// attempt that never succeeded.
+		req.PinnedDigest = rec.Digest
 	}
 	req.Files = files
 	switch op {
@@ -838,21 +847,23 @@ func (r *reconciler) jobStarted(dec Decision, req JobRequest, view StateView, jo
 }
 
 // files renders what op runs, using ctx: the current inputs in for Apply,
-// destroyFiles for Destroy, and checkFiles for Refresh and Drift. It
-// returns the rendered files, ok false when there is nothing to run
+// destroyFiles for Destroy, and checkFiles for Refresh and Drift; s is the
+// state's inputs hash, which picks the inputs record (runRecord). It
+// returns the rendered files, the record they come from (nil when they
+// were rendered from inputs), ok false when there is nothing to run
 // against, and any render error.
-func (r *reconciler) files(ctx context.Context, op jobs.Op, in any) (render.Files, bool, error) {
+func (r *reconciler) files(ctx context.Context, op jobs.Op, in any, s string) (render.Files, *inputs.Record, bool, error) {
 	switch op {
 	case jobs.OpApply, jobs.OpPlan:
 		files, err := r.renderFiles(in)
 		if err != nil {
-			return render.Files{}, false, err
+			return render.Files{}, nil, false, err
 		}
-		return files, true, nil
+		return files, nil, true, nil
 	case jobs.OpDestroy:
-		return r.destroyFiles(ctx)
+		return r.destroyFiles(ctx, s)
 	}
-	return r.checkFiles(in)
+	return r.checkFiles(in, s)
 }
 
 // noFiles reports, using ctx and the pass's bookkeeping bk, that op has
@@ -895,45 +906,96 @@ func (r *reconciler) jobSource(op jobs.Op) infrav1.Source {
 }
 
 // checkFiles is what Refresh and Drift run against: the current inputs in
-// of a mutable kind, the applied inputs of an immutable one (else the
-// attempted ones). Neither writes an inputs record; only Apply does. It
-// returns the files to run against, ok false when there is nothing to
-// run against, and any render error.
-func (r *reconciler) checkFiles(in any) (render.Files, bool, error) {
+// of a mutable kind, else the inputs record that describes the state,
+// whose inputs hash is s (runRecord). Neither writes an inputs record;
+// only Apply does. It returns the files to run against, the record they
+// come from (nil when rendered from in), ok false when there is nothing
+// to run against, and any render error.
+func (r *reconciler) checkFiles(in any, s string) (render.Files, *inputs.Record, bool, error) {
 	if r.k.Mutable() && in != nil {
 		files, err := r.renderFiles(in)
 		if err != nil {
-			return render.Files{}, false, err
+			return render.Files{}, nil, false, err
 		}
-		return files, true, nil
+		return files, nil, true, nil
 	}
-	if a := r.durable.AppliedOrAttempt(); a != nil {
-		return a.Files, true, nil
+	if rec := r.runRecord(s); rec != nil {
+		return rec.Files, rec, true, nil
 	}
-	return render.Files{}, false, nil
+	return render.Files{}, nil, false, nil
 }
 
-// destroyFiles renders destroy from the applied inputs, else the
-// attempted ones; a mutable kind with neither falls back, using ctx, to
-// its current inputs when they build. It returns the files to run
-// against, ok false when there is nothing to run against, and any build
-// or render error.
-func (r *reconciler) destroyFiles(ctx context.Context) (render.Files, bool, error) {
-	if a := r.durable.AppliedOrAttempt(); a != nil {
-		return a.Files, true, nil
+// destroyFiles renders destroy from the inputs record that describes the
+// state, whose inputs hash is s (runRecord), warning
+// (DestroyInputsMismatch) when that record's hash is not the state's; a
+// mutable kind with no record falls back, using ctx, to its current
+// inputs when they build, and an immutable one has nothing to run
+// against. It returns the files to run against, the record they come
+// from (nil when rendered from inputs), ok false when there is nothing to
+// run against, and any build or render error.
+func (r *reconciler) destroyFiles(ctx context.Context, s string) (render.Files, *inputs.Record, bool, error) {
+	if rec := r.runRecord(s); rec != nil {
+		if s != "" && rec.InputsHash != s {
+			klog.FromContext(ctx).Info("The destroy renders inputs whose hash is not the state's", "Job", rec.Job, "inputsHash", rec.InputsHash, "stateInputsHash", s)
+			r.d.Emit(r.obj, corev1.EventTypeWarning, EventDestroyInputsMismatch, "Delete",
+				"The destroy renders the inputs of apply Job %s (inputs hash %s), not those the state records (%s): %s",
+				rec.Job, cmp.Or(rec.InputsHash, "none"), s, mismatchWhy(rec))
+		}
+		return rec.Files, rec, true, nil
 	}
 	if !r.k.Mutable() {
-		return render.Files{}, false, nil
+		return render.Files{}, nil, false, nil
 	}
 	in, gate, err := r.k.BuildInputs(ctx, r.owner, nil)
 	if err != nil || gate != nil {
-		return render.Files{}, false, err
+		return render.Files{}, nil, false, err
 	}
 	files, err := r.renderFiles(in)
 	if err != nil {
-		return render.Files{}, false, err
+		return render.Files{}, nil, false, err
 	}
-	return files, true, nil
+	return files, nil, true, nil
+}
+
+// mismatchWhy explains, for DestroyInputsMismatch, why the destroy renders
+// rec although its inputs hash is not the state's.
+func mismatchWhy(rec *inputs.Record) string {
+	if rec.MayHaveApplied {
+		return "that apply failed after it may have changed resources, which only its inputs describe; check the infrastructure once the destroy ran"
+	}
+	return "no inputs record has the state's hash; check the infrastructure once the destroy ran"
+}
+
+// runRecord returns the inputs record that describes what the state was
+// written with, given s, the state's inputs hash, from the records read
+// this pass; nil when there is none. In order:
+//
+//  1. the attempt record, when its Job is not the applied record's and may
+//     have changed resources (inputs.Record.MayHaveApplied): it failed
+//     after its apply step ran, or ended without a result, so the state
+//     may hold resources only its inputs describe;
+//  2. with a hash in the state, the record whose hash it is, the applied
+//     one first;
+//  3. the applied record, else the attempt record.
+//
+// So an attempt that changed nothing (blocked, refused in validation or
+// planning) never replaces the inputs that applied.
+func (r *reconciler) runRecord(s string) *inputs.Record {
+	if r.durable == nil {
+		return nil
+	}
+	a, t := r.durable.Applied, r.durable.Attempt
+	switch {
+	case t != nil && t.MayHaveApplied && (a == nil || a.Job != t.Job):
+		return t
+	case s != "" && a != nil && a.InputsHash == s:
+		return a
+	case s != "" && t != nil && t.InputsHash == s:
+		return t
+	case a != nil:
+		return a
+	}
+	return t
 }
 
 // renderFiles renders in and records its size for captf_inputs_bytes,

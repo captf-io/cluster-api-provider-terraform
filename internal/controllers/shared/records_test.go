@@ -37,6 +37,7 @@ import (
 	"github.com/captf-io/cluster-api-provider-terraform/internal/inputs"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/jobs"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/render"
+	"github.com/captf-io/cluster-api-provider-terraform/internal/runner"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/state"
 )
 
@@ -160,6 +161,62 @@ func TestDestroyUsesAppliedAfterBlockedApply(t *testing.T) {
 	}
 }
 
+// failedResult returns the termination message of an apply that failed
+// in step, after the steps before it ran.
+func failedResult(step string, before ...string) string {
+	r := runner.Result{Version: runner.ResultVersion, Op: runner.OpApply}
+	for _, name := range before {
+		r.Steps = append(r.Steps, runner.Step{Name: name})
+	}
+	r.Steps = append(r.Steps, runner.Step{Name: step, Exit: 1})
+	r.Error = &runner.Error{Kind: runner.ErrorKindStep, Step: &step, Tail: "Error: failed"}
+	return string(runner.Encode(r))
+}
+
+// TestDestroyUsesAttemptAfterPartialApply: an apply of changed inputs
+// that failed in its apply step may have created resources that only its
+// inputs describe, and wrote no inputs hash to the state. Deleting the
+// object destroys from that attempt, not the applied record, and warns
+// that the destroy renders inputs other than the state's.
+func TestDestroyUsesAttemptAfterPartialApply(t *testing.T) {
+	t.Parallel()
+	r := newRecordsEnv(t, interceptor.Funcs{})
+	r.editRegion()
+	partial := r.startsApply(t)
+	attempt := r.records(t).Attempt.Files
+	r.finishRunner(t, partial, jobs.Failed, t0.Add(-time.Minute), failedResult(runner.StepApply, runner.StepInit, runner.StepValidate))
+	if got := r.destroys(t); !bytes.Equal(got.TFVars, attempt.TFVars) || bytes.Equal(got.TFVars, r.applied.TFVars) {
+		t.Errorf("destroy rendered %s, want the partly applied attempt %s", got.TFVars, attempt.TFVars)
+	}
+	if d := r.records(t); !d.Attempt.MayHaveApplied {
+		t.Error("the attempt record is not marked as one that may have applied")
+	}
+	if ev := r.rec.only(EventDestroyInputsMismatch); len(ev) != 1 || ev[0].eventType != corev1.EventTypeWarning || !strings.Contains(ev[0].note, partial) {
+		t.Errorf("DestroyInputsMismatch events = %+v, want one Warning naming %s", ev, partial)
+	}
+}
+
+// TestDestroyIgnoresTypoAttempt: an apply of changed inputs that failed
+// before its apply step (a typo the validation caught) changed nothing.
+// Deleting the object destroys from the applied record, whose hash the
+// state records, without a warning.
+func TestDestroyIgnoresTypoAttempt(t *testing.T) {
+	t.Parallel()
+	r := newRecordsEnv(t, interceptor.Funcs{})
+	r.editRegion()
+	typo := r.startsApply(t)
+	r.finishRunner(t, typo, jobs.Failed, t0.Add(-time.Minute), failedResult(runner.StepValidate, runner.StepInit))
+	if got := r.destroys(t); !bytes.Equal(got.TFVars, r.applied.TFVars) {
+		t.Errorf("destroy rendered %s, want the applied inputs %s", got.TFVars, r.applied.TFVars)
+	}
+	if d := r.records(t); d.Attempt.MayHaveApplied {
+		t.Error("an attempt that failed in validation is marked as one that may have applied")
+	}
+	if n := r.rec.count(EventDestroyInputsMismatch); n != 0 {
+		t.Errorf("DestroyInputsMismatch events = %d, want none", n)
+	}
+}
+
 // TestPromoteCrashBetweenSteps: a pass that promoted a successful apply
 // but failed to delete its per-run Secret leaves both for the next pass,
 // which finds the record its own and promotes nothing again: the applied
@@ -263,4 +320,42 @@ func TestWriteAttemptAfterCreate(t *testing.T) {
 			t.Errorf("attempt record = %s, want the started apply %s", d.Attempt.Job, next)
 		}
 	})
+}
+
+// TestRunRecord walks runRecord's order: an attempt that may have
+// applied, then the record of the state's hash (the applied one first),
+// then the applied record, else the attempt.
+func TestRunRecord(t *testing.T) {
+	t.Parallel()
+	applied := &inputs.Record{Job: "a", InputsHash: "h1:a"}
+	attempt := &inputs.Record{Job: "b", InputsHash: "h1:b"}
+	partial := &inputs.Record{Job: "b", InputsHash: "h1:b", MayHaveApplied: true}
+	promoted := &inputs.Record{Job: "a", InputsHash: "h1:a", MayHaveApplied: true}
+	tests := []struct {
+		name             string
+		applied, attempt *inputs.Record
+		state            string
+		want             *inputs.Record
+	}{
+		{"no records", nil, nil, "h1:a", nil},
+		{"an attempt that may have applied", applied, partial, "h1:a", partial},
+		{"the attempt that was promoted", applied, promoted, "h1:a", applied},
+		{"the state's hash: applied", applied, attempt, "h1:a", applied},
+		{"the state's hash: the attempt", applied, attempt, "h1:b", attempt},
+		{"another hash: applied", applied, attempt, "h1:c", applied},
+		{"no hash: applied", applied, attempt, "", applied},
+		{"only an attempt", nil, attempt, "h1:c", attempt},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			r := &reconciler{}
+			if tt.applied != nil || tt.attempt != nil {
+				r.durable = &inputs.Durable{Applied: tt.applied, Attempt: tt.attempt}
+			}
+			if got := r.runRecord(tt.state); got != tt.want {
+				t.Errorf("runRecord(%q) = %+v, want %+v", tt.state, got, tt.want)
+			}
+		})
+	}
 }

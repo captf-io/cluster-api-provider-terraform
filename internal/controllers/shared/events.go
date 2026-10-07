@@ -155,6 +155,11 @@ const (
 	// per-run Secret nor the attempt record holds its inputs any more, so
 	// the applied record still holds an older apply's.
 	EventAppliedInputsUnknown = "AppliedInputsUnknown"
+	// EventDestroyInputsMismatch: a destroy renders inputs whose hash is
+	// not the one the state records: those of an apply that failed after
+	// it may have changed resources, or, with no record of the state's
+	// hash, the last ones applied.
+	EventDestroyInputsMismatch = "DestroyInputsMismatch"
 	// EventForceUnlocked: a stale state lock was force-unlocked.
 	EventForceUnlocked = "ForceUnlocked"
 	// EventStateAdopted: the state written by a successful apply was
@@ -253,7 +258,7 @@ func DocumentedEvents() []string {
 		EventDeletionStarted, EventDestroyed, EventFinalizerRemoved,
 		EventInfrastructureRetained, EventRetainedStateFound, EventRetainedStateAdopted, EventPaused, EventResumed, EventProvisioned,
 		EventProviderIDSet, EventControlPlaneEndpointSet, EventFailureDomainsChanged, EventExportsNotPublished,
-		EventInputsChanged, EventDigestPinned, EventDigestUnknown, EventAppliedInputsUnknown, EventForceUnlocked, EventStateAdopted,
+		EventInputsChanged, EventDigestPinned, EventDigestUnknown, EventAppliedInputsUnknown, EventDestroyInputsMismatch, EventForceUnlocked, EventStateAdopted,
 		EventStateLost, EventStateLocked, EventStateUnreadable, EventOutputsInvalid,
 		EventStateBackedUp, EventStateRestored, EventStateRestoreFailed,
 		EventDriftDetected, EventDriftResolved, EventDriftRemediationStarted, EventInstanceHealthy, EventInstanceUnhealthy,

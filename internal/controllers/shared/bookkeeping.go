@@ -154,6 +154,10 @@ type Bookkeeping struct {
 	// (inputs.Promote) for a newly finished successful apply; nil when it
 	// wrote none.
 	Promoted *inputs.Record
+	// MayHaveAppliedSet is true when bookkeeping marked the attempt record
+	// as one whose Job may have changed resources (inputs.SetMayHaveApplied)
+	// this pass; MayHaveAppliedCleared when a restore removed that mark.
+	MayHaveAppliedSet, MayHaveAppliedCleared bool
 	// MarkedApplied is true when bookkeeping set the applied marker
 	// (inputs.MarkApplied) on the durable Secret this pass.
 	MarkedApplied bool
@@ -322,6 +326,9 @@ func Bookkeep(ctx context.Context, d Deps, k Kind, eff EffectiveConfig, suffix s
 	}
 	setDriftJob(obj, done)
 	bk.restores(d, k, done)
+	if err := bk.restored(ctx, d, k, durable); err != nil {
+		return nil, err
+	}
 	bk.View.EmptyPlan = emptyPlan(done)
 	if len(done) > 0 {
 		bk.newestJob = done[0].job.Name
@@ -614,6 +621,9 @@ func (bk *Bookkeeping) applyDestroy(ctx context.Context, d Deps, k Kind, done []
 				if err := bk.recordPartial(ctx, d, k, f, durable); err != nil {
 					return err
 				}
+				if err := bk.markMayHaveApplied(ctx, d, k, f, durable); err != nil {
+					return err
+				}
 			}
 		}
 		if op == jobs.OpApply && bk.LastApplyBlocked && f.job != bk.LastApply && bk.priorApply == nil && !f.blocked && !f.planChanged {
@@ -812,6 +822,54 @@ func (bk *Bookkeeping) promote(ctx context.Context, d Deps, k Kind, f *finished,
 			"Job %s succeeded but its image digest is unavailable; other operations run the spec image", f.job.Name)
 	case prev == nil || prev.Digest != rec.Digest:
 		d.EmitRelated(k.Object(), f.job, corev1.EventTypeNormal, EventDigestPinned, "Pin", "Job %s ran %s; later operations run this digest", f.job.Name, rec.Digest)
+	}
+	return nil
+}
+
+// markMayHaveApplied marks, using ctx and d, k's attempt record as one
+// whose Job may have changed resources (inputs.SetMayHaveApplied) when f,
+// k's newest apply, newly failed after its apply step may have run
+// (mayHaveApplied) and the record is f's: destroy then renders it
+// (runRecord), as the only inputs that describe what f may have left.
+// durable is the inputs records as read this pass; a record already
+// marked costs no call. It returns any error from the mark.
+func (bk *Bookkeeping) markMayHaveApplied(ctx context.Context, d Deps, k Kind, f *finished, durable *inputs.Durable) error {
+	t := durable.LastAttempt()
+	if t == nil || t.Job != f.job.Name || t.MayHaveApplied || !mayHaveApplied(f) {
+		return nil
+	}
+	err := inputs.SetMayHaveApplied(ctx, d.Client, k.Object())
+	switch {
+	case errors.Is(err, inputs.ErrNotFound):
+		return nil
+	case err != nil:
+		return err
+	}
+	bk.MayHaveAppliedSet = true
+	klog.FromContext(ctx).Info("An apply failed after it may have changed resources; a destroy renders its inputs", "Job", klog.KObj(f.job))
+	return nil
+}
+
+// restored clears, using ctx and d, what k's newest restore Job, newly
+// finished successful and newer than k's newest finished apply, replaced:
+// the mark on the attempt record that its Job may have changed resources
+// (inputs.ClearMayHaveApplied). The operator chose the state; a destroy
+// renders the record whose hash it carries (runRecord). durable is the
+// inputs records as read this pass. It returns any error from clearing.
+func (bk *Bookkeeping) restored(ctx context.Context, d Deps, k Kind, durable *inputs.Durable) error {
+	f := bk.lastRestore
+	if f == nil || !f.ok || f.bookkept || (bk.LastApply != nil && !jobs.FinishedAt(f.job).After(jobs.FinishedAt(bk.LastApply))) {
+		return nil
+	}
+	if t := durable.LastAttempt(); t != nil && t.MayHaveApplied {
+		err := inputs.ClearMayHaveApplied(ctx, d.Client, k.Object())
+		switch {
+		case errors.Is(err, inputs.ErrNotFound):
+		case err != nil:
+			return err
+		default:
+			bk.MayHaveAppliedCleared = true
+		}
 	}
 	return nil
 }

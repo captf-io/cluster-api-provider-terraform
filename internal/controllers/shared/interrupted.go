@@ -55,6 +55,9 @@ import (
 //     those succeeds, an apply stays due (lastApplyFailed), even of the
 //     state's own inputs, and ApplyJobSucceeded says why
 //     (interruptedCondition). Every kind's marker, the cluster's included.
+//   - the attempt record as one whose Job may have changed resources
+//     (inputs.SetMayHaveApplied), when it is the Job's: a destroy then
+//     renders it (runRecord).
 //   - for an ExportsGuard kind, also the change of the cluster's exports
 //     the Job may have partly applied (vanishedPartial), which stops the
 //     pool from holding the exports of its last successful apply and
@@ -76,7 +79,8 @@ func (r *reconciler) recordVanishedApply(ctx context.Context, bk *Bookkeeping) e
 		return nil
 	}
 	partial := r.vanishedPartial(a.Name)
-	if d.InterruptedApply != "" && partial == nil {
+	mark := d.Attempt != nil && d.Attempt.Job == a.Name && !d.Attempt.MayHaveApplied
+	if d.InterruptedApply != "" && partial == nil && !mark {
 		return nil
 	}
 	live, err := r.liveActiveJob(ctx)
@@ -94,6 +98,15 @@ func (r *reconciler) recordVanishedApply(ctx context.Context, bk *Bookkeeping) e
 		d.InterruptedApply = a.Name
 		klog.FromContext(ctx).Info("An apply Job is gone before it finished, and may have applied part of its change; "+
 			"an apply of the current inputs stays due until one succeeds", "Job", a.Name)
+	}
+	if mark {
+		switch err := inputs.SetMayHaveApplied(ctx, r.d.Client, r.obj); {
+		case errors.Is(err, inputs.ErrNotFound):
+		case err != nil:
+			return err
+		default:
+			d.Attempt.MayHaveApplied = true
+		}
 	}
 	if partial == nil {
 		return nil
