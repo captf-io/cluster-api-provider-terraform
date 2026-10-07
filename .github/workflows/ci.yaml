@@ -37,7 +37,8 @@
 #     repositories, which validate them; captf-io/module-images builds and
 #     smoke-tests their images.
 #   - e2e and any kind or cluster based tests: need live infrastructure, and
-#     are deferred until the software is near stable.
+#     are deferred until the software is near stable. The envtest job is not
+#     one: it needs only kube-apiserver and etcd binaries, no cluster.
 #   - release, release-*: publish artifacts; publish.yaml runs them on a
 #     tag push (release-snapshot below is the dry run).
 name: ci
@@ -158,6 +159,99 @@ jobs:
             bin/junit-*.xml
           retention-days: 14
           if-no-files-found: warn
+
+  envtest:
+    name: envtest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The Go caches are restored by hand below (cache: false): setup-go's
+      # single shared key was saved by whichever job finished first, so the
+      # test job's -race objects and the arm64 objects were never persisted.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        id: go
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Go cache paths
+        id: gopaths
+        run: |
+          echo "build=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+          echo "mod=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+      # One module cache shared by every job; a build cache per job, because
+      # each job compiles different objects (race and cover, arm64, lint,
+      # envtest).
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name == 'pull_request' }}
+        with:
+          path: ${{ steps.gopaths.outputs.mod }}
+          key: gomod-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}
+          restore-keys: |
+            gomod-${{ runner.os }}-${{ steps.go.outputs.go-version }}-
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name != 'pull_request' }}
+        with:
+          path: ${{ steps.gopaths.outputs.mod }}
+          key: gomod-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}
+          restore-keys: |
+            gomod-${{ runner.os }}-${{ steps.go.outputs.go-version }}-
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name == 'pull_request' }}
+        with:
+          path: ${{ steps.gopaths.outputs.build }}
+          key: go-envtest-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-envtest-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}-
+            go-envtest-${{ runner.os }}-${{ steps.go.outputs.go-version }}-
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name != 'pull_request' }}
+        with:
+          path: ${{ steps.gopaths.outputs.build }}
+          key: go-envtest-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-envtest-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum', 'api/go.sum', 'test/go.sum') }}-
+            go-envtest-${{ runner.os }}-${{ steps.go.outputs.go-version }}-
+      # Pinned tools are built or downloaded into hack/tools/bin; a restored
+      # binary short-circuits the Makefile rule. The key covers only the
+      # version file, so unrelated Makefile edits keep the cache.
+      # Pinned tools are built or downloaded into hack/tools/bin; a restored
+      # binary short-circuits the Makefile rule. The key covers only the
+      # version file, so unrelated Makefile edits keep the cache.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name == 'pull_request' }}
+        with:
+          path: hack/tools/bin
+          key: tools-envtest-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('hack/tools/versions.mk') }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name != 'pull_request' }}
+        with:
+          path: hack/tools/bin
+          key: tools-envtest-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('hack/tools/versions.mk') }}
+      # kube-apiserver and etcd for ENVTEST_K8S_VERSION, downloaded by
+      # setup-envtest into bin/envtest; the key follows the version file, which
+      # pins both.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name == 'pull_request' }}
+        with:
+          path: bin/envtest
+          key: envtest-assets-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('hack/tools/versions.mk') }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ github.event_name != 'pull_request' }}
+        with:
+          path: bin/envtest
+          key: envtest-assets-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('hack/tools/versions.mk') }}
+      # The CRDs' CEL rules, the admission webhooks and the engine's write
+      # paths, against a real kube-apiserver and etcd (internal/envtest).
+      - name: Envtest
+        run: make test-envtest
 
   lint:
     name: lint
@@ -615,7 +709,7 @@ jobs:
   ok:
     name: ok
     if: ${{ always() }}
-    needs: [test, lint, verify, build-arm64, release-snapshot]
+    needs: [test, envtest, lint, verify, build-arm64, release-snapshot]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}
