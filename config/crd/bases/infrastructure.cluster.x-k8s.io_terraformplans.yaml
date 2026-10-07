@@ -1,0 +1,319 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: terraformplans.infrastructure.cluster.x-k8s.io
+spec:
+  group: infrastructure.cluster.x-k8s.io
+  names:
+    categories:
+    - cluster-api
+    kind: TerraformPlan
+    listKind: TerraformPlanList
+    plural: terraformplans
+    singular: terraformplan
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - description: Target object
+      jsonPath: .spec.targetRef.name
+      name: Target
+      type: string
+    - description: Why the plan waits
+      jsonPath: .spec.reason
+      name: Reason
+      type: string
+    - description: Plan phase
+      jsonPath: .status.phase
+      name: Phase
+      type: string
+    - description: Resources to create
+      jsonPath: .spec.summary.create
+      name: Create
+      type: integer
+    - description: Resources to update
+      jsonPath: .spec.summary.update
+      name: Update
+      type: integer
+    - description: Resources to replace
+      jsonPath: .spec.summary.replace
+      name: Replace
+      type: integer
+    - description: Resources to delete
+      jsonPath: .spec.summary.delete
+      name: Delete
+      type: integer
+    - description: Approved
+      jsonPath: .spec.approved
+      name: Approved
+      type: boolean
+    - description: Time since creation
+      jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          TerraformPlan is the Schema for the terraformplans API: a plan the
+          controller made for a TerraformCluster or TerraformMachinePool and that
+          waits for an approval before it is applied. The controller creates it;
+          approving it is setting spec.approved. Its labels, conditions and field
+          names are a public integration API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec is the plan and its approval.
+            properties:
+              approved:
+                description: |-
+                  approved approves the plan, once and for good: it can only change from
+                  false to true, while the plan is live. Whoever may create or update a
+                  TerraformPlan may approve plans.
+                type: boolean
+              approvedBy:
+                description: |-
+                  approvedBy is the user that approved the plan. It must equal the
+                  username of the request that sets approved to true: the admission
+                  webhook checks it, so the field names who approved, not who claims to
+                  have.
+                maxLength: 512
+                minLength: 1
+                type: string
+              inputsHash:
+                description: inputsHash is the hash of the inputs the plan was made
+                  for.
+                maxLength: 128
+                minLength: 1
+                type: string
+              planHash:
+                description: |-
+                  planHash fingerprints the plan's changes: an approval covers exactly
+                  the plan with this hash, and the apply runs only if it plans the same
+                  changes again.
+                maxLength: 128
+                minLength: 1
+                type: string
+              reason:
+                description: reason the plan waits for an approval.
+                enum:
+                - Manual
+                - Destructive
+                - ExportsChange
+                type: string
+              summary:
+                description: summary of the plan.
+                minProperties: 1
+                properties:
+                  create:
+                    description: create is the number of resources the plan creates.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  delete:
+                    description: |-
+                      delete is the number of resources the plan deletes, not counting
+                      replacements.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  forget:
+                    description: |-
+                      forget is the number of resources the plan removes from the state
+                      without destroying them.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  import:
+                    description: import is the number of resources the plan imports
+                      into the state.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  move:
+                    description: move is the number of resources a moved block moves
+                      to a new address.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  outputChanges:
+                    description: |-
+                      outputChanges is the number of root module outputs the plan changes.
+                      An output change alone still needs approval: cluster exports feed
+                      every machine and pool module.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  replace:
+                    description: |-
+                      replace is the number of resources the plan replaces: deletes and
+                      creates again. A replacement counts here only.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  resources:
+                    description: |-
+                      resources are "<address> (<labels>)" of the changed resources, sorted
+                      by address, at most 50. The labels are the action (create, update,
+                      delete, replace, read or forget) unless the resource is otherwise
+                      unchanged, then "import" when the plan imports it and "move" when a
+                      moved block moves it, comma-separated: "aws_instance.a (import)",
+                      "aws_instance.b (update, move)".
+                    items:
+                      maxLength: 600
+                      minLength: 1
+                      type: string
+                    maxItems: 50
+                    minItems: 1
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  truncated:
+                    description: |-
+                      truncated is true when resources lists fewer resources than the plan
+                      changes.
+                    type: boolean
+                  update:
+                    description: update is the number of resources the plan updates
+                      in place.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                type: object
+              targetRef:
+                description: |-
+                  targetRef is the object the plan is for. The TerraformPlan is owned by
+                  it and moves with it.
+                properties:
+                  kind:
+                    description: kind of the target.
+                    enum:
+                    - TerraformCluster
+                    - TerraformMachinePool
+                    type: string
+                  name:
+                    description: name of the target.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                required:
+                - kind
+                - name
+                type: object
+            required:
+            - inputsHash
+            - planHash
+            - reason
+            - summary
+            - targetRef
+            type: object
+          status:
+            description: status is the observed state of the TerraformPlan.
+            minProperties: 1
+            properties:
+              conditions:
+                description: |-
+                  conditions of the TerraformPlan: Ready is True while the plan is
+                  applied or waiting as it should, and False when it failed or was
+                  superseded; Approved is True once the plan is approved.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                maxItems: 32
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              observedGeneration:
+                description: observedGeneration is the generation this status was
+                  computed for.
+                format: int64
+                minimum: 1
+                type: integer
+              phase:
+                description: |-
+                  phase of the plan. It is mirrored to the captf.io/plan-phase label,
+                  which survives clusterctl move.
+                enum:
+                - Pending
+                - Approved
+                - Applied
+                - Superseded
+                - Failed
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

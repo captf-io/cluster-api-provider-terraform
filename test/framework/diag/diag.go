@@ -78,6 +78,7 @@ func DefaultResources() []schema.GroupVersionResource {
 		gvr(infra, "v1alpha1", "terraformmachinetemplates"),
 		gvr(infra, "v1alpha1", "terraformmachinepools"),
 		gvr(infra, "v1alpha1", "terraformmachinepooltemplates"),
+		gvr(infra, "v1alpha1", "terraformplans"),
 		gvr("batch", "v1", "jobs"),
 	}
 }

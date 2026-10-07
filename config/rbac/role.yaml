@@ -121,6 +121,7 @@ rules:
   - terraformmachinepooltemplates
   - terraformmachines
   - terraformmachinetemplates
+  - terraformplans
   verbs:
   - create
   - delete
@@ -138,6 +139,7 @@ rules:
   - terraformmachinepools/status
   - terraformmachines/status
   - terraformmachinetemplates/status
+  - terraformplans/status
   verbs:
   - get
   - patch

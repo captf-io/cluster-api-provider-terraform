@@ -166,12 +166,20 @@ func TestEnumsMatchMarkers(t *testing.T) {
 		{"RunErrorKind", []string{string(RunErrorKindImageLayout), string(RunErrorKindStep), string(RunErrorKindInterrupted), string(RunErrorKindBlocked), string(RunErrorKindPlanChanged)}},
 		{"VariablesFormat", []string{string(VariablesFormatString), string(VariablesFormatJSON)}},
 		{"ApplyPolicy", []string{string(ApplyPolicyAutomatic), string(ApplyPolicyManual)}},
+		{"PlanTargetKind", []string{string(PlanTargetCluster), string(PlanTargetMachinePool)}},
+		{"PlanReason", []string{string(PlanReasonManual), string(PlanReasonDestructive), string(PlanReasonExportsChange)}},
+		{"PlanPhase", []string{string(PlanPhasePending), string(PlanPhaseApproved), string(PlanPhaseApplied), string(PlanPhaseSuperseded), string(PlanPhaseFailed)}},
 	}
 	cluster, err := os.ReadFile("terraformcluster_types.go")
 	if err != nil {
 		t.Fatalf("read source: %v", err)
 	}
 	src = append(src, cluster...)
+	plan, err := os.ReadFile("terraformplan_types.go")
+	if err != nil {
+		t.Fatalf("read source: %v", err)
+	}
+	src = append(src, plan...)
 	for _, tt := range tests {
 		re := regexp.MustCompile(`\+kubebuilder:validation:Enum=([^\n]+)\ntype ` + tt.typeName + ` string`)
 		m := re.FindSubmatch(src)

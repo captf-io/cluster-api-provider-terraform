@@ -49,6 +49,7 @@ var (
 	_ conditionsAccessor = &TerraformMachineTemplate{}
 	_ conditionsAccessor = &TerraformMachinePool{}
 	_ conditionsAccessor = &TerraformClusterIdentity{}
+	_ conditionsAccessor = &TerraformPlan{}
 )
 
 // TestConditionsAccessors checks that every kind's SetConditions stores
@@ -63,6 +64,7 @@ func TestConditionsAccessors(t *testing.T) {
 		"TerraformMachineTemplate": &TerraformMachineTemplate{},
 		"TerraformMachinePool":     &TerraformMachinePool{},
 		"TerraformClusterIdentity": &TerraformClusterIdentity{},
+		"TerraformPlan":            &TerraformPlan{},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -155,7 +157,7 @@ func fullRunStatus() (ActiveJob, LastRun, SourceStatus, *metav1.Time) {
 		&now
 }
 
-// TestKindsJSONRoundTrip proves each of the seven kinds' spec and status,
+// TestKindsJSONRoundTrip proves each of the eight kinds' spec and status,
 // fully populated, marshals to the expected JSON and unmarshals back to an
 // equal value.
 func TestKindsJSONRoundTrip(t *testing.T) {
@@ -358,6 +360,31 @@ func TestKindsJSONRoundTrip(t *testing.T) {
 			},
 			out: func() any { return &TerraformClusterIdentity{} },
 		},
+		{
+			name: "TerraformPlan",
+			in: &TerraformPlan{
+				ObjectMeta: metav1.ObjectMeta{Name: "demo-0123456789", Namespace: "default"},
+				Spec: TerraformPlanSpec{
+					TargetRef:  PlanTargetRef{Kind: PlanTargetCluster, Name: "demo"},
+					PlanHash:   "p2:abc",
+					InputsHash: "h2:def",
+					Reason:     PlanReasonDestructive,
+					Summary: PlanSummary{
+						Create: ptr(int32(1)), Update: ptr(int32(2)), Replace: ptr(int32(3)), Delete: ptr(int32(4)),
+						Import: ptr(int32(5)), Move: ptr(int32(6)), Forget: ptr(int32(7)), OutputChanges: ptr(int32(8)),
+						Resources: []string{"aws_instance.a (replace)", "aws_instance.b (update, move)"}, Truncated: ptr(true),
+					},
+					Approved:   ptr(true),
+					ApprovedBy: "alice@example.com",
+				},
+				Status: TerraformPlanStatus{
+					Phase:              PlanPhaseApproved,
+					Conditions:         []metav1.Condition{{Type: PlanApprovedCondition, Status: metav1.ConditionTrue, Reason: "Approved", LastTransitionTime: *now}},
+					ObservedGeneration: 2,
+				},
+			},
+			out: func() any { return &TerraformPlan{} },
+		},
 	}
 	decoders := map[string]func([]byte, any) error{
 		"encoding/json":                     json.Unmarshal,
@@ -433,6 +460,7 @@ func TestAddToSchemeRegistersEveryKind(t *testing.T) {
 		"TerraformMachinePool", "TerraformMachinePoolList",
 		"TerraformMachinePoolTemplate", "TerraformMachinePoolTemplateList",
 		"TerraformClusterIdentity", "TerraformClusterIdentityList",
+		"TerraformPlan", "TerraformPlanList",
 	} {
 		if !scheme.Recognizes(SchemeGroupVersion.WithKind(kind)) {
 			t.Errorf("%s is not registered", kind)
@@ -487,6 +515,20 @@ func TestSerializerOmitsZeroStatus(t *testing.T) {
 		}
 		if _, ok := m["status"]; ok {
 			t.Errorf("%T: zero status serialized by the apimachinery serializer: %s", obj, buf.String())
+		}
+	}
+}
+
+// TestPlanPhaseTerminal: Applied, Superseded and Failed are terminal;
+// Pending, Approved and the unset phase are live.
+func TestPlanPhaseTerminal(t *testing.T) {
+	t.Parallel()
+	for phase, want := range map[PlanPhase]bool{
+		"": false, PlanPhasePending: false, PlanPhaseApproved: false,
+		PlanPhaseApplied: true, PlanPhaseSuperseded: true, PlanPhaseFailed: true,
+	} {
+		if got := phase.Terminal(); got != want {
+			t.Errorf("%q.Terminal() = %v, want %v", phase, got, want)
 		}
 	}
 }

@@ -59,6 +59,7 @@ var CAPTFCRDs = []string{
 	"terraformmachinepooltemplates.infrastructure.cluster.x-k8s.io",
 	"terraformmachines.infrastructure.cluster.x-k8s.io",
 	"terraformmachinetemplates.infrastructure.cluster.x-k8s.io",
+	"terraformplans.infrastructure.cluster.x-k8s.io",
 }
 
 // Timeouts of the readiness waits. clusterctl init already waits for the

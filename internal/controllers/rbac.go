@@ -17,8 +17,8 @@ limitations under the License.
 package controllers
 
 // Own kinds.
-// +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=terraformclusters;terraformclustertemplates;terraformmachines;terraformmachinetemplates;terraformmachinepools;terraformmachinepooltemplates;terraformclusteridentities,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=terraformclusters/status;terraformclustertemplates/status;terraformmachines/status;terraformmachinetemplates/status;terraformmachinepools/status;terraformclusteridentities/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=terraformclusters;terraformclustertemplates;terraformmachines;terraformmachinetemplates;terraformmachinepools;terraformmachinepooltemplates;terraformclusteridentities;terraformplans,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=terraformclusters/status;terraformclustertemplates/status;terraformmachines/status;terraformmachinetemplates/status;terraformmachinepools/status;terraformclusteridentities/status;terraformplans/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=terraformclusters/finalizers;terraformmachines/finalizers;terraformmachinepools/finalizers,verbs=update
 
 // CAPI owners, the remediate-machine annotation, and an autoscaled pool's

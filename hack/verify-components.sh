@@ -162,8 +162,8 @@ if not series:
     fail("metadata.yaml: releaseSeries is empty")
 contracts = {s.get("contract") for s in series}
 crds = [o for o in objs if o["kind"] == "CustomResourceDefinition"]
-if len(crds) != 7:
-    fail(f"want 7 CRDs, got {len(crds)}")
+if len(crds) != 8:
+    fail(f"want 8 CRDs, got {len(crds)}")
 for crd in crds:
     ls = labels(crd)
     contract_labels = {k.split("/", 1)[1]: v for k, v in ls.items() if k.startswith("cluster.x-k8s.io/v1")}

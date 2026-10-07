@@ -26,7 +26,9 @@ limitations under the License.
 // referenced by a ClusterClass, the second by a MachineDeployment, MachineSet
 // or a control-plane provider, the third by a MachinePool — and
 // TerraformClusterIdentity holds the cloud credentials a cluster's module run
-// is allowed to use, mirrored into the namespaces that reference it. Seven
+// is allowed to use, mirrored into the namespaces that reference it, and
+// TerraformPlan is a plan the controller made that waits for an approval
+// (spec.approved) before it is applied. Eight
 // kinds in all, each registered, with its List type, in
 // groupversion_info.go.
 //

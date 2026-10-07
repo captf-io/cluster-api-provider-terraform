@@ -52,6 +52,7 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&TerraformMachinePool{}, &TerraformMachinePoolList{},
 		&TerraformMachinePoolTemplate{}, &TerraformMachinePoolTemplateList{},
 		&TerraformClusterIdentity{}, &TerraformClusterIdentityList{},
+		&TerraformPlan{}, &TerraformPlanList{},
 	)
 	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
 	return nil

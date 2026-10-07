@@ -21,4 +21,5 @@ resources:
 - infrastructure_v1alpha1_terraformmachinepool.yaml
 - infrastructure_v1alpha1_terraformmachinepooltemplate.yaml
 - infrastructure_v1alpha1_terraformclusteridentity.yaml
+- infrastructure_v1alpha1_terraformplan.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples
