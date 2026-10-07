@@ -41,8 +41,8 @@ const (
 )
 
 // maxUILine bounds one buffered line of the JSON UI: a longer line (an
-// enormous plan diff message) is passed through unparsed up to its newline
-// rather than kept whole.
+// enormous plan diff message) is dropped up to its newline, and a note
+// says so (omittedLine), rather than kept whole or written unredacted.
 const maxUILine = 1 << 20
 
 // Diagnostic is the subset of a `-json` UI diagnostic the runner reads:
@@ -128,29 +128,28 @@ func (u *uiRenderer) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-// add buffers p, part of a line.
+// add buffers p, part of a line. A line that grows past maxUILine is
+// dropped, up to its newline: it cannot be redacted whole, and a part of
+// it written as it comes could carry a credential across the cut.
 func (u *uiRenderer) add(p []byte) {
+	if u.skip {
+		return
+	}
 	if len(u.line)+len(p) > maxUILine {
-		u.passThrough()
 		u.skip = true
 		u.line = u.line[:0]
-	}
-	if u.skip {
-		_, _ = u.out.Write(p)
 		return
 	}
 	u.line = append(u.line, p...)
 }
 
-// passThrough writes the buffered start of an oversized line unchanged.
-func (u *uiRenderer) passThrough() {
-	_, _ = u.out.Write(u.line)
-}
+// omittedLine replaces an oversized UI line in the log.
+const omittedLine = "(a runtime output line over 1 MiB was omitted from the log)\n"
 
 // flushLine renders the buffered line, if any, and resets the buffer.
 func (u *uiRenderer) flushLine() {
 	if u.skip {
-		_, _ = io.WriteString(u.out, "\n")
+		_, _ = io.WriteString(u.out, omittedLine)
 	} else if len(u.line) > 0 {
 		u.render(u.line)
 	}

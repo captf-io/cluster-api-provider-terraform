@@ -65,6 +65,28 @@ func TestUIRenderer(t *testing.T) {
 	}
 }
 
+// TestUIRendererOversizedLine checks that a line over maxUILine, which a
+// registered secret may sit anywhere in, never reaches the log: it is
+// replaced by omittedLine, and the next line renders again.
+func TestUIRendererOversizedLine(t *testing.T) {
+	t.Parallel()
+	var out, errOut bytes.Buffer
+	u := newUIRenderer(&out, &errOut, NewRedactor("hunter2hunter2"))
+	long := strings.Repeat("x", maxUILine) + "hunter2hunter2" + strings.Repeat("y", 1000) + "\nafter\n"
+	for chunk := range slices.Chunk([]byte(long), 64<<10) {
+		if _, err := u.Write(chunk); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+	}
+	u.Flush()
+	if strings.Contains(out.String(), "hunter2") || strings.Contains(out.String(), "xxxx") {
+		t.Errorf("the oversized line reached the log (%d bytes)", out.Len())
+	}
+	if !strings.Contains(out.String(), omittedLine) || !strings.HasSuffix(out.String(), "after\n") {
+		t.Errorf("out = %q, want the note and the next line", out.String())
+	}
+}
+
 // TestFailedResources checks the resources list: addresses only, redacted,
 // capped in count and size, without repeats.
 func TestFailedResources(t *testing.T) {
