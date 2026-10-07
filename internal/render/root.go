@@ -185,9 +185,10 @@ var ErrVariableValue = errors.New("render: variable value is not valid JSON")
 // value that is not JSON: the controller resolves variables before
 // rendering, so this is defense in depth (a user variable "source" would
 // replace the module source). It returns a non-nil error naming the
-// variable, never its value.
+// first such variable in name order, never its value.
 func validateVariables(role contract.Role, vars contract.Variables) error {
-	for name, v := range vars {
+	for _, name := range vars.Names() {
+		v := vars[name]
 		if err := contract.ValidateVariableName(role, name); err != nil {
 			return fmt.Errorf("render: %w", err)
 		}
