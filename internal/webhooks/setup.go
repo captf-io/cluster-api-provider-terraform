@@ -55,7 +55,7 @@ func SetupWebhooks(mgr ctrl.Manager, managerUser string, schemas SchemaLookup) e
 		{terraformClusterTemplateKind, (&TerraformClusterTemplate{Schemas: schemas}).SetupWebhookWithManager},
 		{terraformMachineKind, (&TerraformMachine{Schemas: schemas, Reader: mgr.GetAPIReader(), ManagerUser: managerUser}).SetupWebhookWithManager},
 		{terraformMachineTemplateKind, (&TerraformMachineTemplate{Schemas: schemas}).SetupWebhookWithManager},
-		{terraformMachinePoolKind, (&TerraformMachinePool{Schemas: schemas}).SetupWebhookWithManager},
+		{terraformMachinePoolKind, (&TerraformMachinePool{Schemas: schemas, ManagerUser: managerUser}).SetupWebhookWithManager},
 		{terraformMachinePoolTemplateKind, (&TerraformMachinePoolTemplate{Schemas: schemas}).SetupWebhookWithManager},
 		{terraformClusterIdentityKind, (&TerraformClusterIdentity{Client: mgr.GetClient(), Reader: mgr.GetAPIReader()}).SetupWebhookWithManager},
 		{terraformPlanKind, (&TerraformPlan{ManagerUser: managerUser}).SetupWebhookWithManager},

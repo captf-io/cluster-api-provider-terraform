@@ -415,11 +415,11 @@ func pool(providerID string) *infrav1.TerraformMachinePool {
 // TestTerraformMachinePool proves TerraformMachinePool.ValidateCreate
 // validates the source, jobs policy and variables for the machinepool
 // role, ValidateUpdate applies the same checks with no immutable field
-// (providerID, providerIDList, source and drift may all change), and
-// ValidateDelete allows every delete.
+// (providerID, providerIDList, source and drift may all change, the IDs
+// only by the manager), and ValidateDelete allows every delete.
 func TestTerraformMachinePool(t *testing.T) {
 	t.Parallel()
-	w := &TerraformMachinePool{}
+	w := &TerraformMachinePool{ManagerUser: testManagerUser}
 	ctx := context.Background()
 
 	badSource := pool("")
@@ -449,13 +449,20 @@ func TestTerraformMachinePool(t *testing.T) {
 
 	// Nothing is immutable: the controller writes providerID and
 	// providerIDList, and source, jobs and drift are all mutable or
-	// re-applied inputs of a pool.
+	// re-applied inputs of a pool. Only the controller may change the
+	// IDs, which bind Nodes to the pool.
 	old := pool("aws-asg:///p-1")
 	updated := pool("aws-asg:///p-2")
 	updated.Spec.ProviderIDList = []string{"aws:///i-1", "aws:///i-2"}
 	updated.Spec.Source.Image = "ghcr.io/example/module:v2.0.0"
 	updated.Spec.Drift = &infrav1.MachinePoolDriftPolicy{IntervalSeconds: 1800, Action: infrav1.DriftActionRemediate}
-	_, err := w.ValidateUpdate(ctx, old, updated)
+	_, err := w.ValidateUpdate(userContext(testManagerUser), old, updated)
+	wantInvalid(t, err, false)
+	_, err = w.ValidateUpdate(userContext("someone"), old, updated)
+	wantInvalid(t, err, true, "only the provider's controller may change providerID or providerIDList")
+	ids := pool("aws-asg:///p-1")
+	ids.Spec.Source.Image = "ghcr.io/example/module:v2.0.0"
+	_, err = w.ValidateUpdate(userContext("someone"), old, ids)
 	wantInvalid(t, err, false)
 
 	if _, err := w.ValidateDelete(ctx, pool("")); err != nil {

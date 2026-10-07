@@ -18,7 +18,10 @@ package webhooks
 
 import (
 	"context"
+	"fmt"
+	"slices"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
@@ -37,6 +40,11 @@ type TerraformMachinePool struct {
 	// Schemas is the variables schemas known so far; nil checks no
 	// variables against one.
 	Schemas SchemaLookup
+	// ManagerUser is the username of the manager's ServiceAccount, the only
+	// user that may change spec.providerID or spec.providerIDList on an
+	// existing TerraformMachinePool. Empty when the manager's identity is
+	// unknown: then no user may.
+	ManagerUser string
 }
 
 // SetupWebhookWithManager registers the webhook with mgr. It returns an
@@ -67,7 +75,9 @@ func (w *TerraformMachinePool) ValidateCreate(ctx context.Context, obj *infrav1.
 // ValidateUpdate applies the create rules to newObj. Unlike a
 // TerraformMachine, no field is immutable: providerID and providerIDList
 // are written by the controller from the module's outputs and change
-// whenever the group's membership does, and source, identityRef,
+// whenever the group's membership does, but only the manager's
+// ServiceAccount (ManagerUser) may change them, since the MachinePool
+// controller binds the Nodes they name to the pool; source, identityRef,
 // variables, variablesFrom, jobs, drift and membershipRefreshIntervalSeconds
 // are all operational policy or re-applied inputs for a mutable pool
 // (https://captf.io/docs/module-author/contract/v1alpha1/machinepool.html "Lifecycle"). The jobs policy is checked only
@@ -81,6 +91,16 @@ func (w *TerraformMachinePool) ValidateUpdate(ctx context.Context, oldObj, newOb
 	prior := priorSpec(&oldObj.Spec, &newObj.Spec, !newObj.DeletionTimestamp.IsZero())
 	specPath := field.NewPath("spec")
 	errs := validatePoolSpec(specPath, &newObj.Spec, prior)
+	if oldObj.Spec.ProviderID != newObj.Spec.ProviderID || !slices.Equal(oldObj.Spec.ProviderIDList, newObj.Spec.ProviderIDList) {
+		req, err := admission.RequestFromContext(ctx)
+		if err != nil {
+			return nil, apierrors.NewInternalError(fmt.Errorf("read admission request: %w", err))
+		}
+		if w.ManagerUser == "" || req.UserInfo.Username != w.ManagerUser {
+			errs = append(errs, field.Forbidden(specPath.Child("providerIDList"),
+				"only the provider's controller may change providerID or providerIDList on an existing TerraformMachinePool: they bind Nodes to the pool"))
+		}
+	}
 	if len(errs) == 0 {
 		errs = schemaErrors(ctx, w.Schemas, newObj.Namespace, specPath, &newObj.Spec.WorkspaceSpec, &prior.WorkspaceSpec)
 	}
