@@ -150,9 +150,10 @@ type Bookkeeping struct {
 	// ForeignLock describes a state lock held by something other than this
 	// object's runner (a workstation, another tool); "" when none.
 	ForeignLock string
-	// PinnedDigest is the digest bookkeeping pinned on the durable Secret
-	// this pass; "" when it pinned nothing.
-	PinnedDigest string
+	// Promoted is the applied record bookkeeping wrote this pass
+	// (inputs.Promote) for a newly finished successful apply; nil when it
+	// wrote none.
+	Promoted *inputs.Record
 	// MarkedApplied is true when bookkeeping set the applied marker
 	// (inputs.MarkApplied) on the durable Secret this pass.
 	MarkedApplied bool
@@ -253,21 +254,23 @@ type finished struct {
 	// planUnreadable is true for a plan Job that succeeded without a
 	// readable plan: it counts as failed (PlanUnreadableAnnotation).
 	planUnreadable bool
-	// counted is true when this pass deleted the per-run Secret, which
-	// happens once per Job: its completion is counted now.
+	// counted is true when this pass deleted the per-run Secret
+	// (deleteRuns), which happens once per Job: its completion is counted
+	// now.
 	counted bool
 }
 
 // Bookkeep processes k's finished Jobs, using ctx and the shared
-// dependencies d: it lists the object's Jobs, pins the image digest
-// of a newly finished successful apply, deletes the per-run Secret of
-// every finished Job not yet bookkept and records it for
+// dependencies d: it lists the object's Jobs, promotes the inputs of a
+// newly finished successful apply, with its image digest, to the applied
+// record (promote), then deletes the per-run Secret of every finished Job
+// not yet bookkept and records it for
 // MarkBookkept, sets ApplyJobSucceeded, DriftJobSucceeded and
 // status.lastRun from the newest finished Jobs, prunes per eff's history
 // limits, finds the active Job and, when none runs, checks the state lock
 // named by suffix for a stale or foreign holder. Pods are read
 // through the Runner, which lists them through the API reader. durable is
-// the durable inputs Secret as read this reconcile, or nil. It returns the
+// the inputs records as read this reconcile, or nil. It returns the
 // resulting Bookkeeping, or an error from listing, deleting or pruning
 // Jobs or checking the lock.
 func Bookkeep(ctx context.Context, d Deps, k Kind, eff EffectiveConfig, suffix string, durable *inputs.Durable) (*Bookkeeping, error) {
@@ -291,6 +294,20 @@ func Bookkeep(ctx context.Context, d Deps, k Kind, eff EffectiveConfig, suffix s
 	if err != nil {
 		return nil, err
 	}
+	// Newest first.
+	slices.SortFunc(done, func(a, b finished) int {
+		return cmp.Or(jobs.FinishedAt(b.job).Compare(jobs.FinishedAt(a.job)), cmp.Compare(b.job.Name, a.job.Name))
+	})
+
+	bk.countFailures(done)
+	if err := bk.applyDestroy(ctx, d, k, done, durable); err != nil {
+		return nil, err
+	}
+	// After the promotion, which reads them; a failure before leaves them
+	// for the next pass, which promotes again.
+	if err := deleteRuns(ctx, d, done); err != nil {
+		return nil, err
+	}
 	bk.byName = make(map[string]finished, len(done))
 	for _, f := range done {
 		if !f.bookkept {
@@ -298,19 +315,10 @@ func Bookkeep(ctx context.Context, d Deps, k Kind, eff EffectiveConfig, suffix s
 		}
 		bk.byName[f.job.Name] = f
 	}
-	// Newest first.
-	slices.SortFunc(done, func(a, b finished) int {
-		return cmp.Or(jobs.FinishedAt(b.job).Compare(jobs.FinishedAt(a.job)), cmp.Compare(b.job.Name, a.job.Name))
-	})
 	for i := range done {
 		if done[i].counted {
 			recordFinished(d, k.Kind(), done[i], retryNumber(done, i))
 		}
-	}
-
-	bk.countFailures(done)
-	if err := bk.applyDestroy(ctx, d, k, done, durable); err != nil {
-		return nil, err
 	}
 	setDriftJob(obj, done)
 	bk.restores(d, k, done)
@@ -339,9 +347,9 @@ func Bookkeep(ctx context.Context, d Deps, k Kind, eff EffectiveConfig, suffix s
 }
 
 // collectFinished reads, using ctx and the shared dependencies d, each
-// finished Job of list's newest pod and result and deletes its per-run
-// Secret; a bookkept Job costs no API call. It returns the finished Jobs
-// found, or any error reading pods or deleting a Secret.
+// finished Job of list's newest pod and result; a bookkept Job costs no
+// API call. Its per-run Secret stays until deleteRuns. It returns the
+// finished Jobs found, or any error reading pods.
 func collectFinished(ctx context.Context, d Deps, list []batchv1.Job) ([]finished, error) {
 	var done []finished
 	for i := range list {
@@ -384,12 +392,28 @@ func collectFinished(ctx context.Context, d Deps, list []batchv1.Job) ([]finishe
 			// would only start the next plan Job at once.
 			f.ok, f.planUnreadable = false, true
 		}
-		if f.counted, err = inputs.DeleteRun(ctx, d.Client, job); err != nil {
-			return nil, err
-		}
 		done = append(done, f)
 	}
 	return done, nil
+}
+
+// deleteRuns deletes, using ctx and the shared dependencies d, the
+// per-run Secret of every Job of done not yet bookkept, once bookkeeping
+// read what it needs of it (promote), and sets counted on each Job whose
+// Secret this call deleted: that happens once per Job, and counts its
+// completion. It returns any error deleting a Secret.
+func deleteRuns(ctx context.Context, d Deps, done []finished) error {
+	for i := range done {
+		f := &done[i]
+		if f.bookkept {
+			continue
+		}
+		var err error
+		if f.counted, err = inputs.DeleteRun(ctx, d.Client, f.job); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // MarkBookkept patches BookkeptAnnotation onto every finished Job this pass
@@ -540,15 +564,16 @@ func (bk *Bookkeeping) countFailures(done []finished) {
 
 // applyDestroy sets ApplyJobSucceeded from the newest of done, k's
 // finished apply or destroy Jobs, or from the newest plan Job when it
-// failed after them (the apply it stands for cannot run), and pins,
-// using ctx and the shared dependencies d, the digest of a newly finished
-// successful apply, comparing it against durable, the durable inputs
-// Secret as read this reconcile (nil when none). It returns any error
-// from pinning the digest.
+// failed after them (the apply it stands for cannot run), and records,
+// using ctx and the shared dependencies d, what the newest of them
+// changed: a newly finished successful apply is promoted to the applied
+// record (promote) and marks the object applied, against durable, the
+// inputs records as read this reconcile (nil when none). It returns any
+// error from those records.
 func (bk *Bookkeeping) applyDestroy(ctx context.Context, d Deps, k Kind, done []finished, durable *inputs.Durable) error {
 	obj := k.Object()
 	var newest *finished
-	pinned, planSeen := false, false
+	succeeded, planSeen := false, false
 	for i := range done {
 		f := &done[i]
 		op := jobs.OpOf(f.job)
@@ -594,20 +619,19 @@ func (bk *Bookkeeping) applyDestroy(ctx context.Context, d Deps, k Kind, done []
 		if op == jobs.OpApply && bk.LastApplyBlocked && f.job != bk.LastApply && bk.priorApply == nil && !f.blocked && !f.planChanged {
 			bk.priorApply = f
 		}
-		if op == jobs.OpApply && f.ok && !pinned {
-			pinned = true
-			// A bookkept apply was pinned when it finished; pinning it again
-			// could put an old image's digest back after an image change.
+		if op == jobs.OpApply && f.ok && !succeeded {
+			succeeded = true
+			// A bookkept apply was promoted when it finished; its per-run
+			// Secret is gone.
 			if !f.bookkept {
-				digest, err := pinDigest(ctx, d, k, f, durable)
-				if err != nil {
+				if err := bk.promote(ctx, d, k, f, durable); err != nil {
 					return err
 				}
-				bk.PinnedDigest = digest
+				var err error
 				if bk.MarkedApplied, err = markApplied(ctx, d, k, durable); err != nil {
 					return err
 				}
-				if err := bk.recordExports(ctx, d, k, f, durable); err != nil {
+				if err := bk.recordExports(ctx, d, k, f, bk.ownRecord(f, durable), durable); err != nil {
 					return err
 				}
 				if err := bk.clearInterrupted(ctx, d, k, f, durable); err != nil {
@@ -731,43 +755,81 @@ func setDriftJob(obj Object, done []finished) {
 	}
 }
 
-// pinDigest records, using ctx and the shared dependencies d, the digest
-// f, a successful apply Job of k, ran, and returns it, or "" when nothing
-// was pinned. Immutable kinds keep the first pin; mutable kinds re-pin
-// after every apply. A Job that ran another image than durable, the
-// durable Secret, records (the image changed since, and inputs.Write
-// cleared the pin) pins nothing: its digest belongs to the old image. It
-// returns the pinned digest, or any error pinning it.
-func pinDigest(ctx context.Context, d Deps, k Kind, f *finished, durable *inputs.Durable) (string, error) {
-	logger := klog.FromContext(ctx)
-	if durable != nil && durable.Meta.Image != "" {
-		if img := sourceImage(f.job); img != "" && img != durable.Meta.Image {
-			logger.V(LogFlow).Info("Not pinning the digest of an apply that ran another image", "Job", klog.KObj(f.job), "image", img)
-			return "", nil
+// promote records, using ctx and the shared dependencies d, the inputs
+// f, a newly finished successful apply of k, ran as k's applied record
+// (inputs.Promote): what destroy, and an immutable kind's drift checks,
+// render from then on. They come from f's per-run Secret, read past the
+// cache, else from the attempt record when that is still f's (durable,
+// the records as read this pass), with the digest f's pod ran; when the
+// pod reports none, an earlier record of the same image keeps its
+// digest. A record that is f's already costs nothing, so a promotion
+// that crashed before the per-run Secret was deleted is not repeated.
+// Neither source holding f's inputs leaves the applied record as it is,
+// with a Warning (AppliedInputsUnknown). It sets bk.Promoted, and returns
+// any error reading the per-run Secret or writing the record: then
+// nothing is deleted, and the next pass promotes again.
+func (bk *Bookkeeping) promote(ctx context.Context, d Deps, k Kind, f *finished, durable *inputs.Durable) error {
+	var prev *inputs.Record
+	if durable != nil {
+		prev = durable.Applied
+	}
+	if prev != nil && prev.Job == f.job.Name {
+		return nil
+	}
+	logger := klog.LoggerWithValues(klog.FromContext(ctx), "Job", klog.KObj(f.job))
+	rec, err := inputs.ReadRun(ctx, d.APIReader, f.job)
+	switch {
+	case errors.Is(err, inputs.ErrNotFound):
+		a := durable.LastAttempt()
+		if a == nil || a.Job != f.job.Name {
+			logger.Info("An apply succeeded, but neither its per-run Secret nor the attempt record holds its inputs; the applied record keeps the previous apply's")
+			d.EmitRelated(k.Object(), f.job, corev1.EventTypeWarning, EventAppliedInputsUnknown, "Pin",
+				"Job %s succeeded, but its inputs are gone: the applied inputs Secret still holds an older apply's, which a destroy would render", f.job.Name)
+			return nil
 		}
+		cp := *a
+		cp.MayHaveApplied = false
+		rec = &cp
+	case err != nil:
+		return err
 	}
 	if f.pod != nil {
 		if digest, ok := jobs.ImageDigest(f.pod); ok {
-			pinned, err := inputs.PinDigest(ctx, d.Client, k.Object(), digest, k.Mutable())
-			if err != nil && !errors.Is(err, inputs.ErrNotFound) {
-				return "", err
-			}
-			if !pinned {
-				return "", nil
-			}
-			logger.V(LogFlow).Info("Pinned the image digest", "Job", klog.KObj(f.job), "digest", digest)
-			d.EmitRelated(k.Object(), f.job, corev1.EventTypeNormal, EventDigestPinned, "Pin", "Job %s ran %s; later operations run this digest", f.job.Name, digest)
-			return digest, nil
+			rec.Digest = digest
 		}
 	}
-	// The pod is gone or reports no digest: keep the previous pin, and say
-	// so while nothing is pinned yet.
-	if durable != nil && durable.Meta.ImageDigest == "" {
+	if rec.Digest == "" && prev != nil && prev.Image == rec.Image {
+		rec.Digest = prev.Digest
+	}
+	if err := inputs.Promote(ctx, d.Client, k.Object(), *rec); err != nil {
+		return err
+	}
+	bk.Promoted = rec
+	logger.V(LogFlow).Info("Promoted the apply's inputs to the applied record", "inputsHash", rec.InputsHash, "digest", rec.Digest)
+	switch {
+	case rec.Digest == "":
 		d.EmitRelated(k.Object(), f.job, corev1.EventTypeWarning, EventDigestUnknown, "Pin",
 			"Job %s succeeded but its image digest is unavailable; other operations run the spec image", f.job.Name)
+	case prev == nil || prev.Digest != rec.Digest:
+		d.EmitRelated(k.Object(), f.job, corev1.EventTypeNormal, EventDigestPinned, "Pin", "Job %s ran %s; later operations run this digest", f.job.Name, rec.Digest)
 	}
-	logger.V(LogFlow).Info("Image digest unavailable", "Job", f.job.Name)
-	return "", nil
+	return nil
+}
+
+// ownRecord returns the record of durable, the inputs records as read
+// this pass, that holds f's inputs: the one bookkeeping promoted for it,
+// else the applied or attempt record naming f, else the attempt record
+// (nil when none), which a caller checks against f before trusting.
+func (bk *Bookkeeping) ownRecord(f *finished, durable *inputs.Durable) *inputs.Record {
+	switch {
+	case bk.Promoted != nil && bk.Promoted.Job == f.job.Name:
+		return bk.Promoted
+	case durable == nil:
+		return nil
+	case durable.Applied != nil && durable.Applied.Job == f.job.Name:
+		return durable.Applied
+	}
+	return durable.Attempt
 }
 
 // markApplied records on k's durable Secret, using ctx and the shared
@@ -777,7 +839,7 @@ func pinDigest(ctx context.Context, d Deps, k Kind, f *finished, durable *inputs
 // already carries the marker, or none (nothing to mark), costs no call. It
 // reports whether it set the marker, or returns any error setting it.
 func markApplied(ctx context.Context, d Deps, k Kind, durable *inputs.Durable) (bool, error) {
-	if durable == nil || durable.Meta.Applied {
+	if durable == nil || durable.AppliedMark {
 		return false, nil
 	}
 	err := inputs.MarkApplied(ctx, d.Client, k.Object())
@@ -788,17 +850,6 @@ func markApplied(ctx context.Context, d Deps, k Kind, durable *inputs.Durable) (
 		return false, err
 	}
 	return true, nil
-}
-
-// sourceImage returns the image of job's source container, "" when
-// absent.
-func sourceImage(job *batchv1.Job) string {
-	for _, c := range job.Spec.Template.Spec.Containers {
-		if c.Name == jobs.SourceContainer {
-			return c.Image
-		}
-	}
-	return ""
 }
 
 // MaxRunSummary is the byte limit of status.lastRun.error.summary.

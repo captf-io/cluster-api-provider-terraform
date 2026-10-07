@@ -44,7 +44,7 @@ import (
 // as a successful apply leaves them, failing t on error.
 func (e *env) writeDurable(t *testing.T, m *infrav1.TerraformMachine) {
 	t.Helper()
-	if err := inputs.Write(t.Context(), e.c, m, renderMachine(t), inputs.Meta{
+	if err := writeInputs(t.Context(), e.c, m, renderMachine(t), testMeta{
 		Image: "registry.example/mod:1.0", Identity: testIdentity, ImageDigest: "registry.example/mod@sha256:abc",
 	}); err != nil {
 		t.Fatal(err)
@@ -56,7 +56,7 @@ func (e *env) writeDurable(t *testing.T, m *infrav1.TerraformMachine) {
 // since, leaves them, failing t on error.
 func (e *env) writeApplied(t *testing.T, m *infrav1.TerraformMachine) {
 	t.Helper()
-	if err := inputs.Write(t.Context(), e.c, m, renderMachine(t), inputs.Meta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
+	if err := writeInputs(t.Context(), e.c, m, renderMachine(t), testMeta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
 		t.Fatal(err)
 	}
 	if err := inputs.MarkApplied(t.Context(), e.c, m); err != nil {
@@ -72,7 +72,7 @@ func (e *env) applied(t *testing.T) bool {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return d.Meta.Applied
+	return d.AppliedMark
 }
 
 // TestAppliedMarker: the durable Secret is marked applied at a successful
@@ -86,7 +86,7 @@ func TestAppliedMarker(t *testing.T) {
 		t.Parallel()
 		e := newEnv(t, world(machine(withFinalizer, notPaused))...)
 		k := e.kindFor(t, readyOwner)
-		if err := inputs.Write(t.Context(), e.c, k.obj, renderMachine(t), inputs.Meta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
+		if err := writeInputs(t.Context(), e.c, k.obj, renderMachine(t), testMeta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
 			t.Fatal(err)
 		}
 		e.runner.jobs = append(e.runner.jobs, job("a", jobs.OpApply, jobs.Succeeded, t0.Add(-time.Minute)))
@@ -102,7 +102,7 @@ func TestAppliedMarker(t *testing.T) {
 		t.Parallel()
 		e := newEnv(t, world(machine(withFinalizer, notPaused))...)
 		k := e.kindFor(t, readyOwner)
-		if err := inputs.Write(t.Context(), e.c, k.obj, renderMachine(t), inputs.Meta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
+		if err := writeInputs(t.Context(), e.c, k.obj, renderMachine(t), testMeta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
 			t.Fatal(err)
 		}
 		e.state.st = &state.State{Serial: 4, InputsHash: "h1:restored"}

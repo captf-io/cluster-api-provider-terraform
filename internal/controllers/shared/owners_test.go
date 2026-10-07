@@ -145,7 +145,7 @@ func ownedEnv(t *testing.T, uid types.UID, oldOwner types.UID, mut ...func(*infr
 		t.Fatalf("backup: %v, %v", created, err)
 	}
 	names = append(names, b.Secrets...)
-	if err := inputs.Write(ctx, e.c, old, render.Files{MainTF: []byte("main"), TFVars: []byte("{}")}, inputs.Meta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
+	if err := writeInputs(ctx, e.c, old, render.Files{MainTF: []byte("main"), TFVars: []byte("{}")}, testMeta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
 		t.Fatal(err)
 	}
 	if err := inputs.MarkApplied(ctx, e.c, old); err != nil {

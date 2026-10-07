@@ -45,20 +45,20 @@ import (
 // applied change). Only a pool apply carries
 // ClusterOutputsHashAnnotation; one that rendered held exports
 // (HeldClusterOutputsAnnotation) records nothing: it applied none of the
-// pending change. The value is read back from durable, the
-// durable Secret as read this pass, whose tfvars are those of the apply
-// that started last, and is recorded only when it hashes as f says, so a
-// newer apply's exports are never taken for f's. A record already in
-// place costs no call. It returns any error from recording.
-func (bk *Bookkeeping) recordExports(ctx context.Context, d Deps, k Kind, f *finished, durable *inputs.Durable) error {
+// pending change. The value is read back from rec, the record holding
+// f's inputs (Bookkeeping.ownRecord), and is recorded only when it hashes
+// as f says, so another apply's exports are never taken for f's. durable
+// is the inputs records as read this pass; a record already in place
+// costs no call. It returns any error from recording.
+func (bk *Bookkeeping) recordExports(ctx context.Context, d Deps, k Kind, f *finished, rec *inputs.Record, durable *inputs.Durable) error {
 	want := f.job.Annotations[ClusterOutputsHashAnnotation]
-	if want == "" || f.job.Annotations[HeldClusterOutputsAnnotation] == "true" || durable == nil {
+	if want == "" || f.job.Annotations[HeldClusterOutputsAnnotation] == "true" || durable == nil || rec == nil {
 		return nil
 	}
-	raw := inputs.LastClusterOutputs(durable)
+	raw := inputs.LastClusterOutputs(rec)
 	var buf bytes.Buffer
 	if got, err := hash.Exports(raw); err != nil || got != want || json.Compact(&buf, raw) != nil {
-		klog.FromContext(ctx).V(LogFlow).Info("Not recording the exports of an apply whose inputs the durable Secret no longer holds", "Job", klog.KObj(f.job))
+		klog.FromContext(ctx).V(LogFlow).Info("Not recording the exports of an apply whose inputs the inputs records no longer hold", "Job", klog.KObj(f.job))
 		return nil
 	}
 	exports := buf.Bytes()

@@ -106,7 +106,7 @@ func (s *suite) teardown(ctx context.Context, t *testing.T) {
 // checkDestroyed waits for the CAPTF object kind name, whose deletion was
 // requested at or after since, to go, then checks that a destroy Job ran
 // on img's pinned reference (repo@digest) and succeeded, and that the
-// object's state and durable inputs Secrets went with it. The destroy Job
+// object's state and inputs Secrets went with it. The destroy Job
 // and its pod are deleted with the object seconds after they finish, so
 // the evidence is the pod tracker's record and the JobSucceeded Event.
 // It waits under ctx and reports through t.
@@ -135,12 +135,12 @@ func (s *suite) checkDestroyed(ctx context.Context, t *testing.T, kind, name str
 	}
 	job := note
 	suffix := tfstate.SuffixFor(s.ns, kind, name)
-	left, err := s.secretsLeft(ctx, "", tfstate.SecretName(suffix), "captf-inputs-"+kindShort[kind]+"-"+name)
+	left, err := s.secretsLeft(ctx, "", tfstate.SecretName(suffix), "captf-inputs-"+kindShort[kind]+"-"+name, "captf-applied-"+kindShort[kind]+"-"+name)
 	switch {
 	case err != nil:
 		t.Errorf("list Secrets of %s %s: %v", kind, name, err)
 	case len(left) > 0:
-		t.Errorf("%s %s: expected its state and durable inputs Secrets deleted with it, observed %v; inspect: %s", kind, name, left, s.kubectlNS("get secrets"))
+		t.Errorf("%s %s: expected its state and inputs Secrets deleted with it, observed %v; inspect: %s", kind, name, left, s.kubectlNS("get secrets"))
 	}
 	t.Logf("%s %s gone; %s", kind, name, job)
 }

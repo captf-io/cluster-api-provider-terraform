@@ -456,8 +456,8 @@ func TestReconcileMissingSourceGates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(durable.Files.TFVars), `"instance_type": "t3.large"`) || !strings.Contains(string(durable.Files.MainTF), `"instance_type": "${var.instance_type}"`) {
-		t.Errorf("durable inputs lack the variable:\n%s\n%s", durable.Files.MainTF, durable.Files.TFVars)
+	if !strings.Contains(string(durable.Attempt.Files.TFVars), `"instance_type": "t3.large"`) || !strings.Contains(string(durable.Attempt.Files.MainTF), `"instance_type": "${var.instance_type}"`) {
+		t.Errorf("durable inputs lack the variable:\n%s\n%s", durable.Attempt.Files.MainTF, durable.Attempt.Files.TFVars)
 	}
 }
 

@@ -146,14 +146,14 @@ type Kind interface {
 	// returns the owner lookup's result, or any lookup error.
 	Owner(ctx context.Context) (OwnerInfo, error)
 	// BuildInputs builds, using ctx, the contract inputs from owner, the
-	// owner lookup's result. durable is the object's durable inputs Secret
-	// as read once this reconcile, nil before the first apply. A non-nil
+	// owner lookup's result. durable is the object's inputs records as
+	// read once this reconcile, nil before the first apply. A non-nil
 	// Gate means the inputs cannot be built yet; no Apply runs. It returns
 	// the built inputs, the gate (nil when none), and any build error.
 	BuildInputs(ctx context.Context, owner OwnerInfo, durable *inputs.Durable) (any, *Gate, error)
 	// ApplyOutputs maps, using ctx, st's outputs into spec and status of the
 	// object owned as owner describes, comparing against durable, the
-	// durable inputs Secret. It returns the decode result, the health
+	// object's inputs records. It returns the decode result, the health
 	// output (nil when null), and any error mapping the outputs.
 	ApplyOutputs(ctx context.Context, owner OwnerInfo, st *state.State, durable *inputs.Durable) (outputs.Result, *contract.Health, error)
 	// DeletionBlocked reports, using ctx, whether deletion must wait, for

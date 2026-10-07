@@ -116,15 +116,16 @@ func (r *reconciler) recordVanishedApply(ctx context.Context, bk *Bookkeeping) e
 // applied, or nil when there is none to record: another kind, a change
 // already recorded (it is kept), no applied exports recorded (no hash to
 // compare), or a Job that rendered the recorded applied exports (a held
-// apply). Nothing is written to the durable Secret after a Job starts, so
-// its tfvars are still the vanished Job's. Exports that cannot be hashed
-// count as a change: the record only ever makes the pool more careful.
+// apply). The attempt record is written once a Job exists, and not again
+// until the next one does, so its tfvars are still the vanished Job's.
+// Exports that cannot be hashed count as a change: the record only ever
+// makes the pool more careful.
 func (r *reconciler) vanishedPartial(job string) *inputs.Partial {
 	d := r.durable
 	if _, ok := r.k.(ExportsGuard); !ok || d.Partial != nil || d.AppliedExportsHash == "" {
 		return nil
 	}
-	rendered, err := hash.Exports(inputs.LastClusterOutputs(d))
+	rendered, err := hash.Exports(inputs.LastClusterOutputs(d.Attempt))
 	if err == nil && rendered == d.AppliedExportsHash {
 		return nil
 	}

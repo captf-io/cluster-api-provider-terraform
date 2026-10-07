@@ -398,16 +398,20 @@ func clusterState(hashed bool, outs map[string]string) *state.State {
 // instance.
 const healthy = `{"state":"running","healthy":true,"message":null,"reasons":[]}`
 
-// writeDurable writes, through client c, the durable Secret an apply of tc
-// that rendered ep leaves, failing t on any error, and returns it as the
-// reconcile reads it.
+// writeDurable writes, through client c, the inputs records a successful
+// apply of tc that rendered ep leaves (attempt and applied), failing t on
+// any error, and returns them as the reconcile reads them.
 func writeDurable(t *testing.T, c client.Client, tc *infrav1.TerraformCluster, ep *contract.Endpoint) *inputs.Durable {
 	t.Helper()
 	files, err := render.Root(contract.RoleCluster, ClusterInputs(testCluster(), tc, false, ep))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := inputs.Write(t.Context(), c, tc, files, inputs.Meta{Image: tc.Spec.Source.Image}); err != nil {
+	rec := inputs.Record{Files: files, Image: tc.Spec.Source.Image, Job: "captf-c-" + tc.Name + "-apply-a1-seeded"}
+	if err := inputs.WriteAttempt(t.Context(), c, tc, rec); err != nil {
+		t.Fatal(err)
+	}
+	if err := inputs.Promote(t.Context(), c, tc, rec); err != nil {
 		t.Fatal(err)
 	}
 	d, err := inputs.Read(t.Context(), c, tc.Namespace, "c", tc.Name)

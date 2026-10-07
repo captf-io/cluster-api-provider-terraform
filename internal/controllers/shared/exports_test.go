@@ -122,7 +122,7 @@ func exportsEnv(t *testing.T, exports string) (*env, *fakeKind, *inputs.Durable,
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := inputs.Write(t.Context(), e.c, k.obj, files, inputs.Meta{Image: "registry.example/mod:1.0"}); err != nil {
+	if err := writeInputs(t.Context(), e.c, k.obj, files, testMeta{Image: "registry.example/mod:1.0"}); err != nil {
 		t.Fatal(err)
 	}
 	d, err := inputs.Read(t.Context(), e.c, testNS, "m", testName)
@@ -137,9 +137,10 @@ func exportsEnv(t *testing.T, exports string) (*env, *fakeKind, *inputs.Durable,
 }
 
 // TestRecordExports: a successful pool apply's exports, read back from
-// the durable tfvars, are recorded as applied and drop a pending change;
-// a held apply, an apply without the annotation, and one whose exports
-// the durable tfvars no longer hold record nothing.
+// the tfvars of the record holding its inputs, are recorded as applied
+// and drop a pending change; a held apply, an apply without the
+// annotation, and one whose exports that record does not hold record
+// nothing.
 func TestRecordExports(t *testing.T) {
 	t.Parallel()
 	ok := func(annotations map[string]string) *finished {
@@ -155,7 +156,7 @@ func TestRecordExports(t *testing.T) {
 		}
 		d.Pending = &heldPending
 		bk := &Bookkeeping{}
-		if err := bk.recordExports(t.Context(), e.d, k, ok(map[string]string{ClusterOutputsHashAnnotation: h}), d); err != nil {
+		if err := bk.recordExports(t.Context(), e.d, k, ok(map[string]string{ClusterOutputsHashAnnotation: h}), d.Attempt, d); err != nil {
 			t.Fatal(err)
 		}
 		got, err := inputs.Read(t.Context(), e.c, testNS, "m", testName)
@@ -176,7 +177,7 @@ func TestRecordExports(t *testing.T) {
 				annotations[ClusterOutputsHashAnnotation] = h
 			}
 			bk := &Bookkeeping{}
-			if err := bk.recordExports(t.Context(), e.d, k, ok(annotations), d); err != nil {
+			if err := bk.recordExports(t.Context(), e.d, k, ok(annotations), d.Attempt, d); err != nil {
 				t.Fatal(err)
 			}
 			got, err := inputs.Read(t.Context(), e.c, testNS, "m", testName)

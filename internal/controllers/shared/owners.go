@@ -56,7 +56,7 @@ type ownedSecret struct {
 // collected as orphans of a UID that no longer exists.
 //
 // It costs nothing on a pass where everything is owned: it checks the
-// durable inputs metadata setup read and the state chunks' metadata
+// inputs Secrets' metadata setup read and the state chunks' metadata
 // readState listed (chunks, nil when the state was not read or Adopt just
 // rewrote it). Only when one of those needs a repair, which is what a
 // restore or an unowned chunk looks like, does it list the object's state
@@ -79,7 +79,7 @@ type ownedSecret struct {
 // A repair never fails the reconcile: an error (a conflict with a write
 // since the read, an API error) is logged and the next reconcile, which
 // still sees the unrepaired Secret, tries again. The backups and plan
-// key are patched first and the durable inputs and state chunks last, so
+// key are patched first and the inputs Secrets and state chunks last, so
 // a pass cut short keeps the signal that starts the next attempt.
 func (r *reconciler) repairOwners(ctx context.Context, chunks []metav1.ObjectMeta) {
 	logger := klog.FromContext(ctx)
@@ -89,8 +89,12 @@ func (r *reconciler) repairOwners(ctx context.Context, chunks []metav1.ObjectMet
 		return
 	}
 	var due []ownedSecret
-	if r.durable != nil && ownership.NeedsRepair(&r.durable.Secret, want) {
-		due = append(due, ownedSecret{what: ownedInputs, meta: &r.durable.Secret})
+	if r.durable != nil {
+		for _, m := range []*metav1.ObjectMeta{&r.durable.Secret, &r.durable.AppliedSecret} {
+			if ownership.NeedsRepair(m, want) {
+				due = append(due, ownedSecret{what: ownedInputs, meta: m})
+			}
+		}
 	}
 	var stateDue []ownedSecret
 	for i := range chunks {

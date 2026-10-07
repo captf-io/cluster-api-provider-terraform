@@ -28,7 +28,6 @@ import (
 
 	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/contract"
-	"github.com/captf-io/cluster-api-provider-terraform/internal/inputs"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/jobs"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/outputs"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/state"
@@ -115,7 +114,7 @@ func TestCountPending(t *testing.T) {
 func appliedMachineEnv(t *testing.T) *env {
 	t.Helper()
 	e := newEnv(t, world(machine(withFinalizer, notPaused))...)
-	if err := inputs.Write(t.Context(), e.c, e.get(t), renderMachine(t), inputs.Meta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
+	if err := writeInputs(t.Context(), e.c, e.get(t), renderMachine(t), testMeta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
 		t.Fatal(err)
 	}
 	a := job("a", jobs.OpApply, jobs.Succeeded, t0.Add(-time.Minute))

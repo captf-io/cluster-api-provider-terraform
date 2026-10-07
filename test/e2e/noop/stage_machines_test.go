@@ -105,9 +105,9 @@ func (s *suite) checkMachine(ctx context.Context, t *testing.T, m machineCase, s
 	}, copyWait, machineHint)
 	s.waitConditions(ctx, t, objects.MachineGVR, m.name, []cond{{"InfrastructureReady", "True", ""}}, copyWait, machineHint)
 
-	sec, vars := s.durable(ctx, t, kind, m.name)
+	sec, vars := s.applied(ctx, t, kind, m.name)
 	inputsHint := s.kubectlNS("get secret " + sec.Name + " -o jsonpath='{.data.terraform\\.tfvars\\.json}' | base64 -d")
-	expectEqual(t, "durable inputs "+sec.Name+" annotation "+imageDigestAnnotation, sec.Annotations[imageDigestAnnotation], m.img.Pinned(), inputsHint)
+	expectEqual(t, "applied inputs "+sec.Name+" annotation "+imageDigestAnnotation, sec.Annotations[imageDigestAnnotation], m.img.Pinned(), inputsHint)
 	outputs, _ := vars["captf_cluster_outputs"].(map[string]any)
 	expectEqual(t, "machine "+m.name+" inputs captf_cluster_outputs.backend_id (the cluster state's exports.backend_id)", outputs["backend_id"], s.backendID, inputsHint)
 	expectEqual(t, "machine "+m.name+" inputs machine_name", vars["machine_name"], m.name, inputsHint)

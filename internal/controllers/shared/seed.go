@@ -143,11 +143,11 @@ func (r *reconciler) seedExports(ctx context.Context, bk *Bookkeeping, view Stat
 	last := bk.LastApply
 	switch {
 	case last != nil && bk.LastApplySucceeded && last.Annotations[state.InputsHashAnnotation] == view.InputsHash:
-		if h, err := inputs.PoolInputsHash(d); err != nil || h != view.InputsHash {
+		if h, err := inputs.PoolInputsHash(d.Attempt); err != nil || h != view.InputsHash {
 			klog.FromContext(ctx).V(LogFlow).Info("Not recording the exports of the last successful apply: the durable inputs are not its own", "Job", klog.KObj(last))
 			return false, nil
 		}
-		raw, from = inputs.LastClusterOutputs(d), "the durable inputs of Job "+last.Name
+		raw, from = inputs.LastClusterOutputs(d.Attempt), "the durable inputs of Job "+last.Name
 	case !slices.ContainsFunc(bk.Jobs, func(j batchv1.Job) bool { return jobs.OpOf(&j) == jobs.OpApply }) && view.CurrentHash == view.InputsHash:
 		raw, from = r.guard.Exports, "the current inputs"
 	default:

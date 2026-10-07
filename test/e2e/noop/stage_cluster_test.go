@@ -119,16 +119,16 @@ func expectRuntime(t *testing.T, what string, u *unstructured.Unstructured, img 
 	}
 }
 
-// checkClusterInputs checks the main cluster's durable inputs Secret: the
+// checkClusterInputs checks the main cluster's applied inputs Secret: the
 // pinned digest annotation, captf_cluster naming the Cluster, the
 // cluster_network rendered from the Cluster's spec, and
 // control_plane_initialized false (no control plane runs).
 // It reads under ctx and reports through t.
 func (s *suite) checkClusterInputs(ctx context.Context, t *testing.T) {
 	t.Helper()
-	sec, vars := s.durable(ctx, t, objects.KindTerraformCluster, clusterName)
+	sec, vars := s.applied(ctx, t, objects.KindTerraformCluster, clusterName)
 	hint := s.kubectlNS("get secret " + sec.Name + " -o jsonpath='{.data.terraform\\.tfvars\\.json}' | base64 -d")
-	expectEqual(t, "durable inputs "+sec.Name+" annotation "+imageDigestAnnotation, sec.Annotations[imageDigestAnnotation], s.clusterImg.Pinned(), hint)
+	expectEqual(t, "applied inputs "+sec.Name+" annotation "+imageDigestAnnotation, sec.Annotations[imageDigestAnnotation], s.clusterImg.Pinned(), hint)
 	expectEqual(t, "inputs captf_cluster", vars["captf_cluster"], map[string]any{"name": clusterName, "namespace": s.ns}, hint)
 	expectEqual(t, "inputs cluster_network", vars["cluster_network"], map[string]any{
 		"pods": []any{"10.244.0.0/16"}, "services": []any{"10.96.0.0/12"}, "api_server_port": 6443, "service_domain": nil,

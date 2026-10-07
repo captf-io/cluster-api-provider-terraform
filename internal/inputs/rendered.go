@@ -18,6 +18,7 @@ package inputs
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/captf-io/cluster-api-provider-terraform/internal/contract"
@@ -27,13 +28,17 @@ import (
 
 // PoolInputsHash returns the inputs hash (hash.Inputs) of the
 // TerraformMachinePool inputs d's rendered files carry, with d's image
-// (Meta.Image, written with them): the hash the apply that wrote them
-// computed, so it equals an apply Job's inputs hash only when d still
-// holds that Job's inputs. The contract inputs are read back from the
+// (written with them): the hash the apply that wrote them computed, so it
+// equals an apply Job's inputs hash only when d still holds that Job's
+// inputs. The contract inputs are read back from the
 // tfvars; the user variables are the tfvars keys the role's root does not
 // declare as contract inputs, sensitive as main.tf.json declares them. It
-// returns an error when the files do not parse or the inputs do not hash.
-func PoolInputsHash(d *Durable) (string, error) {
+// returns an error when d is nil, the files do not parse or the inputs do
+// not hash.
+func PoolInputsHash(d *Record) (string, error) {
+	if d == nil {
+		return "", errors.New("inputs: no rendered pool inputs")
+	}
 	var in contract.MachinePoolInputs
 	if err := json.Unmarshal(d.Files.TFVars, &in); err != nil {
 		return "", fmt.Errorf("inputs: read the rendered pool inputs: %w", err)
@@ -43,7 +48,7 @@ func PoolInputsHash(d *Durable) (string, error) {
 		return "", err
 	}
 	in.Variables = vars
-	h, err := hash.Inputs(contract.RoleMachinePool, d.Meta.Image, in)
+	h, err := hash.Inputs(contract.RoleMachinePool, d.Image, in)
 	if err != nil {
 		return "", fmt.Errorf("inputs: %w", err)
 	}

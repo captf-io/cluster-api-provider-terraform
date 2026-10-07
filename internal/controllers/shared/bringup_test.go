@@ -149,8 +149,8 @@ func TestNoChangeClusterApply(t *testing.T) {
 	// The durable Secret is named for the stored object's kind, which the
 	// fake cluster adapter leaves a TerraformMachine.
 	durable, err := inputs.Read(t.Context(), e.c, testNS, "m", testName)
-	if err != nil || durable.Meta.ImageDigest != testDigest {
-		t.Errorf("durable = %+v, %v; want the digest pinned", durable, err)
+	if err != nil || durable.Applied == nil || durable.Applied.Digest != testDigest {
+		t.Errorf("durable = %+v, %v; want the digest pinned on the applied record", durable, err)
 	}
 	m := e.get(t)
 	if c := conditions.Get(m, infrav1.ApplyJobSucceededCondition); c == nil || c.Status != metav1.ConditionTrue || c.Reason != infrav1.ApplySucceededReason {

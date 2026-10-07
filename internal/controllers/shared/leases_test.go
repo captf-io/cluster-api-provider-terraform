@@ -789,7 +789,7 @@ func TestClusterGateClusterFirst(t *testing.T) {
 		if err := e.c.Status().Update(t.Context(), m); err != nil {
 			t.Fatal(err)
 		}
-		if err := inputs.Write(t.Context(), e.c, m, renderMachine(t), inputs.Meta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
+		if err := writeInputs(t.Context(), e.c, m, renderMachine(t), testMeta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
 			t.Fatal(err)
 		}
 		e.state.st = &state.State{InputsHash: "h1:x"}
@@ -818,7 +818,7 @@ func TestDriftWaitsForRunLease(t *testing.T) {
 	if err := e.c.Status().Update(t.Context(), m); err != nil {
 		t.Fatal(err)
 	}
-	if err := inputs.Write(t.Context(), e.c, m, renderMachine(t), inputs.Meta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
+	if err := writeInputs(t.Context(), e.c, m, renderMachine(t), testMeta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
 		t.Fatal(err)
 	}
 	e.state.st = &state.State{InputsHash: "h1:x"}

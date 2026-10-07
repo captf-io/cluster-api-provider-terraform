@@ -31,7 +31,6 @@ import (
 	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/contract"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/identity"
-	"github.com/captf-io/cluster-api-provider-terraform/internal/inputs"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/jobs"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/state"
 )
@@ -315,7 +314,7 @@ func TestLifecycleEvents(t *testing.T) {
 	t.Run("deletion starts the destroy once", func(t *testing.T) {
 		t.Parallel()
 		e := newEnv(t, world(machine(deleting, notPaused))...)
-		if err := inputs.Write(t.Context(), e.c, machine(), renderMachine(t), inputs.Meta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
+		if err := writeInputs(t.Context(), e.c, machine(), renderMachine(t), testMeta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
 			t.Fatal(err)
 		}
 		e.state.st = &state.State{InputsHash: "h1:x"}

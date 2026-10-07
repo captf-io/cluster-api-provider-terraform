@@ -46,10 +46,10 @@ import (
 // everApplied reports, using ctx and the shared dependencies d, whether
 // k's object ever applied, so a missing state means a lost one rather
 // than none yet: status.initialization.provisioned (which clusterctl move
-// does not carry over), the applied marker on durable (the durable inputs
+// does not carry over), the applied marker on durable (the inputs records
 // as read, nil when none; set at the first successful apply or restore,
-// moved with the Secret and never cleared), a digest pinned on durable
-// (only a successful apply pins one, but an image change clears it), an
+// moved with the Secret and never cleared), an applied record on durable
+// (only a successful apply writes one), an
 // interrupted apply recorded on durable while k's object is deleting (the
 // first apply's Job vanished before any state was written, so it may have
 // created resources: the deletion is held, not released), or any
@@ -60,7 +60,7 @@ func everApplied(ctx context.Context, d Deps, k Kind, suffix string, durable *in
 	if p := k.Status().Initialization.Provisioned; p != nil && *p {
 		return true, nil
 	}
-	if durable != nil && (durable.Meta.Applied || durable.Meta.ImageDigest != "") {
+	if durable != nil && (durable.AppliedMark || durable.Applied != nil) {
 		return true, nil
 	}
 	// Only a deleting object counts an interrupted apply: a live one applies
@@ -95,7 +95,7 @@ const retainHint = "spec.deletionPolicy: Retain to remove the finalizer without 
 // whose state is missing although it applied before.
 func (r *reconciler) lostOnDelete() {
 	msg := "The state Secret is missing although the object applied before. "
-	if r.durable != nil && r.durable.InterruptedApply != "" && !r.durable.Meta.Applied {
+	if r.durable != nil && r.durable.InterruptedApply != "" && !r.durable.AppliedMark {
 		msg = "The state Secret is missing and apply Job " + r.durable.InterruptedApply +
 			" disappeared before it finished, so it may have created resources. "
 	}

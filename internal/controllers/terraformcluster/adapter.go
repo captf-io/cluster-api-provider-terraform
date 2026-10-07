@@ -152,7 +152,7 @@ func (a *adapter) BuildInputs(ctx context.Context, owner shared.OwnerInfo, durab
 	if setSource != "" {
 		a.setSource(setSource)
 	}
-	in := ClusterInputs(owner.Cluster, a.obj, inputs.LastControlPlaneInitialized(durable), ep)
+	in := ClusterInputs(owner.Cluster, a.obj, inputs.LastControlPlaneInitialized(durable.LastAttempt()), ep)
 	in.Variables = vars
 	return in, nil, nil
 }
@@ -167,7 +167,7 @@ func (a *adapter) BuildInputs(ctx context.Context, owner shared.OwnerInfo, durab
 // has a problem), and always a nil error.
 func (a *adapter) ApplyOutputs(_ context.Context, owner shared.OwnerInfo, st *state.State, durable *inputs.Durable) (outputs.Result, *contract.Health, error) {
 	out, res := outputs.DecodeCluster(st)
-	if ep := ModuleEndpoint(a.obj.Annotations[EndpointSourceAnnotation], inputs.LastControlPlaneEndpointNull(durable),
+	if ep := ModuleEndpoint(a.obj.Annotations[EndpointSourceAnnotation], inputs.LastControlPlaneEndpointNull(durable.AppliedOrAttempt()),
 		out.ControlPlaneEndpoint, a.obj.Spec.ControlPlaneEndpoint); ep != nil {
 		a.obj.Spec.ControlPlaneEndpoint = ep
 		a.setSource(EndpointSourceModule)

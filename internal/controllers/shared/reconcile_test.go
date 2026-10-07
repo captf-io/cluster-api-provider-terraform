@@ -349,8 +349,9 @@ func TestReconcileStartsApply(t *testing.T) {
 		t.Errorf("RoleBinding: %v", err)
 	}
 	durable, err := inputs.Read(t.Context(), e.c, testNS, "m", testName)
-	if err != nil || durable.Meta.Identity != testIdentity || durable.Meta.Image != "registry.example/mod:1.0" {
-		t.Errorf("durable = %+v, %v", durable, err)
+	if err != nil || durable.Attempt == nil || durable.Attempt.Identity != testIdentity || durable.Attempt.Image != "registry.example/mod:1.0" ||
+		durable.Attempt.Job != e.runner.created[0] || durable.Applied != nil {
+		t.Errorf("durable = %+v, %v; want the attempt record of the started Job", durable, err)
 	}
 	created := e.runner.jobs[0]
 	if created.Annotations[state.InputsHashAnnotation] == "" {
@@ -398,8 +399,8 @@ func TestReconcileLocalSecretIdentity(t *testing.T) {
 			t.Errorf("envFrom = %+v, want the Secret %s", ef, secretName)
 		}
 		d, err := inputs.Read(t.Context(), e.c, testNS, "m", testName)
-		if err != nil || d.Meta.Identity != secretName || d.Meta.IdentityKind != string(infrav1.IdentityKindSecret) {
-			t.Errorf("durable meta = %+v, %v", d, err)
+		if err != nil || d.Attempt.Identity != secretName || d.Attempt.IdentityKind != string(infrav1.IdentityKindSecret) {
+			t.Errorf("durable attempt = %+v, %v", d, err)
 		}
 	})
 	t.Run("missing", func(t *testing.T) {
@@ -637,7 +638,7 @@ func TestReconcileDestroy(t *testing.T) {
 		t.Parallel()
 		e := newEnv(t, world(machine(deleting, notPaused))...)
 		k := e.kindFor(t, readyOwner)
-		if err := inputs.Write(t.Context(), e.c, k.obj, renderMachine(t), inputs.Meta{Image: "registry.example/mod:0.9", Identity: testIdentity, ImageDigest: "registry.example/mod@sha256:abc"}); err != nil {
+		if err := writeInputs(t.Context(), e.c, k.obj, renderMachine(t), testMeta{Image: "registry.example/mod:0.9", Identity: testIdentity, ImageDigest: "registry.example/mod@sha256:abc"}); err != nil {
 			t.Fatal(err)
 		}
 		e.state.st = &state.State{InputsHash: "h1:x"}
@@ -702,7 +703,7 @@ func TestReconcileDestroy(t *testing.T) {
 		t.Parallel()
 		e := newEnv(t, world(machine(deleting, notPaused, ownDestroy))...)
 		k := e.kindFor(t, mismatchOwner)
-		if err := inputs.Write(t.Context(), e.c, k.obj, renderMachine(t), inputs.Meta{Image: "registry.example/mod:0.9", Identity: testIdentity, ImageDigest: "registry.example/mod@sha256:abc"}); err != nil {
+		if err := writeInputs(t.Context(), e.c, k.obj, renderMachine(t), testMeta{Image: "registry.example/mod:0.9", Identity: testIdentity, ImageDigest: "registry.example/mod@sha256:abc"}); err != nil {
 			t.Fatal(err)
 		}
 		e.state.st = &state.State{InputsHash: "h1:x"}
@@ -832,28 +833,28 @@ func TestReconcileFailedLimitZeroBacksOff(t *testing.T) {
 	}
 }
 
-// TestReconcileBookkeepingPinsDigest proves bookkeeping pins the newest
-// finished apply's source-container image digest (not an older pod's) onto
-// the durable Secret and status.source.imageDigest, and that the newest
-// finished Job overall (a failed drift, here) is the one recorded in
-// status.lastRun.
+// TestReconcileBookkeepingPinsDigest proves bookkeeping promotes the
+// newest finished apply's inputs with its source-container image digest
+// (not an older pod's) onto the applied record and
+// status.source.imageDigest, and that the newest finished Job overall (a
+// failed drift, here) is the one recorded in status.lastRun.
 func TestReconcileBookkeepingPinsDigest(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, world(machine(withFinalizer, notPaused))...)
 	k := e.kindFor(t, readyOwner)
 	k.in = machineIn()
-	if err := inputs.Write(t.Context(), e.c, k.obj, renderMachine(t), inputs.Meta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
+	if err := writeInputs(t.Context(), e.c, k.obj, renderMachine(t), testMeta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
 		t.Fatal(err)
 	}
 	digest := "registry.example/mod@sha256:" + strings.Repeat("a", 64)
-	applied := job("a", jobs.OpApply, jobs.Succeeded, t0.Add(-time.Hour))
+	applied := job(seedJob, jobs.OpApply, jobs.Succeeded, t0.Add(-time.Hour))
 	older, newer := corev1.Pod{}, corev1.Pod{}
 	older.CreationTimestamp = metav1.NewTime(t0.Add(-2 * time.Hour))
 	older.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: jobs.SourceContainer, ImageID: "registry.example/mod@sha256:" + strings.Repeat("b", 64)}}
 	newer.CreationTimestamp = metav1.NewTime(t0.Add(-time.Hour))
 	newer.Spec.Containers = []corev1.Container{{Name: jobs.SourceContainer, Image: "registry.example/mod:1.0"}}
 	newer.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: jobs.SourceContainer, ImageID: "docker-pullable://" + digest}}
-	e.runner.pods["a"] = []corev1.Pod{older, newer}
+	e.runner.pods[seedJob] = []corev1.Pod{older, newer}
 	drift := job("d", jobs.OpDrift, jobs.Failed, t0)
 	e.runner.jobs = append(e.runner.jobs, applied, drift)
 	e.state.st = &state.State{InputsHash: "h1:x"}
@@ -862,8 +863,8 @@ func TestReconcileBookkeepingPinsDigest(t *testing.T) {
 		t.Fatal(err)
 	}
 	durable, err := inputs.Read(t.Context(), e.c, testNS, "m", testName)
-	if err != nil || durable.Meta.ImageDigest != digest {
-		t.Fatalf("pinned digest = %+v, %v", durable, err)
+	if err != nil || durable.Applied == nil || durable.Applied.Digest != digest || durable.Applied.Job != seedJob {
+		t.Fatalf("applied record = %+v, %v; want %s's, with its digest", durable, err, seedJob)
 	}
 	m := e.get(t)
 	if m.Status.Source.ImageDigest != digest {
@@ -1093,47 +1094,54 @@ func TestSetDriftJobDeadlineExceeded(t *testing.T) {
 	}
 }
 
-// --- pinDigest DigestUnknown (bookkeeping.go:283-305) -----------------------
+// --- promote DigestUnknown -----------------------------------------------
 
-// TestPinDigestDigestUnknown: a successful apply whose pod is gone (or
-// reports no digest) keeps the previous pin; when the durable Secret has no
-// digest either, nothing can be pinned and pinDigest warns once with
-// EventDigestUnknown.
-func TestPinDigestDigestUnknown(t *testing.T) {
+// TestPromoteDigestUnknown: a successful apply whose pod is gone (or
+// reports no digest) is promoted without one, and promote warns with
+// EventDigestUnknown; a later one of the same image keeps the digest an
+// earlier promotion recorded, quietly.
+func TestPromoteDigestUnknown(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, world(machine(withFinalizer, notPaused))...)
 	k := e.kindFor(t, readyOwner)
-	if err := inputs.Write(t.Context(), e.c, k.obj, renderMachine(t), inputs.Meta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
+	if err := writeInputs(t.Context(), e.c, k.obj, renderMachine(t), testMeta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
 		t.Fatal(err)
 	}
-	f := &finished{job: ptr(job("a1", jobs.OpApply, jobs.Succeeded, t0))} // no pod: f.pod is nil
+	f := &finished{job: ptr(job(seedJob, jobs.OpApply, jobs.Succeeded, t0)), ok: true} // no pod: f.pod is nil
 	durable, err := inputs.Read(t.Context(), e.c, testNS, "m", testName)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pinned, err := pinDigest(t.Context(), e.d, k, f, durable); err != nil || pinned != "" {
-		t.Fatalf("pinDigest = %q, %v", pinned, err)
+	bk := &Bookkeeping{}
+	if err := bk.promote(t.Context(), e.d, k, f, durable); err != nil || bk.Promoted == nil || bk.Promoted.Digest != "" {
+		t.Fatalf("promote = %+v, %v; want a record without a digest", bk.Promoted, err)
 	}
 	if n := e.rec.count(EventDigestUnknown); n != 1 {
 		t.Errorf("DigestUnknown events = %d, want 1", n)
 	}
 	durable, err = inputs.Read(t.Context(), e.c, testNS, "m", testName)
-	if err != nil || durable.Meta.ImageDigest != "" {
-		t.Errorf("durable = %+v, %v; want the digest still unset", durable, err)
+	if err != nil || durable.Applied == nil || durable.Applied.Job != seedJob || durable.Applied.Digest != "" {
+		t.Errorf("durable = %+v, %v; want the applied record without a digest", durable, err)
 	}
 
-	// Once a digest is pinned, a later succeeded Job whose pod is gone
-	// keeps it quietly: no second warning.
+	// Once a digest is recorded, a later succeeded Job of the same image
+	// whose pod is gone keeps it quietly: no second warning.
 	digest := "registry.example/mod@sha256:" + strings.Repeat("c", 64)
-	if _, err := inputs.PinDigest(t.Context(), e.c, k.obj, digest, k.Mutable()); err != nil {
+	durable.Applied.Digest = digest
+	next := job("a2", jobs.OpApply, jobs.Succeeded, t0)
+	if err := inputs.WriteAttempt(t.Context(), e.c, k.obj, inputs.Record{Files: renderMachine(t), Image: "registry.example/mod:1.0", Job: next.Name}); err != nil {
 		t.Fatal(err)
 	}
-	durable.Meta.ImageDigest = digest
-	if _, err := pinDigest(t.Context(), e.d, k, f, durable); err != nil {
+	durable.Attempt.Job = next.Name
+	bk = &Bookkeeping{}
+	if err := bk.promote(t.Context(), e.d, k, &finished{job: &next, ok: true}, durable); err != nil {
 		t.Fatal(err)
+	}
+	if bk.Promoted == nil || bk.Promoted.Digest != digest || bk.Promoted.Job != next.Name {
+		t.Errorf("promoted = %+v, want %s with the earlier digest", bk.Promoted, next.Name)
 	}
 	if n := e.rec.count(EventDigestUnknown); n != 1 {
-		t.Errorf("DigestUnknown events = %d after a pin exists, want still 1 (no repeat warning)", n)
+		t.Errorf("DigestUnknown events = %d after a digest exists, want still 1 (no repeat warning)", n)
 	}
 }
 

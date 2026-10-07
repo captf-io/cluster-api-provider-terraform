@@ -128,10 +128,10 @@ func fitsNext(files render.Files, exports []byte) bool {
 }
 
 // LastClusterOutputs returns the captf_cluster_outputs value of d's
-// rendered tfvars: the exports the last started apply rendered, which a
-// successful apply's caller records with RecordClusterOutputs. A nil
-// Durable, unparsable tfvars or an absent key is nil.
-func LastClusterOutputs(d *Durable) json.RawMessage {
+// rendered tfvars: the exports its apply rendered, which a successful
+// apply's caller records with RecordClusterOutputs. A nil Record,
+// unparsable tfvars or an absent key is nil.
+func LastClusterOutputs(d *Record) json.RawMessage {
 	if d == nil {
 		return nil
 	}

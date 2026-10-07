@@ -256,8 +256,8 @@ func TestSeedNeverApplied(t *testing.T) {
 	if e.guarded(r) || r.Annotations[shared.ApprovalHashAnnotation] != "" {
 		t.Errorf("retry of a failed first apply: args %v, annotations %v", e.args(r), r.Annotations)
 	}
-	if d := e.durable(); d.AppliedExportsHash != "" || d.Meta.Applied {
-		t.Errorf("a pool that never applied: applied hash %q, applied %v", d.AppliedExportsHash, d.Meta.Applied)
+	if d := e.durable(); d.AppliedExportsHash != "" || d.AppliedMark || d.Applied != nil {
+		t.Errorf("a pool that never applied: applied hash %q, applied %v, record %+v", d.AppliedExportsHash, d.AppliedMark, d.Applied)
 	}
 	if c := e.applyCondition(); c.Status == metav1.ConditionTrue {
 		t.Errorf("ApplyJobSucceeded = %+v after a failed first apply", c)

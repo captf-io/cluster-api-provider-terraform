@@ -87,7 +87,7 @@ func (e *env) writeChunkedState(t *testing.T, serial int64, hash string, owner *
 }
 
 // retainEnv returns, failing t on error, an env whose provisioned machine
-// m1, with each mut applied, applied before: its durable inputs, a state
+// m1, with each mut applied, applied before: its inputs records, a state
 // of serial 3 in two chunks it owns, a backup set of serial 2, its plan
 // key and its state lock Lease exist. Jobs live in the fake client, the
 // state reader is the real one.
@@ -116,7 +116,7 @@ func retainEnv(t *testing.T, mut ...func(*infrav1.TerraformMachine)) *env {
 }
 
 // objectSecretMetas returns the metadata of m1's state chunks, state
-// backups and durable inputs in e, as Retain finds them, failing t on
+// backups and inputs Secrets in e, as Retain finds them, failing t on
 // error.
 func (e *env) objectSecretMetas(t *testing.T) []ownedSecret {
 	t.Helper()
@@ -128,7 +128,8 @@ func (e *env) objectSecretMetas(t *testing.T) []ownedSecret {
 }
 
 // assertRetained fails t unless e holds m1's two state chunks, its backup
-// and its durable inputs, each without an owner reference to m1 and
+// and its two inputs Secrets (durable and applied), each without an owner
+// reference to m1 and
 // labeled retained from uid; and its plan key and state lock Lease are
 // gone.
 func assertRetained(t *testing.T, e *env, uid string) {
@@ -145,8 +146,8 @@ func assertRetained(t *testing.T, e *env, uid string) {
 			}
 		}
 	}
-	if counts[ownedState] != 2 || counts[ownedBackup] != 1 || counts[ownedInputs] != 1 {
-		t.Errorf("kept %v, want 2 state, 1 backup and 1 durable inputs Secret", counts)
+	if counts[ownedState] != 2 || counts[ownedBackup] != 1 || counts[ownedInputs] != 2 {
+		t.Errorf("kept %v, want 2 state, 1 backup and 2 inputs Secrets", counts)
 	}
 	if err := e.c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: plankey.Name("m", testName)}, &corev1.Secret{}); client.IgnoreNotFound(err) != nil || err == nil {
 		t.Errorf("plan key: %v, want it deleted", err)
@@ -174,7 +175,7 @@ func TestReconcileRetain(t *testing.T) {
 	assertRetained(t, e, "m1-uid")
 	ev := e.rec.only(EventInfrastructureRetained)
 	if len(ev) != 1 || ev[0].eventType != corev1.EventTypeNormal ||
-		!strings.Contains(ev[0].note, "Kept 2 state Secret(s), 1 state backup Secret(s) and 1 durable inputs Secret") ||
+		!strings.Contains(ev[0].note, "Kept 2 state Secret(s), 1 state backup Secret(s) and 2 inputs Secret(s)") ||
 		!strings.Contains(ev[0].note, state.RetainedFromUIDLabel+"=m1-uid") {
 		t.Errorf("InfrastructureRetained events = %+v", ev)
 	}
@@ -198,7 +199,7 @@ func TestReconcileRetainLocalSecret(t *testing.T) {
 		m.Spec.IdentityRef = infrav1.IdentityReference{Name: secretName, Kind: infrav1.IdentityKindSecret}
 	})
 	m := e.get(t)
-	if err := inputs.Write(t.Context(), e.c, m, renderMachine(t), inputs.Meta{
+	if err := writeInputs(t.Context(), e.c, m, renderMachine(t), testMeta{
 		Image: "registry.example/mod:1.0", Identity: secretName, IdentityKind: string(infrav1.IdentityKindSecret),
 		ImageDigest: "registry.example/mod@sha256:abc",
 	}); err != nil {
@@ -391,7 +392,7 @@ func foreignRetainedEnv(t *testing.T, mut ...func(*infrav1.TerraformMachine)) *e
 	e := newEnv(t, world(machine(append([]func(*infrav1.TerraformMachine){withFinalizer, notPaused}, mut...)...))...)
 	e.d.Jobs, e.d.State = &clientRunner{c: e.c}, state.NewReader(e.c)
 	old := machine(func(m *infrav1.TerraformMachine) { m.UID = retainerUID })
-	if err := inputs.Write(t.Context(), e.c, old, renderMachine(t), inputs.Meta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
+	if err := writeInputs(t.Context(), e.c, old, renderMachine(t), testMeta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
 		t.Fatal(err)
 	}
 	if err := inputs.MarkApplied(t.Context(), e.c, old); err != nil {
@@ -674,7 +675,7 @@ func TestReconcileDeletionPolicyUnresolved(t *testing.T) {
 				t.Errorf("%+v: %s Secret %s touched: %v %+v", owner, s.what, s.meta.Name, s.meta.Labels, s.meta.OwnerReferences)
 			}
 		}
-		if len(e.objectSecretMetas(t)) != 4 {
+		if len(e.objectSecretMetas(t)) != 5 {
 			t.Errorf("%+v: Secrets deleted", owner)
 		}
 	}

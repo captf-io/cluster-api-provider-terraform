@@ -278,11 +278,8 @@ func TestReconcileStartsDrift(t *testing.T) {
 	}))...)
 	k := e.kindFor(t, readyOwner)
 	k.in = machineIn()
-	if err := inputs.Write(t.Context(), e.c, k.obj, renderMachine(t), inputs.Meta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
-		t.Fatal(err)
-	}
 	digest := "registry.example/mod@sha256:" + strings.Repeat("c", 64)
-	if _, err := inputs.PinDigest(t.Context(), e.c, k.obj, digest, false); err != nil {
+	if err := writeInputs(t.Context(), e.c, k.obj, renderMachine(t), testMeta{Image: "registry.example/mod:1.0", Identity: testIdentity, ImageDigest: digest}); err != nil {
 		t.Fatal(err)
 	}
 	applied := job("a", jobs.OpApply, jobs.Succeeded, t0.Add(-time.Hour))
@@ -296,7 +293,7 @@ func TestReconcileStartsDrift(t *testing.T) {
 	}
 	// Bookkeeping of the successful apply marks the object applied; the
 	// drift changes nothing else.
-	before.Meta.Applied = true
+	before.AppliedMark = true
 	if _, err := reconcileOnce(t, e, k); err != nil {
 		t.Fatal(err)
 	}
@@ -313,8 +310,8 @@ func TestReconcileStartsDrift(t *testing.T) {
 		t.Errorf("Job %s op %s image %s, want drift on %s", drift.Name, jobs.OpOf(drift), drift.Spec.Template.Spec.Containers[0].Image, digest)
 	}
 	after, err := inputs.Read(t.Context(), e.c, testNS, "m", testName)
-	if err != nil || !reflect.DeepEqual(after.Meta, before.Meta) || !reflect.DeepEqual(after.Files, before.Files) {
-		t.Errorf("drift touched the durable Secret: %+v → %+v (%v)", before.Meta, after.Meta, err)
+	if err != nil || after.AppliedMark != before.AppliedMark || !reflect.DeepEqual(after.Attempt, before.Attempt) || !reflect.DeepEqual(after.Applied, before.Applied) {
+		t.Errorf("drift touched the inputs records: %+v → %+v (%v)", before, after, err)
 	}
 	m := e.get(t)
 	if !sameTime(m.Status.LastRefresh, new(t0.Add(-50*time.Minute))) || m.Status.LastDriftCheck != nil {

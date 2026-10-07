@@ -134,7 +134,7 @@ const leaseFresh = runlease.Grace / 2
 // ensureFreshLeases makes sure, just before the Job name for req is
 // created, using ctx and the shared dependencies d for k's object, that
 // its leases are not about to lapse. Between takeLeases and the create,
-// startJob writes the inputs, block-move and the plan key; under a
+// startJob writes block-move and the plan key; under a
 // throttled client that can pass runlease.Grace, after which the run lease
 // of a Job that does not exist yet reads as free, and a cluster's and a
 // machine's apply could both start. The run lease is read live; the

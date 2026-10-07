@@ -43,7 +43,7 @@ import (
 // error.
 func (e *env) writeUnapplied(t *testing.T, m *infrav1.TerraformMachine, job string) {
 	t.Helper()
-	if err := inputs.Write(t.Context(), e.c, m, renderMachine(t), inputs.Meta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
+	if err := writeInputs(t.Context(), e.c, m, renderMachine(t), testMeta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
 		t.Fatal(err)
 	}
 	if job != "" {

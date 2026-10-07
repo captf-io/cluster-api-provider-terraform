@@ -64,13 +64,13 @@ func poolInputs(mut ...func(*contract.MachinePoolInputs)) contract.MachinePoolIn
 
 // renderedPool returns the durable inputs an apply of in with image
 // leaves, failing t when rendering fails.
-func renderedPool(t *testing.T, image string, in contract.MachinePoolInputs) *Durable {
+func renderedPool(t *testing.T, image string, in contract.MachinePoolInputs) *Record {
 	t.Helper()
 	files, err := render.Root(contract.RoleMachinePool, in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Durable{Files: files, Meta: Meta{Image: image}}
+	return &Record{Files: files, Image: image}
 }
 
 // TestPoolInputsHash proves the inputs hash read back from rendered pool
@@ -104,7 +104,7 @@ func TestPoolInputsHash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	other := map[string]*Durable{
+	other := map[string]*Record{
 		"other exports": renderedPool(t, poolImage, poolInputs(func(in *contract.MachinePoolInputs) {
 			in.ClusterOutputs = json.RawMessage(`{"network_id":"net-2"}`)
 		})),
@@ -123,7 +123,7 @@ func TestPoolInputsHash(t *testing.T) {
 		"tfvars": {MainTF: []byte(`{}`), TFVars: []byte(`{`)},
 		"root":   {MainTF: []byte(`{`), TFVars: []byte(`{}`)},
 	} {
-		if _, err := PoolInputsHash(&Durable{Files: files}); err == nil {
+		if _, err := PoolInputsHash(&Record{Files: files}); err == nil {
 			t.Errorf("unparsable %s: no error", name)
 		}
 	}
@@ -141,7 +141,7 @@ func TestSeedClusterOutputs(t *testing.T) {
 	if _, err := SeedClusterOutputs(ctx, c, m, json.RawMessage(`{}`)); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("seed without a Secret: %v, want ErrNotFound", err)
 	}
-	if err := Write(ctx, c, m, machineFiles(t, "a"), Meta{Image: "img"}); err != nil {
+	if err := WriteAttempt(ctx, c, m, Record{Files: machineFiles(t, "a"), Image: "img"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := SetPending(ctx, c, m, Pending{ExportsHash: "h2:new", ApprovalHash: "h2:a", Job: "j1"}); err != nil {
@@ -166,7 +166,7 @@ func TestSeedClusterOutputs(t *testing.T) {
 	}
 
 	big := machine("m2")
-	if err := Write(ctx, c, big, machineFiles(t, "b"), Meta{Image: "img"}); err != nil {
+	if err := WriteAttempt(ctx, c, big, Record{Files: machineFiles(t, "b"), Image: "img"}); err != nil {
 		t.Fatal(err)
 	}
 	huge := json.RawMessage(`"` + strings.Repeat("x", maxDataBytes) + `"`)

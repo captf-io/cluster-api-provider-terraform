@@ -68,9 +68,10 @@ type JobRequest struct {
 	// recorded in state for other operations.
 	InputsHash string
 	// Source is the image to run: the spec's for Apply and for mutable
-	// kinds, the durable Secret's for immutable kinds.
+	// kinds, the applied record's for other operations of immutable kinds.
 	Source infrav1.Source
-	// PinnedDigest is the durable Secret's repo@digest, if any.
+	// PinnedDigest is the repo@digest of the record the Job runs (the
+	// applied one, or the one destroy picked), if any.
 	PinnedDigest string
 	// Identity names the identity whose mirror the Job mounts, or the
 	// namespace-local Secret it mounts when IdentityKind is Secret.
@@ -210,11 +211,11 @@ var ErrStartDeferred = errors.New("job start deferred")
 
 // StartJob starts the Job for req, using ctx, the shared dependencies d
 // and k's object: block-move persisted before the Job exists and pause
-// read live after it (pauseHandshake), the durable inputs Secret for
-// Apply, the image choice, leases fresh enough to outlast the create
-// (ensureFreshLeases), the Job, its per-run Secret (the Job first: the
-// Secret is owned by it, and the pod waits for the volume) and
-// status.activeJob. A Job that already exists is taken as the active one
+// read live after it (pauseHandshake), the image choice, leases fresh
+// enough to outlast the create (ensureFreshLeases), the Job, then for
+// Apply the attempt record in the durable inputs Secret
+// (inputs.WriteAttempt), the per-run Secret (the Job first: the Secret is
+// owned by it, and the pod waits for the volume) and status.activeJob. A Job that already exists is taken as the active one
 // only when obj controls it and it runs (a retry after a crash;
 // adoptExisting). It returns the started (or existing) Job, or
 // any error creating it or its per-run Secret; an error wrapping
@@ -257,12 +258,6 @@ func startJob(ctx context.Context, d Deps, k Kind, req JobRequest) (job *batchv1
 	}
 	if err := pauseHandshake(ctx, d, obj, req.ClusterName); err != nil {
 		return nil, false, err
-	}
-	if req.Op == jobs.OpApply {
-		meta := inputs.Meta{Image: req.Source.Image, Identity: req.Identity, IdentityKind: string(req.IdentityKind)}
-		if err := inputs.Write(ctx, d.Client, obj, req.Files, meta); err != nil {
-			return nil, false, err
-		}
 	}
 	ref, digestUnknown := ChooseImage(req.Op, req.Source.Image, req.PinnedDigest)
 	if digestUnknown {
@@ -341,7 +336,19 @@ func startJob(ctx context.Context, d Deps, k Kind, req JobRequest) (job *batchv1
 		}
 		job = existing
 	}
-	if err := inputs.CreateRun(ctx, d.Client, job, req.Files); err != nil {
+	// Only a Job that exists replaces the attempt record: a start deferred
+	// or refused before the create leaves the record of the apply that
+	// last ran, which destroy may need.
+	rec := inputs.Record{
+		Files: req.Files, Image: req.Source.Image, Identity: req.Identity, IdentityKind: string(req.IdentityKind),
+		InputsHash: req.InputsHash, Job: job.Name,
+	}
+	if req.Op == jobs.OpApply {
+		if err := inputs.WriteAttempt(ctx, d.Client, obj, rec); err != nil {
+			return nil, true, err
+		}
+	}
+	if err := inputs.CreateRun(ctx, d.Client, job, rec); err != nil {
 		return nil, true, err
 	}
 	logger := klog.LoggerWithValues(klog.FromContext(ctx), "Job", klog.KObj(job))

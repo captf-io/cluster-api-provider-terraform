@@ -214,7 +214,7 @@ func TestJobMetricsCountedOnce(t *testing.T) {
 	e.state.st = &state.State{InputsHash: "h1:x", ManagedResources: 3, Bytes: 4096}
 	k := e.kindFor(t, readyOwner)
 	k.health = &contract.Health{State: contract.HealthRunning, Healthy: true}
-	if err := inputs.Write(t.Context(), e.c, k.obj, renderMachine(t), inputs.Meta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
+	if err := writeInputs(t.Context(), e.c, k.obj, renderMachine(t), testMeta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
 		t.Fatal(err)
 	}
 

@@ -41,14 +41,16 @@ type Retained struct {
 	State int
 	// Backups is the number of state backup Secrets (chunks of every set).
 	Backups int
-	// Inputs is 1 when the durable inputs Secret was kept, else 0.
+	// Inputs is the number of inputs Secrets kept: the durable and the
+	// applied one, each when it exists.
 	Inputs int
 }
 
 // Retain removes the finalizer of k's object without a destroy, for
 // deletionPolicy Retain, using ctx and the shared dependencies d: the
 // infrastructure keeps running. It keeps the object's state Secrets
-// (suffix), its state backups and its durable inputs, taking their owner
+// (suffix), its state backups and its inputs records (the durable and
+// the applied inputs Secrets), taking their owner
 // references to the object away (so they are not garbage-collected with
 // it) and labeling them state.RetainedFromUIDLabel with its uid
 // (ownership.Retain), for a later object of the same kind, namespace and
@@ -91,16 +93,16 @@ func Retain(ctx context.Context, d Deps, k Kind, suffix, identityName string) (R
 	}
 	klog.FromContext(ctx).Info("Retained the object's state for adoption",
 		"object", klog.KObj(obj), "label", state.RetainedFromUIDLabel+"="+string(obj.GetUID()),
-		"stateSecrets", kept.State, "stateBackups", kept.Backups, "durableInputs", kept.Inputs)
+		"stateSecrets", kept.State, "stateBackups", kept.Backups, "inputsSecrets", kept.Inputs)
 	return kept, release(ctx, d, k, identityName)
 }
 
 // objectSecrets lists, through c using ctx, the metadata of the Secrets
 // deletionPolicy Retain keeps for k's object, found by its deterministic
 // names and selectors: its state chunks (suffix), its state backups and
-// its durable inputs Secret. Metadata only: they hold the state and the
-// inputs. It returns them, or any error from those reads but the durable
-// inputs being gone.
+// its durable and applied inputs Secrets. Metadata only: they hold the
+// state and the inputs. It returns them, or any error from those reads
+// but an inputs Secret being gone.
 func objectSecrets(ctx context.Context, c client.Client, k Kind, suffix string) ([]ownedSecret, error) {
 	obj := k.Object()
 	ns := obj.GetNamespace()
@@ -121,15 +123,17 @@ func objectSecrets(ctx context.Context, c client.Client, k Kind, suffix string) 
 			out = append(out, ownedSecret{what: sel.what, meta: &list.Items[i].ObjectMeta})
 		}
 	}
-	var durable metav1.PartialObjectMetadata
-	durable.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Secret"))
-	key := client.ObjectKey{Namespace: ns, Name: inputs.Name(kindShort(k), obj.GetName())}
-	switch err := c.Get(ctx, key, &durable); {
-	case apierrors.IsNotFound(err):
-	case err != nil:
-		return nil, fmt.Errorf("get durable inputs %s: %w", key.Name, err)
-	default:
-		out = append(out, ownedSecret{what: ownedInputs, meta: &durable.ObjectMeta})
+	for _, name := range []string{inputs.Name(kindShort(k), obj.GetName()), inputs.AppliedName(kindShort(k), obj.GetName())} {
+		var meta metav1.PartialObjectMetadata
+		meta.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Secret"))
+		key := client.ObjectKey{Namespace: ns, Name: name}
+		switch err := c.Get(ctx, key, &meta); {
+		case apierrors.IsNotFound(err):
+		case err != nil:
+			return nil, fmt.Errorf("get inputs %s: %w", key.Name, err)
+		default:
+			out = append(out, ownedSecret{what: ownedInputs, meta: &meta.ObjectMeta})
+		}
 	}
 	return out, nil
 }
@@ -139,8 +143,8 @@ func objectSecrets(ctx context.Context, c client.Client, k Kind, suffix string) 
 var errRetainedState = errors.New("retained state")
 
 // checkRetained looks for Secrets of the object that deletionPolicy Retain
-// kept (state.RetainedFromUIDLabel), using ctx: cheaply on the durable
-// inputs metadata setup read and chunks, the state chunks' metadata as
+// kept (state.RetainedFromUIDLabel), using ctx: cheaply on the inputs
+// Secrets' metadata setup read and chunks, the state chunks' metadata as
 // read this pass, and, when listed is false (the state was missing or
 // could not be read, so chunks is empty), by listing the object's
 // Secrets. Another object's uid on them sets r.retainedFrom: with
@@ -155,7 +159,7 @@ func (r *reconciler) checkRetained(ctx context.Context, chunks []metav1.ObjectMe
 	uid := string(r.obj.GetUID())
 	var metas []*metav1.ObjectMeta
 	if r.durable != nil {
-		metas = append(metas, &r.durable.Secret)
+		metas = append(metas, &r.durable.Secret, &r.durable.AppliedSecret)
 	}
 	for i := range chunks {
 		metas = append(metas, &chunks[i])
@@ -219,7 +223,7 @@ func (r *reconciler) adoptRetained(ctx context.Context) error {
 	r.adopted = true
 	klog.FromContext(ctx).Info("Adopted retained state", "retainedFromUID", r.retainedFrom, "secrets", n)
 	r.d.Emit(r.obj, corev1.EventTypeNormal, EventRetainedStateAdopted, "Reconcile",
-		"Adopted the state an earlier %s of this name retained (%s=%s): removed the label from %d Secret(s) (state, state backups, durable inputs); "+
+		"Adopted the state an earlier %s of this name retained (%s=%s): removed the label from %d Secret(s) (state, state backups, inputs); "+
 			"this object now manages that infrastructure (spec.adoptRetainedState)",
 		r.k.Kind(), state.RetainedFromUIDLabel, r.retainedFrom, n)
 	return errRetainedState

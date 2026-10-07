@@ -42,7 +42,7 @@ func exportsHashOf(t *testing.T, raw string) string {
 }
 
 // TestRecordClusterOutputs proves the recorded exports are read back, kept
-// by the next Write, replaced by the next record, and that a record
+// by the next WriteAttempt, replaced by the next record, and that a record
 // removes a pending change; exports that do not fit next to the files
 // are not recorded and drop an older record, but their hash is; a
 // missing Secret is ErrNotFound.
@@ -54,7 +54,7 @@ func TestRecordClusterOutputs(t *testing.T) {
 		t.Fatalf("record without a Secret: %v, want ErrNotFound", err)
 	}
 	files := machineFiles(t, "a")
-	if err := Write(ctx, c, m, files, Meta{Image: "img"}); err != nil {
+	if err := WriteAttempt(ctx, c, m, Record{Files: files, Image: "img"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := SetPending(ctx, c, m, Pending{ExportsHash: "h2:new", ApprovalHash: "h2:a", Job: "j1", Summary: "the plan replaces x"}); err != nil {
@@ -73,17 +73,17 @@ func TestRecordClusterOutputs(t *testing.T) {
 	if err != nil || string(d.AppliedClusterOutputs) != `{"net":"n-1"}` || d.AppliedExportsHash != exportsHashOf(t, `{"net":"n-1"}`) || d.Pending != nil {
 		t.Fatalf("after record: applied %s (%s), pending %+v, %v", d.AppliedClusterOutputs, d.AppliedExportsHash, d.Pending, err)
 	}
-	if !bytes.Equal(d.Files.TFVars, files.TFVars) {
+	if !bytes.Equal(d.Attempt.Files.TFVars, files.TFVars) {
 		t.Error("recording the exports changed the rendered files")
 	}
 
-	// The next apply's Write keeps the record; any other key goes.
-	if err := Write(ctx, c, m, machineFiles(t, "b"), Meta{Image: "img"}); err != nil {
+	// The next apply's WriteAttempt keeps the record; any other key goes.
+	if err := WriteAttempt(ctx, c, m, Record{Files: machineFiles(t, "b"), Image: "img"}); err != nil {
 		t.Fatal(err)
 	}
 	s := getSecret(t, c, Name("m", "m1"))
 	if !slices.Equal(dataKeys(s), []string{AppliedClusterOutputsKey, MainTFKey, TFVarsKey}) || string(s.Data[AppliedClusterOutputsKey]) != `{"net":"n-1"}` {
-		t.Errorf("after Write: keys %v, applied %s", dataKeys(s), s.Data[AppliedClusterOutputsKey])
+		t.Errorf("after WriteAttempt: keys %v, applied %s", dataKeys(s), s.Data[AppliedClusterOutputsKey])
 	}
 
 	// Recording the same value again is a no-op that reports it recorded.
@@ -101,25 +101,25 @@ func TestRecordClusterOutputs(t *testing.T) {
 	}
 }
 
-// TestWriteDropsRecordThatNoLongerFits proves Write drops the recorded
+// TestWriteAttemptDropsRecordThatNoLongerFits proves WriteAttempt drops the recorded
 // exports when the new rendered files leave no room for them, so a write
 // never fails on the Secret's size, and keeps their hash.
-func TestWriteDropsRecordThatNoLongerFits(t *testing.T) {
+func TestWriteAttemptDropsRecordThatNoLongerFits(t *testing.T) {
 	t.Parallel()
 	c := newClient(t)
 	m := machine("m1")
-	if err := Write(ctx, c, m, machineFiles(t, "a"), Meta{Image: "img"}); err != nil {
+	if err := WriteAttempt(ctx, c, m, Record{Files: machineFiles(t, "a"), Image: "img"}); err != nil {
 		t.Fatal(err)
 	}
 	if ok, err := RecordClusterOutputs(ctx, c, m, json.RawMessage(`{"net":"n-1"}`)); err != nil || !ok {
 		t.Fatalf("record: %v, %v", ok, err)
 	}
 	big := render.Files{MainTF: []byte("{}"), TFVars: bytes.Repeat([]byte("x"), maxDataBytes-4)}
-	if err := Write(ctx, c, m, big, Meta{Image: "img"}); err != nil {
+	if err := WriteAttempt(ctx, c, m, Record{Files: big, Image: "img"}); err != nil {
 		t.Fatal(err)
 	}
 	if s := getSecret(t, c, Name("m", "m1")); s.Data[AppliedClusterOutputsKey] != nil {
-		t.Errorf("Write kept a record that no longer fits: keys %v", dataKeys(s))
+		t.Errorf("WriteAttempt kept a record that no longer fits: keys %v", dataKeys(s))
 	}
 	if d, err := Read(ctx, c, ns, "m", "m1"); err != nil || d.AppliedExportsHash != exportsHashOf(t, `{"net":"n-1"}`) {
 		t.Errorf("the hash of the dropped record: %q, %v", d.AppliedExportsHash, err)
@@ -165,7 +165,7 @@ func TestAppliedExports(t *testing.T) {
 }
 
 // TestPendingRoundTrip proves SetPending reports ErrNotFound without a
-// Secret, that a Write keeps a pending change, and that an unparsable or
+// Secret, that a WriteAttempt keeps a pending change, and that an unparsable or
 // empty annotation reads as no pending change.
 func TestPendingRoundTrip(t *testing.T) {
 	t.Parallel()
@@ -174,18 +174,18 @@ func TestPendingRoundTrip(t *testing.T) {
 	if err := SetPending(ctx, c, m, Pending{ExportsHash: "h"}); !errors.Is(err, ErrNotFound) {
 		t.Errorf("SetPending without a Secret: %v", err)
 	}
-	if err := Write(ctx, c, m, machineFiles(t, "a"), Meta{Image: "img"}); err != nil {
+	if err := WriteAttempt(ctx, c, m, Record{Files: machineFiles(t, "a"), Image: "img"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := SetPending(ctx, c, m, Pending{ExportsHash: "h", Job: "j"}); err != nil {
 		t.Fatal(err)
 	}
-	// A Write (the next apply) keeps it.
-	if err := Write(ctx, c, m, machineFiles(t, "b"), Meta{Image: "img"}); err != nil {
+	// A WriteAttempt (the next apply) keeps it.
+	if err := WriteAttempt(ctx, c, m, Record{Files: machineFiles(t, "b"), Image: "img"}); err != nil {
 		t.Fatal(err)
 	}
 	if d, err := Read(ctx, c, ns, "m", "m1"); err != nil || d.Pending == nil || d.Pending.ExportsHash != "h" {
-		t.Fatalf("pending after Write: %+v, %v", d.Pending, err)
+		t.Fatalf("pending after WriteAttempt: %+v, %v", d.Pending, err)
 	}
 	for _, raw := range []string{"", "{", `{"job":"j"}`} {
 		if p := parsePending(raw); p != nil {
@@ -195,7 +195,7 @@ func TestPendingRoundTrip(t *testing.T) {
 }
 
 // TestPartialRoundTrip proves SetPartial reports ErrNotFound without a
-// Secret, that a Write keeps the record, that RecordClusterOutputs
+// Secret, that a WriteAttempt keeps the record, that RecordClusterOutputs
 // removes it even when the exports it records are already recorded, and
 // that an unparsable annotation still reads as a partial change.
 func TestPartialRoundTrip(t *testing.T) {
@@ -205,7 +205,7 @@ func TestPartialRoundTrip(t *testing.T) {
 	if err := SetPartial(ctx, c, m, Partial{ExportsHash: "h", Job: "j"}); !errors.Is(err, ErrNotFound) {
 		t.Errorf("SetPartial without a Secret: %v", err)
 	}
-	if err := Write(ctx, c, m, machineFiles(t, "a"), Meta{Image: "img"}); err != nil {
+	if err := WriteAttempt(ctx, c, m, Record{Files: machineFiles(t, "a"), Image: "img"}); err != nil {
 		t.Fatal(err)
 	}
 	if ok, err := RecordClusterOutputs(ctx, c, m, json.RawMessage(`{"net":"n-1"}`)); err != nil || !ok {
@@ -214,11 +214,11 @@ func TestPartialRoundTrip(t *testing.T) {
 	if err := SetPartial(ctx, c, m, Partial{ExportsHash: "h", Job: "j"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := Write(ctx, c, m, machineFiles(t, "b"), Meta{Image: "img"}); err != nil {
+	if err := WriteAttempt(ctx, c, m, Record{Files: machineFiles(t, "b"), Image: "img"}); err != nil {
 		t.Fatal(err)
 	}
 	if d, err := Read(ctx, c, ns, "m", "m1"); err != nil || d.Partial == nil || *d.Partial != (Partial{ExportsHash: "h", Job: "j"}) {
-		t.Fatalf("partial after Write: %+v, %v", d.Partial, err)
+		t.Fatalf("partial after WriteAttempt: %+v, %v", d.Partial, err)
 	}
 	if ok, err := RecordClusterOutputs(ctx, c, m, json.RawMessage(`{"net":"n-1"}`)); err != nil || !ok {
 		t.Fatalf("record again: %v, %v", ok, err)
@@ -235,15 +235,15 @@ func TestPartialRoundTrip(t *testing.T) {
 }
 
 // TestLastClusterOutputs proves LastClusterOutputs returns the rendered
-// captf_cluster_outputs, and nil for a nil Durable, unparsable tfvars or a
+// captf_cluster_outputs, and nil for a nil Record, unparsable tfvars or a
 // root without the key.
 func TestLastClusterOutputs(t *testing.T) {
 	t.Parallel()
-	d := &Durable{Files: render.Files{TFVars: []byte(`{"captf_cluster_outputs":{"net":"n-1"},"replicas":1}`)}}
+	d := &Record{Files: render.Files{TFVars: []byte(`{"captf_cluster_outputs":{"net":"n-1"},"replicas":1}`)}}
 	if got := LastClusterOutputs(d); string(got) != `{"net":"n-1"}` {
 		t.Errorf("LastClusterOutputs = %s", got)
 	}
-	for name, d := range map[string]*Durable{
+	for name, d := range map[string]*Record{
 		"nil":          nil,
 		"unparsable":   {Files: render.Files{TFVars: []byte("{")}},
 		"cluster role": {Files: clusterFiles(t, false)},

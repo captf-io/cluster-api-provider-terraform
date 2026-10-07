@@ -103,7 +103,7 @@ func (a *adapter) guardExports(in contract.MachinePoolInputs, durable *inputs.Du
 	g.Settled = applied == current || (applied == "" && durable.Pending == nil)
 	// No hash after an apply is a pool that applied before records
 	// existed: whatever it applied, it is unknown.
-	g.Unknown = applied == "" && (durable.Meta.Applied || durable.Meta.ImageDigest != "" || ptr.Deref(a.obj.Status.Initialization.Provisioned, false))
+	g.Unknown = applied == "" && (durable.AppliedMark || durable.Applied != nil || ptr.Deref(a.obj.Status.Initialization.Provisioned, false))
 	if g.Settled && !g.Partial && !g.Unknown {
 		return in, g, nil
 	}

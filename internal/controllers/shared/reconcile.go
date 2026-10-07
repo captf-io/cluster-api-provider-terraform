@@ -163,8 +163,9 @@ type reconciler struct {
 	eff      EffectiveConfig
 	suffix   string
 	deleting bool
-	// durable is the durable inputs Secret, read once in setup; nil before
-	// the first apply. Bookkeeping's digest pin is applied to it in memory.
+	// durable is the object's inputs records (the durable inputs Secret and
+	// the applied one), read once in setup; nil before the first apply.
+	// What bookkeeping writes to them is applied to it in memory.
 	durable *inputs.Durable
 	// bk is this pass's bookkeeping, whose finished Jobs are marked
 	// bookkept once the status patch succeeded.
@@ -192,7 +193,8 @@ type reconciler struct {
 	// isPaused is true on the paused branch: no Job starts.
 	isPaused bool
 	// inputsBytes is the size of the inputs rendered this pass, else of the
-	// durable inputs; 0 when neither exists (captf_inputs_bytes).
+	// attempt record (else the applied one); 0 when none exists
+	// (captf_inputs_bytes).
 	inputsBytes int
 	// before holds the event-watched conditions as the reconcile found them.
 	before map[string]metav1.Condition
@@ -226,9 +228,9 @@ type reconciler struct {
 }
 
 // setup sets up the reconcile using ctx: first-visit conditions, Deleting,
-// the effective config, the state suffix and the durable inputs. It
+// the effective config, the state suffix and the inputs records. It
 // returns any error from computing the state suffix or reading the
-// durable inputs.
+// inputs records.
 func (r *reconciler) setup(ctx context.Context) error {
 	captfconds.SetInitial(r.obj, r.k.Kind())
 	r.deleting = !r.obj.GetDeletionTimestamp().IsZero()
@@ -247,9 +249,10 @@ func (r *reconciler) setup(ctx context.Context) error {
 	return r.readDurable(ctx)
 }
 
-// readDurable reads the object's durable inputs Secret using ctx into
-// r.durable, r.st.Source.ImageDigest and r.inputsBytes; it leaves
-// r.durable nil, without error, when no such Secret exists yet, and
+// readDurable reads the object's inputs records using ctx into
+// r.durable, r.st.Source.ImageDigest (the applied record's) and
+// r.inputsBytes (the attempt record's, else the applied one's); it leaves
+// r.durable nil, without error, when neither Secret exists yet, and
 // otherwise returns any read error.
 func (r *reconciler) readDurable(ctx context.Context) error {
 	d, err := inputs.Read(ctx, r.d.Client, r.obj.GetNamespace(), kindShort(r.k), r.obj.GetName())
@@ -260,15 +263,22 @@ func (r *reconciler) readDurable(ctx context.Context) error {
 		return err
 	default:
 		r.durable = d
-		r.st.Source.ImageDigest = d.Meta.ImageDigest
-		r.inputsBytes = d.Files.Size()
+		r.st.Source.ImageDigest = ""
+		if d.Applied != nil {
+			r.st.Source.ImageDigest = d.Applied.Digest
+		}
+		rec := d.Attempt
+		if rec == nil {
+			rec = d.Applied
+		}
+		r.inputsBytes = rec.Files.Size()
 	}
 	return nil
 }
 
-// bookkeep runs Bookkeep using ctx with the durable Secret read in setup,
-// and records a digest it pinned in memory instead of reading the Secret
-// again. It then reads the object's TerraformPlans, records the plans the
+// bookkeep runs Bookkeep using ctx with the inputs records read in
+// setup, and records what it wrote to them in memory instead of reading
+// them again. It then reads the object's TerraformPlans, records the plans the
 // finished Jobs made, and moves the plans through their phases. It
 // returns the resulting Bookkeeping, also stored on r.bk, or any error
 // from Bookkeep, from removing a consumed annotation, or from reading or
@@ -280,12 +290,15 @@ func (r *reconciler) bookkeep(ctx context.Context) (*Bookkeeping, error) {
 	}
 	r.bk = bk
 	r.releaseLeases(ctx, bk)
-	if bk.PinnedDigest != "" && r.durable != nil {
-		r.durable.Meta.ImageDigest = bk.PinnedDigest
-		r.st.Source.ImageDigest = bk.PinnedDigest
+	if bk.Promoted != nil {
+		if r.durable == nil {
+			r.durable = &inputs.Durable{}
+		}
+		r.durable.Applied = bk.Promoted
+		r.st.Source.ImageDigest = bk.Promoted.Digest
 	}
 	if bk.MarkedApplied && r.durable != nil {
-		r.durable.Meta.Applied = true
+		r.durable.AppliedMark = true
 	}
 	if bk.ExportsRecorded && r.durable != nil {
 		r.durable.AppliedClusterOutputs, r.durable.AppliedExportsHash = bk.AppliedExports, bk.AppliedExportsHash
@@ -710,8 +723,8 @@ func (r *reconciler) startOp(ctx context.Context, bk *Bookkeeping, dec Decision,
 		InputsHash:     view.InputsHash,
 		Why:            dec.Reason,
 	}
-	if r.durable != nil {
-		req.PinnedDigest = r.durable.Meta.ImageDigest
+	if a := r.durable.AppliedOrAttempt(); a != nil {
+		req.PinnedDigest = a.Digest
 	}
 
 	files, ok, err := r.files(ctx, op, in)
@@ -825,7 +838,7 @@ func (r *reconciler) jobStarted(dec Decision, req JobRequest, view StateView, jo
 }
 
 // files renders what op runs, using ctx: the current inputs in for Apply,
-// the durable inputs for Destroy, and checkFiles for Refresh and Drift. It
+// destroyFiles for Destroy, and checkFiles for Refresh and Drift. It
 // returns the rendered files, ok false when there is nothing to run
 // against, and any render error.
 func (r *reconciler) files(ctx context.Context, op jobs.Op, in any) (render.Files, bool, error) {
@@ -851,16 +864,16 @@ func (r *reconciler) noFiles(ctx context.Context, bk *Bookkeeping, op jobs.Op) (
 	if op == jobs.OpDestroy {
 		c := metav1.Condition{
 			Type: infrav1.ApplyJobSucceededCondition, Status: metav1.ConditionFalse, Reason: infrav1.DestroyFailedReason,
-			Message: "The durable inputs Secret is missing, so destroy cannot be rendered. Restore it, or set " + retainHint +
+			Message: "The inputs Secrets (durable and applied) are missing, so destroy cannot be rendered. Restore them, or set " + retainHint +
 				"; see https://captf.io/docs/operator-guide/runbooks/stuck-destroy.html",
 		}
 		return r.finish(bk, &c, ctrl.Result{RequeueAfter: RetryMax})
 	}
-	klog.FromContext(ctx).Info("No durable inputs to run against; skipping", "op", op)
+	klog.FromContext(ctx).Info("No inputs record to run against; skipping", "op", op)
 	conditions.Set(r.obj, metav1.Condition{
 		Type: infrav1.DriftJobSucceededCondition, Status: metav1.ConditionUnknown, Reason: infrav1.DurableInputsMissingReason,
-		Message: fmt.Sprintf("The %s Job is due, but the durable inputs Secret is missing, so it cannot be rendered: no refresh or drift check runs, "+
-			"and InfrastructureHealthy keeps its last reading. Restore the Secret; see %s", op, durableRunbook),
+		Message: fmt.Sprintf("The %s Job is due, but the inputs Secrets (durable and applied) are missing, so it cannot be rendered: no refresh or drift check runs, "+
+			"and InfrastructureHealthy keeps its last reading. Restore them; see %s", op, durableRunbook),
 	})
 	return r.finish(bk, nil, ctrl.Result{RequeueAfter: RetryMax})
 }
@@ -870,21 +883,22 @@ func (r *reconciler) noFiles(ctx context.Context, bk *Bookkeeping, op jobs.Op) (
 const durableRunbook = "https://captf.io/docs/operator-guide/runbooks/stuck-destroy.html#the-durable-inputs-secret-is-missing"
 
 // jobSource returns the image a Job runs for op: the spec's for Apply and
-// mutable kinds; for other operations of immutable kinds, the image
-// pinned in the durable Secret, with the current pull policy.
+// mutable kinds; for other operations of immutable kinds, the image of
+// the applied record (else the attempt record), with the current pull
+// policy.
 func (r *reconciler) jobSource(op jobs.Op) infrav1.Source {
 	src := r.k.Spec().Source
-	if op != jobs.OpApply && !r.k.Mutable() && r.durable != nil && r.durable.Meta.Image != "" {
-		src.Image = r.durable.Meta.Image
+	if a := r.durable.AppliedOrAttempt(); op != jobs.OpApply && !r.k.Mutable() && a != nil && a.Image != "" {
+		src.Image = a.Image
 	}
 	return src
 }
 
 // checkFiles is what Refresh and Drift run against: the current inputs in
-// of a mutable kind, the pinned inputs of an immutable one. Neither writes
-// the durable Secret; only Apply does. It returns the files to run
-// against, ok false when there is nothing to run against, and any render
-// error.
+// of a mutable kind, the applied inputs of an immutable one (else the
+// attempted ones). Neither writes an inputs record; only Apply does. It
+// returns the files to run against, ok false when there is nothing to
+// run against, and any render error.
 func (r *reconciler) checkFiles(in any) (render.Files, bool, error) {
 	if r.k.Mutable() && in != nil {
 		files, err := r.renderFiles(in)
@@ -893,19 +907,20 @@ func (r *reconciler) checkFiles(in any) (render.Files, bool, error) {
 		}
 		return files, true, nil
 	}
-	if r.durable != nil {
-		return r.durable.Files, true, nil
+	if a := r.durable.AppliedOrAttempt(); a != nil {
+		return a.Files, true, nil
 	}
 	return render.Files{}, false, nil
 }
 
-// destroyFiles renders destroy from the durable inputs; a mutable kind
-// whose Secret is gone falls back, using ctx, to its current inputs when
-// they build. It returns the files to run against, ok false when there is
-// nothing to run against, and any build or render error.
+// destroyFiles renders destroy from the applied inputs, else the
+// attempted ones; a mutable kind with neither falls back, using ctx, to
+// its current inputs when they build. It returns the files to run
+// against, ok false when there is nothing to run against, and any build
+// or render error.
 func (r *reconciler) destroyFiles(ctx context.Context) (render.Files, bool, error) {
-	if r.durable != nil {
-		return r.durable.Files, true, nil
+	if a := r.durable.AppliedOrAttempt(); a != nil {
+		return a.Files, true, nil
 	}
 	if !r.k.Mutable() {
 		return render.Files{}, false, nil
@@ -1017,7 +1032,7 @@ func (r *reconciler) cleanup(ctx context.Context, bk *Bookkeeping, mode cleanupM
 	case cleanupRetained:
 		r.d.Emit(r.obj, corev1.EventTypeNormal, EventInfrastructureRetained, "Delete",
 			"Removed finalizer %s without a destroy (deletionPolicy Retain): the infrastructure keeps running. "+
-				"Kept %d state Secret(s), %d state backup Secret(s) and %d durable inputs Secret, without owner references and labeled %s=%s; "+
+				"Kept %d state Secret(s), %d state backup Secret(s) and %d inputs Secret(s), without owner references and labeled %s=%s; "+
 				"a %s of the same namespace and name adopts them with spec.adoptRetainedState: true",
 			r.k.Finalizer(), kept.State, kept.Backups, kept.Inputs, state.RetainedFromUIDLabel, r.obj.GetUID(), r.k.Kind())
 	case cleanupReleased:
@@ -1043,14 +1058,14 @@ func (r *reconciler) recordActive(job *batchv1.Job) {
 }
 
 // resolveIdentity sets the name and kind of the identity the object's Jobs
-// run with. Immutable kinds use the identity pinned in their durable Secret:
-// the apply that wrote it records the identity it ran with, and destroy,
-// refresh and drift keep using it even when the cluster's
-// defaults.identityRef changes.
+// run with. Immutable kinds use the identity of their applied record
+// (else their attempt record): the apply records the identity it ran
+// with, and destroy, refresh and drift keep using it even when the
+// cluster's defaults.identityRef changes.
 func (r *reconciler) resolveIdentity() {
 	r.identityName, r.identityKind = r.eff.IdentityName, r.eff.IdentityKind
-	if !r.k.Mutable() && r.durable != nil && r.durable.Meta.Identity != "" {
-		r.identityName, r.identityKind = r.durable.Meta.Identity, infrav1.IdentityKind(r.durable.Meta.IdentityKind)
+	if a := r.durable.AppliedOrAttempt(); !r.k.Mutable() && a != nil && a.Identity != "" {
+		r.identityName, r.identityKind = a.Identity, infrav1.IdentityKind(a.IdentityKind)
 	}
 }
 
@@ -1413,7 +1428,7 @@ func (r *reconciler) readState(ctx context.Context, bk *Bookkeeping, prevRefresh
 			return StateView{}, err
 		}
 		if marked {
-			r.durable.Meta.Applied = true
+			r.durable.AppliedMark = true
 		}
 	}
 	if newSerial && !r.backupState(ctx, bk) {

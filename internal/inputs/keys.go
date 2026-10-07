@@ -20,13 +20,15 @@ import (
 	"github.com/captf-io/cluster-api-provider-terraform/internal/render"
 )
 
-// Annotations on the durable Secret recording the execution context of the
-// last apply (digest pinning).
+// Annotations on the durable Secret (the attempt record), the applied
+// Secret (the applied record) and the per-run Secret, recording what an
+// apply Job ran with (digest pinning).
 const (
 	// ImageAnnotation is spec.source.image as written (tag or digest).
 	ImageAnnotation = "captf.io/image"
 	// ImageDigestAnnotation is the digest the runtime resolved the image to,
-	// repo@sha256:…, from the apply Job's pod.
+	// repo@sha256:…, from the successful apply Job's pod. Only the applied
+	// Secret carries it.
 	ImageDigestAnnotation = "captf.io/image-digest"
 	// IdentityAnnotation is the TerraformClusterIdentity used.
 	IdentityAnnotation = "captf.io/identity"
@@ -34,6 +36,20 @@ const (
 	// IdentityAnnotation is a namespace-local Secret, not a
 	// TerraformClusterIdentity; absent otherwise.
 	IdentityKindAnnotation = "captf.io/identity-kind"
+	// InputsHashAnnotation is the inputs hash the Job rendered, the key the
+	// state records it under (state.InputsHashAnnotation): destroy picks
+	// the record whose hash the state has.
+	InputsHashAnnotation = "captf.io/inputs-hash"
+	// JobAnnotation names, on either record, the apply Job that mounted
+	// its files.
+	JobAnnotation = "captf.io/job"
+	// MayHaveAppliedAnnotation is "true" on the durable Secret once the
+	// attempt record's Job failed in a way that may have changed
+	// resources (its apply step ran, or it ended without a result after
+	// its runner started): destroy then renders that record, which may
+	// describe resources the applied one does not. WriteAttempt removes
+	// it, and so does a successful restore.
+	MayHaveAppliedAnnotation = "captf.io/may-have-applied"
 	// AppliedAnnotation is "true" once an apply of the object succeeded or
 	// a state backup was restored into its backend: a missing state is
 	// then a lost one, not one that was never written. It moves with the
@@ -80,7 +96,7 @@ const (
 )
 
 // Data keys: the two rendered files, and on a TerraformMachinePool's
-// Secret the cluster exports of its last successful apply.
+// durable Secret the cluster exports of its last successful apply.
 const (
 	MainTFKey = render.MainTFFile
 	TFVarsKey = render.TFVarsFile
@@ -99,5 +115,6 @@ const (
 // Name prefixes.
 const (
 	durablePrefix = "captf-inputs-"
+	appliedPrefix = "captf-applied-"
 	runPrefix     = "captf-run-"
 )

@@ -144,12 +144,17 @@ const (
 	// EventInputsChanged: the inputs hash differs from the state's and an
 	// apply of the new inputs starts.
 	EventInputsChanged = "InputsChanged"
-	// EventDigestPinned: an image digest was recorded on the durable inputs
-	// Secret, or re-pinned after an apply of a mutable kind.
+	// EventDigestPinned: a successful apply's image digest was recorded
+	// with its inputs on the applied inputs Secret, a new one or one that
+	// differs from the previous apply's.
 	EventDigestPinned = "DigestPinned"
 	// EventDigestUnknown: no digest could be pinned, or an operation runs
 	// the spec reference for lack of one.
 	EventDigestUnknown = "DigestUnknown"
+	// EventAppliedInputsUnknown: an apply succeeded, but neither its
+	// per-run Secret nor the attempt record holds its inputs any more, so
+	// the applied record still holds an older apply's.
+	EventAppliedInputsUnknown = "AppliedInputsUnknown"
 	// EventForceUnlocked: a stale state lock was force-unlocked.
 	EventForceUnlocked = "ForceUnlocked"
 	// EventStateAdopted: the state written by a successful apply was
@@ -248,7 +253,7 @@ func DocumentedEvents() []string {
 		EventDeletionStarted, EventDestroyed, EventFinalizerRemoved,
 		EventInfrastructureRetained, EventRetainedStateFound, EventRetainedStateAdopted, EventPaused, EventResumed, EventProvisioned,
 		EventProviderIDSet, EventControlPlaneEndpointSet, EventFailureDomainsChanged, EventExportsNotPublished,
-		EventInputsChanged, EventDigestPinned, EventDigestUnknown, EventForceUnlocked, EventStateAdopted,
+		EventInputsChanged, EventDigestPinned, EventDigestUnknown, EventAppliedInputsUnknown, EventForceUnlocked, EventStateAdopted,
 		EventStateLost, EventStateLocked, EventStateUnreadable, EventOutputsInvalid,
 		EventStateBackedUp, EventStateRestored, EventStateRestoreFailed,
 		EventDriftDetected, EventDriftResolved, EventDriftRemediationStarted, EventInstanceHealthy, EventInstanceUnhealthy,

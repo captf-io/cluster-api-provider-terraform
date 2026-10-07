@@ -59,12 +59,12 @@ const (
 const (
 	// stateLabel marks every Terraform state Secret.
 	stateLabel = "tfstate"
-	// imageDigestAnnotation is the durable inputs Secret's pinned
+	// imageDigestAnnotation is the applied inputs Secret's pinned
 	// repo@digest.
 	imageDigestAnnotation = "captf.io/image-digest"
-	// tfvarsKey is the durable inputs Secret's rendered variables.
+	// tfvarsKey is an inputs Secret's rendered variables.
 	tfvarsKey = "terraform.tfvars.json"
-	// mainTFKey is the durable inputs Secret's rendered root module.
+	// mainTFKey is an inputs Secret's rendered root module.
 	mainTFKey = "main.tf.json"
 	// runnerName names the runner ServiceAccount and RoleBinding.
 	runnerName = "captf-runner"
@@ -629,25 +629,26 @@ func (s *suite) expectWarningEvent(ctx context.Context, t *testing.T, name, reas
 	}
 }
 
-// durable returns the durable inputs Secret captf-inputs-<short>-<name>
-// of the CAPTF object kind name, and its decoded terraform.tfvars.json,
-// read under ctx. It fails t when the Secret or the key is missing or the JSON is
-// invalid.
-func (s *suite) durable(ctx context.Context, t *testing.T, kind, name string) (*corev1.Secret, map[string]any) {
+// applied returns the applied inputs Secret captf-applied-<short>-<name>
+// of the CAPTF object kind name (the inputs of its last successful
+// apply, with the digest it ran), and its decoded terraform.tfvars.json,
+// read under ctx. It fails t when the Secret or the key is missing or the
+// JSON is invalid.
+func (s *suite) applied(ctx context.Context, t *testing.T, kind, name string) (*corev1.Secret, map[string]any) {
 	t.Helper()
-	secretName := "captf-inputs-" + kindShort[kind] + "-" + name
+	secretName := "captf-applied-" + kindShort[kind] + "-" + name
 	sec, err := s.c.Kube.CoreV1().Secrets(s.ns).Get(ctx, secretName, metav1.GetOptions{})
 	if err != nil {
-		t.Fatalf("expected the durable inputs Secret %s/%s of %s %s: %v; inspect: %s", s.ns, secretName, kind, name, err, s.kubectlNS("get secrets"))
+		t.Fatalf("expected the applied inputs Secret %s/%s of %s %s: %v; inspect: %s", s.ns, secretName, kind, name, err, s.kubectlNS("get secrets"))
 	}
 	for _, k := range []string{tfvarsKey, mainTFKey} {
 		if len(sec.Data[k]) == 0 {
-			t.Errorf("durable inputs Secret %s/%s: expected a non-empty %s key, observed keys %v", s.ns, secretName, k, keys(sec.Data))
+			t.Errorf("applied inputs Secret %s/%s: expected a non-empty %s key, observed keys %v", s.ns, secretName, k, keys(sec.Data))
 		}
 	}
 	var vars map[string]any
 	if err := json.Unmarshal(sec.Data[tfvarsKey], &vars); err != nil {
-		t.Fatalf("durable inputs Secret %s/%s: %s is not a JSON object: %v", s.ns, secretName, tfvarsKey, err)
+		t.Fatalf("applied inputs Secret %s/%s: %s is not a JSON object: %v", s.ns, secretName, tfvarsKey, err)
 	}
 	return sec, vars
 }

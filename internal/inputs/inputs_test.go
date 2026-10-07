@@ -129,8 +129,8 @@ func dataKeys(s *corev1.Secret) []string {
 }
 
 // TestName proves Name is deterministic and produces a valid, unique Secret
-// name even for names that would push it past 253 characters, and that
-// RunName is unchanged.
+// name even for names that would push it past 253 characters, that
+// RunName is unchanged, and that AppliedName is bounded likewise.
 func TestName(t *testing.T) {
 	t.Parallel()
 	if got := Name("m", "web-0"); got != "captf-inputs-m-web-0" {
@@ -153,36 +153,54 @@ func TestName(t *testing.T) {
 	if RunName("captf-m-web-0-apply-a1-abc123") != "captf-run-captf-m-web-0-apply-a1-abc123" {
 		t.Error("RunName changed")
 	}
+	if got := AppliedName("m", "web-0"); got != "captf-applied-m-web-0" {
+		t.Errorf("AppliedName = %s", got)
+	}
+	if got := AppliedName("mp", long); len(got) > 253 || len(validation.IsDNS1123Subdomain(got)) != 0 {
+		t.Errorf("AppliedName(%d chars) = %q", len(long), got)
+	}
 }
 
-// TestWriteReadAndDigest proves Write round-trips files and Meta through
-// Read, sets the Secret's type, owner reference and labels, keeps an
-// existing digest across a same-image rewrite, clears it on an image
-// change, and that PinDigest sets an unset digest, is a no-op without
-// force, overwrites with force, and rejects an empty digest.
-func TestWriteReadAndDigest(t *testing.T) {
+// attempt returns an attempt record of files for Job job, with image
+// r:v1 and identity id.
+func attempt(files render.Files, job string) Record {
+	return Record{Files: files, Image: "r:v1", Identity: "id", InputsHash: "h1:" + job, Job: job}
+}
+
+// TestWriteAttemptRead proves WriteAttempt round-trips the attempt record
+// through Read, without a digest, and sets the Secret's type, owner
+// reference and labels; a rewrite replaces the record and removes the
+// may-have-applied mark of the one it replaces.
+func TestWriteAttemptRead(t *testing.T) {
 	t.Parallel()
 	owner := machine("m")
 	c := newClient(t, owner)
 	files := machineFiles(t, "#cloud-config\n")
-	meta := Meta{Image: "ghcr.io/x/m:v1", Identity: "id", ImageDigest: "ghcr.io/x/m@sha256:aaa"}
-	if err := Write(ctx, c, owner, files, meta); err != nil {
-		t.Fatalf("Write: %v", err)
+	rec := Record{Files: files, Image: "ghcr.io/x/m:v1", Digest: "ghcr.io/x/m@sha256:aaa", Identity: "id", IdentityKind: "Secret", InputsHash: "h1:a", Job: "j1"}
+	if err := WriteAttempt(ctx, c, owner, rec); err != nil {
+		t.Fatalf("WriteAttempt: %v", err)
 	}
 	d, err := Read(ctx, c, ns, "m", "m")
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
-	if !bytes.Equal(d.Files.MainTF, files.MainTF) || !bytes.Equal(d.Files.TFVars, files.TFVars) {
-		t.Errorf("files do not round-trip (main %d/%d bytes, tfvars %d/%d bytes)", len(d.Files.MainTF), len(files.MainTF), len(d.Files.TFVars), len(files.TFVars))
+	want := rec
+	want.Digest = ""
+	if d.Attempt == nil || !bytes.Equal(d.Attempt.Files.MainTF, files.MainTF) || !bytes.Equal(d.Attempt.Files.TFVars, files.TFVars) {
+		t.Fatalf("files do not round-trip: %+v", d.Attempt)
 	}
-	if d.Meta != meta {
-		t.Errorf("meta = %+v, want %+v", d.Meta, meta)
+	got := *d.Attempt
+	got.Files = files
+	if got.Image != want.Image || got.Digest != "" || got.Identity != want.Identity || got.IdentityKind != want.IdentityKind ||
+		got.InputsHash != want.InputsHash || got.Job != want.Job || got.MayHaveApplied {
+		t.Errorf("attempt = %+v, want %+v", got, want)
+	}
+	if d.Applied != nil || d.AppliedOrAttempt() != d.Attempt || d.LastAttempt() != d.Attempt {
+		t.Errorf("applied = %+v, want none", d.Applied)
 	}
 	if d.Secret.Name != "captf-inputs-m-m" || d.Secret.ResourceVersion == "" || len(d.Secret.OwnerReferences) != 1 || d.Secret.OwnerReferences[0].UID != owner.UID {
 		t.Errorf("Secret metadata = %+v", d.Secret)
 	}
-
 	s := getSecret(t, c, "captf-inputs-m-m")
 	if s.Type != corev1.SecretTypeOpaque || !slices.Equal(dataKeys(s), []string{MainTFKey, TFVarsKey}) {
 		t.Errorf("type %s, data keys %v", s.Type, dataKeys(s))
@@ -193,82 +211,95 @@ func TestWriteReadAndDigest(t *testing.T) {
 	if s.Labels[state.ManagedLabel] != "true" || s.Labels[state.OwnerKindLabel] != "TerraformMachine" || s.Labels[state.OwnerNameLabel] != "m" {
 		t.Errorf("labels = %v", s.Labels)
 	}
+	if _, ok := s.Annotations[ImageDigestAnnotation]; ok {
+		t.Errorf("the attempt record carries a digest: %v", s.Annotations)
+	}
 
-	// Rewrite with the same image: the digest is kept, a new digest in Meta
-	// does not overwrite it.
-	same := Meta{Image: "ghcr.io/x/m:v1", Identity: "id2", ImageDigest: "ghcr.io/x/m@sha256:bbb"}
-	if err := Write(ctx, c, owner, machineFiles(t, "#cloud-config\nnew\n"), same); err != nil {
+	if err := SetMayHaveApplied(ctx, c, owner); err != nil {
+		t.Fatal(err)
+	}
+	if d, _ = Read(ctx, c, ns, "m", "m"); !d.Attempt.MayHaveApplied {
+		t.Error("SetMayHaveApplied did not mark the attempt record")
+	}
+	if err := WriteAttempt(ctx, c, owner, Record{Files: machineFiles(t, "#cloud-config\nnew\n"), Image: "ghcr.io/x/m:v2", Identity: "id2", InputsHash: "h1:b", Job: "j2"}); err != nil {
 		t.Fatalf("rewrite: %v", err)
 	}
 	d, _ = Read(ctx, c, ns, "m", "m")
-	if d.Meta.Identity != "id2" || d.Meta.ImageDigest != "ghcr.io/x/m@sha256:aaa" {
-		t.Errorf("after rewrite meta = %+v, want the original digest", d.Meta)
+	if a := d.Attempt; a.Image != "ghcr.io/x/m:v2" || a.Identity != "id2" || a.IdentityKind != "" || a.InputsHash != "h1:b" || a.Job != "j2" || a.MayHaveApplied {
+		t.Errorf("after rewrite attempt = %+v", a)
 	}
-
-	// Rewrite with a new image: v1's digest no longer describes the image,
-	// so it is cleared rather than paired with v2 (a failed upgrade would
-	// otherwise run v1's code against a state v2 partly wrote).
-	if err := Write(ctx, c, owner, machineFiles(t, "#cloud-config\nnew\n"), Meta{Image: "ghcr.io/x/m:v2", Identity: "id2"}); err != nil {
-		t.Fatalf("rewrite: %v", err)
+	if err := SetMayHaveApplied(ctx, c, owner); err != nil {
+		t.Fatal(err)
 	}
-	d, _ = Read(ctx, c, ns, "m", "m")
-	if d.Meta.Image != "ghcr.io/x/m:v2" || d.Meta.ImageDigest != "" {
-		t.Errorf("after an image change meta = %+v, want v2 and no digest", d.Meta)
+	if err := ClearMayHaveApplied(ctx, c, owner); err != nil {
+		t.Fatal(err)
 	}
-
-	// PinDigest: sets an unset digest without force, then is a no-op
-	// without force; overwrites with force.
-	if _, err := PinDigest(ctx, c, owner, "ghcr.io/x/m@sha256:aaa", false); err != nil {
-		t.Fatalf("PinDigest: %v", err)
-	}
-	if _, err := PinDigest(ctx, c, owner, "ghcr.io/x/m@sha256:ccc", false); err != nil {
-		t.Fatalf("PinDigest: %v", err)
-	}
-	if d, _ = Read(ctx, c, ns, "m", "m"); d.Meta.ImageDigest != "ghcr.io/x/m@sha256:aaa" {
-		t.Errorf("PinDigest(force=false) overwrote the digest: %s", d.Meta.ImageDigest)
-	}
-	if _, err := PinDigest(ctx, c, owner, "ghcr.io/x/m@sha256:ccc", true); err != nil {
-		t.Fatalf("PinDigest: %v", err)
-	}
-	if d, _ = Read(ctx, c, ns, "m", "m"); d.Meta.ImageDigest != "ghcr.io/x/m@sha256:ccc" {
-		t.Errorf("PinDigest(force=true) = %s", d.Meta.ImageDigest)
-	}
-	if _, err := PinDigest(ctx, c, owner, "", true); !errors.Is(err, ErrEmptyDigest) {
-		t.Errorf("empty digest: err = %v", err)
+	if d, _ = Read(ctx, c, ns, "m", "m"); d.Attempt.MayHaveApplied {
+		t.Error("ClearMayHaveApplied left the mark")
 	}
 }
 
-// TestPinDigestSetsWhenUnset proves PinDigest reports ErrNotFound before
-// the Secret exists, and that both PinDigest and a Write carrying a digest
-// set it when none is recorded yet.
-func TestPinDigestSetsWhenUnset(t *testing.T) {
+// TestPromote proves Promote writes the applied record to a Secret of its
+// own, owned and labeled like the durable one, with its digest, and
+// replaces it whole on the next promotion (a digest included); it leaves
+// the attempt record alone, and Read returns the applied record also
+// without a durable Secret.
+func TestPromote(t *testing.T) {
 	t.Parallel()
 	owner := machine("m")
 	c := newClient(t, owner)
-	if _, err := PinDigest(ctx, c, owner, "r@sha256:1", false); !errors.Is(err, ErrNotFound) {
-		t.Errorf("PinDigest without Secret: err = %v", err)
+	if err := WriteAttempt(ctx, c, owner, attempt(machineFiles(t, "b"), "j2")); err != nil {
+		t.Fatal(err)
 	}
-	if err := Write(ctx, c, owner, machineFiles(t, "x"), Meta{Image: "r:v1", Identity: "id"}); err != nil {
-		t.Fatalf("Write: %v", err)
+	applied := Record{Files: machineFiles(t, "a"), Image: "r:v1", Digest: "r@sha256:1", Identity: "id", InputsHash: "h1:j1", Job: "j1"}
+	if err := Promote(ctx, c, owner, applied); err != nil {
+		t.Fatalf("Promote: %v", err)
 	}
-	if _, err := PinDigest(ctx, c, owner, "r@sha256:1", false); err != nil {
-		t.Fatalf("PinDigest: %v", err)
+	d, err := Read(ctx, c, ns, "m", "m")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if d, _ := Read(ctx, c, ns, "m", "m"); d.Meta.ImageDigest != "r@sha256:1" {
-		t.Errorf("digest = %q", d.Meta.ImageDigest)
+	if d.Applied == nil || d.Applied.Job != "j1" || d.Applied.Digest != "r@sha256:1" || d.Applied.InputsHash != "h1:j1" ||
+		!bytes.Equal(d.Applied.Files.TFVars, applied.Files.TFVars) {
+		t.Errorf("applied = %+v", d.Applied)
 	}
-	// A Write with a digest sets it when none is recorded.
-	c2 := newClient(t, owner)
-	_ = Write(ctx, c2, owner, machineFiles(t, "x"), Meta{Image: "r:v1", Identity: "id"})
-	_ = Write(ctx, c2, owner, machineFiles(t, "x"), Meta{Image: "r:v1", Identity: "id", ImageDigest: "r@sha256:2"})
-	if d, _ := Read(ctx, c2, ns, "m", "m"); d.Meta.ImageDigest != "r@sha256:2" {
-		t.Errorf("Write did not set an unset digest: %q", d.Meta.ImageDigest)
+	if d.Attempt == nil || d.Attempt.Job != "j2" || d.AppliedOrAttempt() != d.Applied {
+		t.Errorf("attempt = %+v; AppliedOrAttempt must prefer the applied record", d.Attempt)
+	}
+	if d.AppliedSecret.Name != "captf-applied-m-m" {
+		t.Errorf("applied Secret metadata = %+v", d.AppliedSecret)
+	}
+	s := getSecret(t, c, AppliedName("m", "m"))
+	if s.Type != corev1.SecretTypeOpaque || !slices.Equal(dataKeys(s), []string{MainTFKey, TFVarsKey}) {
+		t.Errorf("type %s, data keys %v", s.Type, dataKeys(s))
+	}
+	if len(s.OwnerReferences) != 1 || s.OwnerReferences[0].UID != "uid-m" || s.OwnerReferences[0].BlockOwnerDeletion != nil {
+		t.Errorf("ownerRefs = %+v", s.OwnerReferences)
+	}
+	if s.Labels[state.ManagedLabel] != "true" || s.Labels[state.OwnerKindLabel] != "TerraformMachine" || s.Labels[state.OwnerNameLabel] != "m" {
+		t.Errorf("labels = %v", s.Labels)
+	}
+
+	next := attempt(machineFiles(t, "b"), "j2")
+	if err := Promote(ctx, c, owner, next); err != nil {
+		t.Fatalf("Promote: %v", err)
+	}
+	if d, _ = Read(ctx, c, ns, "m", "m"); d.Applied.Job != "j2" || d.Applied.Digest != "" {
+		t.Errorf("after a second promotion applied = %+v, want j2 without a digest", d.Applied)
+	}
+
+	if err := c.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: Name("m", "m")}}); err != nil {
+		t.Fatal(err)
+	}
+	d, err = Read(ctx, c, ns, "m", "m")
+	if err != nil || d.Attempt != nil || d.Applied == nil || d.Secret.Name != "" || d.AppliedOrAttempt() != d.Applied {
+		t.Errorf("Read without the durable Secret = %+v, %v; want the applied record alone", d, err)
 	}
 }
 
 // TestMarkApplied: MarkApplied needs the Secret, sets the marker (again
-// without harm) and leaves the rest alone, and Read reports it; a Write, also one that changes the image and so clears
-// the digest, keeps it.
+// without harm) and leaves the rest alone, and Read reports it; a
+// WriteAttempt keeps it.
 func TestMarkApplied(t *testing.T) {
 	t.Parallel()
 	owner := machine("m")
@@ -276,33 +307,33 @@ func TestMarkApplied(t *testing.T) {
 	if err := MarkApplied(ctx, c, owner); !errors.Is(err, ErrNotFound) {
 		t.Errorf("MarkApplied without Secret: err = %v", err)
 	}
-	if err := Write(ctx, c, owner, machineFiles(t, "x"), Meta{Image: "r:v1", Identity: "id", ImageDigest: "r@sha256:1"}); err != nil {
-		t.Fatalf("Write: %v", err)
+	if err := WriteAttempt(ctx, c, owner, attempt(machineFiles(t, "x"), "j1")); err != nil {
+		t.Fatalf("WriteAttempt: %v", err)
 	}
-	if d, _ := Read(ctx, c, ns, "m", "m"); d.Meta.Applied {
+	if d, _ := Read(ctx, c, ns, "m", "m"); d.AppliedMark {
 		t.Error("a fresh Secret reads applied")
 	}
 	for i := range 2 {
 		if err := MarkApplied(ctx, c, owner); err != nil {
 			t.Fatalf("MarkApplied #%d: %v", i+1, err)
 		}
-		if d, _ := Read(ctx, c, ns, "m", "m"); !d.Meta.Applied || d.Meta.ImageDigest != "r@sha256:1" {
-			t.Errorf("after MarkApplied #%d: %+v", i+1, d.Meta)
+		if d, _ := Read(ctx, c, ns, "m", "m"); !d.AppliedMark || d.Attempt.Job != "j1" {
+			t.Errorf("after MarkApplied #%d: %+v", i+1, d)
 		}
 	}
-	if err := Write(ctx, c, owner, machineFiles(t, "y"), Meta{Image: "r:v2", Identity: "id"}); err != nil {
-		t.Fatalf("Write: %v", err)
+	if err := WriteAttempt(ctx, c, owner, Record{Files: machineFiles(t, "y"), Image: "r:v2", Job: "j2"}); err != nil {
+		t.Fatalf("WriteAttempt: %v", err)
 	}
 	d, err := Read(ctx, c, ns, "m", "m")
-	if err != nil || !d.Meta.Applied || d.Meta.ImageDigest != "" {
-		t.Errorf("after an image change: %+v, %v; want applied, digest cleared", d, err)
+	if err != nil || !d.AppliedMark {
+		t.Errorf("after a rewrite: %+v, %v; want applied", d, err)
 	}
 }
 
-// TestInterruptedApply: SetInterruptedApply records the interrupted apply
-// Job on the durable Secret, Read reports it, a Write keeps it, and
-// ClearInterruptedApply removes it (twice without harm); both report a
-// missing Secret as ErrNotFound.
+// TestInterruptedApply: SetInterruptedApply records the unconfirmed apply
+// Job on the durable Secret, Read reports it, a WriteAttempt keeps it,
+// and ClearInterruptedApply removes it (twice without harm); both report a
+// missing Secret as ErrNotFound, as SetMayHaveApplied does.
 func TestInterruptedApply(t *testing.T) {
 	t.Parallel()
 	owner := machine("m")
@@ -313,8 +344,11 @@ func TestInterruptedApply(t *testing.T) {
 	if err := ClearInterruptedApply(ctx, c, owner); !errors.Is(err, ErrNotFound) {
 		t.Errorf("ClearInterruptedApply without Secret: err = %v", err)
 	}
-	if err := Write(ctx, c, owner, machineFiles(t, "x"), Meta{Image: "r:v1", Identity: "id"}); err != nil {
-		t.Fatalf("Write: %v", err)
+	if err := SetMayHaveApplied(ctx, c, owner); !errors.Is(err, ErrNotFound) {
+		t.Errorf("SetMayHaveApplied without Secret: err = %v", err)
+	}
+	if err := WriteAttempt(ctx, c, owner, attempt(machineFiles(t, "x"), "j1")); err != nil {
+		t.Fatalf("WriteAttempt: %v", err)
 	}
 	if d, _ := Read(ctx, c, ns, "m", "m"); d.InterruptedApply != "" {
 		t.Errorf("a fresh Secret names interrupted apply %q", d.InterruptedApply)
@@ -322,11 +356,11 @@ func TestInterruptedApply(t *testing.T) {
 	if err := SetInterruptedApply(ctx, c, owner, "j1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := Write(ctx, c, owner, machineFiles(t, "y"), Meta{Image: "r:v1", Identity: "id"}); err != nil {
-		t.Fatalf("Write: %v", err)
+	if err := WriteAttempt(ctx, c, owner, attempt(machineFiles(t, "y"), "j2")); err != nil {
+		t.Fatalf("WriteAttempt: %v", err)
 	}
 	if d, _ := Read(ctx, c, ns, "m", "m"); d.InterruptedApply != "j1" {
-		t.Errorf("interrupted apply after Write = %q, want j1", d.InterruptedApply)
+		t.Errorf("interrupted apply after WriteAttempt = %q, want j1", d.InterruptedApply)
 	}
 	for i := range 2 {
 		if err := ClearInterruptedApply(ctx, c, owner); err != nil {
@@ -339,8 +373,9 @@ func TestInterruptedApply(t *testing.T) {
 	}
 }
 
-// TestWriteOwnsTheWholeSecret: exactly one ownerRef and exactly two data
-// keys even when the Secret had more; foreign labels survive.
+// TestWriteOwnsTheWholeSecret: WriteAttempt leaves exactly one ownerRef
+// and exactly two data keys even when the Secret had more; foreign labels
+// survive.
 func TestWriteOwnsTheWholeSecret(t *testing.T) {
 	t.Parallel()
 	owner := machine(strings.Repeat("n", 70))
@@ -353,8 +388,8 @@ func TestWriteOwnsTheWholeSecret(t *testing.T) {
 		Data: map[string][]byte{"stale": []byte("x"), MainTFKey: []byte("old")},
 	}
 	c := newClient(t, owner, pre)
-	if err := Write(ctx, c, owner, machineFiles(t, "x"), Meta{Image: "r:v1", Identity: "id"}); err != nil {
-		t.Fatalf("Write: %v", err)
+	if err := WriteAttempt(ctx, c, owner, attempt(machineFiles(t, "x"), "j1")); err != nil {
+		t.Fatalf("WriteAttempt: %v", err)
 	}
 	s := getSecret(t, c, pre.Name)
 	if len(s.OwnerReferences) != 1 || s.OwnerReferences[0].UID != "uid-m" {
@@ -373,8 +408,9 @@ func TestWriteOwnsTheWholeSecret(t *testing.T) {
 	}
 }
 
-// TestReadAndDeleteErrors proves Read reports ErrNotFound for a missing
-// Secret and Delete tolerates one, that Write on an owner kind unknown to
+// TestReadAndDeleteErrors proves Read reports ErrNotFound when both
+// Secrets are missing, Delete tolerates them missing and removes both,
+// that WriteAttempt on an owner kind unknown to
 // state reports state.ErrUnknownKind, that Delete on an object the scheme
 // does not resolve errors, and that a non-NotFound Get failure from Read is
 // wrapped rather than reported as ErrNotFound.
@@ -390,7 +426,8 @@ func TestReadAndDeleteErrors(t *testing.T) {
 			t.Errorf("Delete: %v", err)
 		}
 	}
-	_ = Write(ctx, c, owner, machineFiles(t, "x"), Meta{Image: "r", Identity: "id"})
+	_ = WriteAttempt(ctx, c, owner, attempt(machineFiles(t, "x"), "j1"))
+	_ = Promote(ctx, c, owner, attempt(machineFiles(t, "x"), "j1"))
 	if err := Delete(ctx, c, owner); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
@@ -399,7 +436,7 @@ func TestReadAndDeleteErrors(t *testing.T) {
 	}
 	// Owners without an inputs Secret, or unknown to the scheme.
 	tmpl := &infrav1.TerraformMachineTemplate{ObjectMeta: metav1.ObjectMeta{Name: "t", Namespace: ns}}
-	if err := Write(ctx, c, tmpl, render.Files{}, Meta{}); !errors.Is(err, state.ErrUnknownKind) {
+	if err := WriteAttempt(ctx, c, tmpl, Record{}); !errors.Is(err, state.ErrUnknownKind) {
 		t.Errorf("template owner: err = %v", err)
 	}
 	if err := Delete(ctx, c, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "x", Namespace: ns}}); err == nil {
@@ -417,17 +454,32 @@ func TestReadAndDeleteErrors(t *testing.T) {
 }
 
 // TestRunSecret proves CreateRun is idempotent and sets the Job owner
-// reference, labels and data, and that DeleteRun removes the Secret and
-// reports true only on the call that deleted it.
+// reference, labels, data and the record's annotations, that ReadRun
+// reads the record back under the Job's name, and that DeleteRun removes
+// the Secret and reports true only on the call that deleted it.
 func TestRunSecret(t *testing.T) {
 	t.Parallel()
 	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "captf-m-m-apply-a1-abc123", Namespace: ns, UID: "uid-job"}}
 	c := newClient(t, job)
 	files := machineFiles(t, "x")
+	if _, err := ReadRun(ctx, c, job); !errors.Is(err, ErrNotFound) {
+		t.Errorf("ReadRun without Secret: err = %v", err)
+	}
+	rec := Record{Files: files, Image: "r:v1", Digest: "r@sha256:1", Identity: "id", InputsHash: "h1:a", Job: "ignored", MayHaveApplied: true}
 	for range 2 { // AlreadyExists is fine
-		if err := CreateRun(ctx, c, job, files); err != nil {
+		if err := CreateRun(ctx, c, job, rec); err != nil {
 			t.Fatalf("CreateRun: %v", err)
 		}
+	}
+	got, err := ReadRun(ctx, c, job)
+	if err != nil || got.Job != job.Name || got.Image != "r:v1" || got.Identity != "id" || got.InputsHash != "h1:a" ||
+		got.Digest != "" || got.MayHaveApplied || !bytes.Equal(got.Files.TFVars, files.TFVars) {
+		t.Errorf("ReadRun = %+v, %v", got, err)
+	}
+	other := job.DeepCopy()
+	other.UID = "uid-other"
+	if _, err := ReadRun(ctx, c, other); !errors.Is(err, ErrNotFound) {
+		t.Errorf("ReadRun of another Job of that name: err = %v, want ErrNotFound", err)
 	}
 	s := getSecret(t, c, RunName(job.Name))
 	if len(s.OwnerReferences) != 1 || s.OwnerReferences[0].Kind != "Job" || s.OwnerReferences[0].UID != "uid-job" || s.OwnerReferences[0].BlockOwnerDeletion != nil {
@@ -461,7 +513,7 @@ func TestRunSecretReplacesStale(t *testing.T) {
 	}, Data: map[string][]byte{"old": []byte("x")}}
 	c := newClient(t, job, stale)
 	files := machineFiles(t, "x")
-	if err := CreateRun(ctx, c, job, files); err != nil {
+	if err := CreateRun(ctx, c, job, Record{Files: files}); err != nil {
 		t.Fatalf("CreateRun: %v", err)
 	}
 	s := getSecret(t, c, RunName(job.Name))
@@ -471,20 +523,20 @@ func TestRunSecretReplacesStale(t *testing.T) {
 }
 
 // TestLastControlPlaneInitialized proves LastControlPlaneInitialized reads
-// control_plane_initialized from a Durable's tfvars and is false for a nil
-// Durable, tfvars without the key or unparsable tfvars.
+// control_plane_initialized from a Record's tfvars and is false for a nil
+// Record, tfvars without the key or unparsable tfvars.
 func TestLastControlPlaneInitialized(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name string
-		d    *Durable
+		d    *Record
 		want bool
 	}{
 		{"nil", nil, false},
-		{"true", &Durable{Files: clusterFiles(t, true)}, true},
-		{"false", &Durable{Files: clusterFiles(t, false)}, false},
-		{"machine tfvars have no key", &Durable{Files: machineFiles(t, "x")}, false},
-		{"unparsable", &Durable{Files: render.Files{TFVars: []byte("{")}}, false},
+		{"true", &Record{Files: clusterFiles(t, true)}, true},
+		{"false", &Record{Files: clusterFiles(t, false)}, false},
+		{"machine tfvars have no key", &Record{Files: machineFiles(t, "x")}, false},
+		{"unparsable", &Record{Files: render.Files{TFVars: []byte("{")}}, false},
 	}
 	for _, c := range cases {
 		if got := LastControlPlaneInitialized(c.d); got != c.want {
@@ -495,14 +547,14 @@ func TestLastControlPlaneInitialized(t *testing.T) {
 
 // TestLastControlPlaneEndpointNull proves LastControlPlaneEndpointNull is
 // true for a null or absent control_plane_endpoint, false once it is set,
-// false for a nil Durable or unparsable tfvars, and true for freshly
+// false for a nil Record or unparsable tfvars, and true for freshly
 // rendered cluster tfvars before the first apply.
 func TestLastControlPlaneEndpointNull(t *testing.T) {
 	t.Parallel()
-	tfvars := func(s string) *Durable { return &Durable{Files: render.Files{TFVars: []byte(s)}} }
+	tfvars := func(s string) *Record { return &Record{Files: render.Files{TFVars: []byte(s)}} }
 	cases := []struct {
 		name string
-		d    *Durable
+		d    *Record
 		want bool
 	}{
 		{"nil: no apply yet", nil, false},
@@ -510,7 +562,7 @@ func TestLastControlPlaneEndpointNull(t *testing.T) {
 		{"absent", tfvars(`{}`), true},
 		{"set", tfvars(`{"control_plane_endpoint":{"host":"h","port":6443}}`), false},
 		{"unparsable", tfvars(`{`), false},
-		{"rendered cluster files", &Durable{Files: clusterFiles(t, false)}, true},
+		{"rendered cluster files", &Record{Files: clusterFiles(t, false)}, true},
 	}
 	for _, c := range cases {
 		if got := LastControlPlaneEndpointNull(c.d); got != c.want {

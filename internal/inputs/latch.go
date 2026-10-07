@@ -20,12 +20,13 @@ import (
 	"encoding/json"
 )
 
-// LastControlPlaneInitialized reports whether d's last rendered cluster
-// tfvars had control_plane_initialized true. The cluster input is latched
-// from it, because Cluster status is not moved by clusterctl move. Read it
-// before rendering and writing the next inputs: Write overwrites the
-// tfvars. Absent, false, unparsable or a nil Durable is false.
-func LastControlPlaneInitialized(d *Durable) bool {
+// LastControlPlaneInitialized reports whether d's rendered cluster tfvars
+// had control_plane_initialized true; pass the attempt record, the tfvars
+// of the apply that started last. The cluster input is latched from it,
+// because Cluster status is not moved by clusterctl move. Read it before
+// rendering and writing the next inputs: WriteAttempt overwrites the
+// tfvars. Absent, false, unparsable or a nil Record is false.
+func LastControlPlaneInitialized(d *Record) bool {
 	if d == nil {
 		return false
 	}
@@ -38,11 +39,12 @@ func LastControlPlaneInitialized(d *Durable) bool {
 	return v.ControlPlaneInitialized
 }
 
-// LastControlPlaneEndpointNull reports whether d's last rendered cluster
-// tfvars had a null control_plane_endpoint: the module owned the endpoint
-// on that apply, so its output may be written to spec. A nil Durable (no
+// LastControlPlaneEndpointNull reports whether d's rendered cluster tfvars
+// had a null control_plane_endpoint; pass the record of the apply whose
+// outputs are read, the applied one. The module owned the endpoint on
+// that apply, so its output may be written to spec. A nil Record (no
 // apply yet) or unparsable tfvars is false; an absent key counts as null.
-func LastControlPlaneEndpointNull(d *Durable) bool {
+func LastControlPlaneEndpointNull(d *Record) bool {
 	if d == nil {
 		return false
 	}

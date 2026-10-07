@@ -1483,7 +1483,7 @@ func TestHoldExportsPartialApplyRevertApproved(t *testing.T) {
 }
 
 // dropRecord removes the record of the applied exports from the durable
-// Secret, as inputs.Write does when it no longer fits next to the
+// Secret, as inputs.WriteAttempt does when it no longer fits next to the
 // rendered files: their hash stays.
 func (e *holdEnv) dropRecord() {
 	e.t.Helper()

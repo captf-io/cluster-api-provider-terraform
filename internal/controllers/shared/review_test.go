@@ -48,6 +48,7 @@ import (
 	"github.com/captf-io/cluster-api-provider-terraform/internal/jobs"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/locks"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/metrics"
+	"github.com/captf-io/cluster-api-provider-terraform/internal/render"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/state"
 )
 
@@ -121,7 +122,7 @@ func TestHealthCheckInterval(t *testing.T) {
 				m.Status.LastRefresh = &metav1.Time{Time: t0.Add(-10 * time.Minute)}
 			}))...)
 			k := e.kindFor(t, readyOwner)
-			if err := inputs.Write(t.Context(), e.c, k.obj, renderMachine(t), inputs.Meta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
+			if err := writeInputs(t.Context(), e.c, k.obj, renderMachine(t), testMeta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
 				t.Fatal(err)
 			}
 			e.state.st = &state.State{InputsHash: "h1:x"}
@@ -229,15 +230,16 @@ func TestStartJobMarksRemediation(t *testing.T) {
 	}
 }
 
-// TestPinDigestSkipsAnotherImage: a successful apply that ran v1 does not
-// pin v1's digest onto a durable Secret that records v2 (the image changed
-// and inputs.Write cleared the pin).
-func TestPinDigestSkipsAnotherImage(t *testing.T) {
+// TestPromotePairsDigestWithItsImage: a successful apply that ran v1,
+// after which a v2 apply started (the attempt record now holds v2), is
+// promoted from its own per-run Secret: the applied record holds v1's
+// inputs, image and digest, never v1's digest paired with v2.
+func TestPromotePairsDigestWithItsImage(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, world(machine(withFinalizer, notPaused))...)
 	k := e.kindFor(t, readyOwner)
 	k.mutable = true
-	if err := inputs.Write(t.Context(), e.c, k.obj, renderMachine(t), inputs.Meta{Image: "registry.example/mod:2.0", Identity: testIdentity}); err != nil {
+	if err := writeInputs(t.Context(), e.c, k.obj, renderMachine(t), testMeta{Image: "registry.example/mod:2.0", Identity: testIdentity}); err != nil {
 		t.Fatal(err)
 	}
 	durable, err := inputs.Read(t.Context(), e.c, testNS, "m", testName)
@@ -245,16 +247,26 @@ func TestPinDigestSkipsAnotherImage(t *testing.T) {
 		t.Fatal(err)
 	}
 	old := job("a", jobs.OpApply, jobs.Succeeded, t0)
-	old.Spec.Template.Spec.Containers = []corev1.Container{{Name: jobs.SourceContainer, Image: "registry.example/mod:1.0"}}
+	old.UID = "uid-a"
+	v1 := inputs.Record{Files: render.Files{MainTF: []byte(`{"v":1}`), TFVars: []byte(`{}`)}, Image: "registry.example/mod:1.0", Identity: testIdentity, InputsHash: "h1:v1"}
+	if err := inputs.CreateRun(t.Context(), e.c, &old, v1); err != nil {
+		t.Fatal(err)
+	}
 	pod := corev1.Pod{}
 	pod.Spec.Containers = []corev1.Container{{Name: jobs.SourceContainer, Image: "registry.example/mod:1.0"}}
-	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: jobs.SourceContainer, ImageID: "registry.example/mod@sha256:" + strings.Repeat("a", 64)}}
-	pinned, err := pinDigest(t.Context(), e.d, k, &finished{job: &old, ok: true, pod: &pod}, durable)
-	if err != nil || pinned != "" {
-		t.Fatalf("pinDigest = %q, %v; want nothing pinned", pinned, err)
+	digest := "registry.example/mod@sha256:" + strings.Repeat("a", 64)
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: jobs.SourceContainer, ImageID: digest}}
+	bk := &Bookkeeping{}
+	if err := bk.promote(t.Context(), e.d, k, &finished{job: &old, ok: true, pod: &pod}, durable); err != nil {
+		t.Fatal(err)
 	}
-	if d, _ := inputs.Read(t.Context(), e.c, testNS, "m", testName); d.Meta.ImageDigest != "" {
-		t.Errorf("digest %s pinned onto the v2 Secret", d.Meta.ImageDigest)
+	d, err := inputs.Read(t.Context(), e.c, testNS, "m", testName)
+	if err != nil || d.Applied == nil || d.Applied.Image != v1.Image || d.Applied.Digest != digest || d.Applied.InputsHash != "h1:v1" ||
+		d.Applied.Job != "a" || string(d.Applied.Files.MainTF) != `{"v":1}` {
+		t.Errorf("applied = %+v, %v; want v1's inputs with v1's digest", d.Applied, err)
+	}
+	if d.Attempt == nil || d.Attempt.Image != "registry.example/mod:2.0" {
+		t.Errorf("the promotion touched the attempt record: %+v", d.Attempt)
 	}
 }
 
@@ -270,7 +282,7 @@ func TestIdentityPinnedForDestroy(t *testing.T) {
 	k := e.kindFor(t, OwnerInfo{HasOwnerRef: true, Cluster: cluster(false), InfraCluster: &infrav1.TerraformCluster{
 		Spec: infrav1.TerraformClusterSpec{Defaults: &infrav1.TerraformClusterDefaults{IdentityRef: infrav1.IdentityReference{Name: "other"}}},
 	}})
-	if err := inputs.Write(t.Context(), e.c, k.obj, renderMachine(t), inputs.Meta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
+	if err := writeInputs(t.Context(), e.c, k.obj, renderMachine(t), testMeta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
 		t.Fatal(err)
 	}
 	e.state.st = &state.State{InputsHash: "h1:x"}
@@ -426,7 +438,7 @@ func TestDurableReadOncePerReconcile(t *testing.T) {
 	k := e.kindFor(t, readyOwner)
 	k.mutable = true
 	k.in = machineIn()
-	if err := inputs.Write(t.Context(), e.c, k.obj, renderMachine(t), inputs.Meta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
+	if err := writeInputs(t.Context(), e.c, k.obj, renderMachine(t), testMeta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
 		t.Fatal(err)
 	}
 	h, err := hash.Inputs(contract.RoleMachine, "registry.example/mod:1.0", machineIn())
@@ -740,7 +752,7 @@ func TestInvalidJobPolicy(t *testing.T) {
 	t.Run("destroy still starts", func(t *testing.T) {
 		t.Parallel()
 		e := newEnv(t, world(machine(deleting, notPaused, withShortDeadline))...)
-		if err := inputs.Write(t.Context(), e.c, machine(), renderMachine(t), inputs.Meta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
+		if err := writeInputs(t.Context(), e.c, machine(), renderMachine(t), testMeta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
 			t.Fatal(err)
 		}
 		e.state.st = &state.State{InputsHash: "h1:x"}
