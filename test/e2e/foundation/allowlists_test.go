@@ -87,11 +87,18 @@ func compile(list []allowed) []*regexp.Regexp {
 	return out
 }
 
+// leaseCreateRace matches the line client-go's leader election logs when
+// two replicas start together and both try to create the leader Lease:
+// the loser's create fails with AlreadyExists, it logs this as an E line
+// and then competes for the Lease normally. It is expected with more than
+// one replica and says nothing about the manager's health.
+var leaseCreateRace = regexp.MustCompile(`leaderelection\.go:\d+\] "Error initially creating lease lock" err="leases\.coordination\.k8s\.io \\"` + leaderLease + `\\" already exists"`)
+
 // captfLogRules returns the rules CAPTF's manager log is held to:
-// health.DefaultFatal (panic, fatal error, klog E and F lines) with no
-// allowlist.
+// health.DefaultFatal (panic, fatal error, klog E and F lines), excusing
+// only leaseCreateRace.
 func captfLogRules() health.Rules {
-	return health.Rules{Fatal: health.DefaultFatal()}
+	return health.Rules{Fatal: health.DefaultFatal(), Allow: []*regexp.Regexp{leaseCreateRace}}
 }
 
 // componentLogRules returns the rules that fail the other components'
