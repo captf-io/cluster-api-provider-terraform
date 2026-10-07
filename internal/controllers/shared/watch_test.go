@@ -81,7 +81,8 @@ func TestPredicates(t *testing.T) {
 
 // TestInheritedPolicyChanged proves InheritedPolicyChanged passes only a
 // TerraformCluster update that changes what its machines and pools
-// inherit: spec.defaults, its identityRef or its drift policy; not its
+// inherit: spec.defaults, its identityRef, drift policy or
+// deletionPolicy; not its
 // source, a status write, or another kind.
 func TestInheritedPolicyChanged(t *testing.T) {
 	t.Parallel()
@@ -104,6 +105,10 @@ func TestInheritedPolicyChanged(t *testing.T) {
 			tc.Spec.Drift = &infrav1.DriftPolicy{Action: infrav1.DriftActionRemediate}
 		}, true},
 		{"spec.identityRef", func(tc *infrav1.TerraformCluster) { tc.Spec.IdentityRef.Name = "other" }, true},
+		{"spec.deletionPolicy", func(tc *infrav1.TerraformCluster) { tc.Spec.DeletionPolicy = infrav1.DeletionPolicyRetain }, true},
+		{"defaults.deletionPolicy", func(tc *infrav1.TerraformCluster) {
+			tc.Spec.Defaults = &infrav1.TerraformClusterDefaults{DeletionPolicy: infrav1.DeletionPolicyRetain}
+		}, true},
 		{"spec.source", func(tc *infrav1.TerraformCluster) { tc.Spec.Source.Image = "registry.example/c:2" }, false},
 		{"status", func(tc *infrav1.TerraformCluster) { tc.Status.FailureDomains = []clusterv1.FailureDomain{{Name: "a"}} }, false},
 	} {

@@ -64,7 +64,8 @@ func ClusterNetworkChanged() predicate.Funcs {
 
 // InheritedPolicyChanged passes TerraformCluster updates that change what
 // its machines and pools inherit from it (Resolve): spec.defaults, or the
-// cluster's own identityRef or drift policy, which they fall back to. It
+// cluster's own identityRef, drift policy or deletionPolicy, which they
+// fall back to. It
 // returns the predicate to register on a watch, with
 // TerraformClusterToObjects.
 func InheritedPolicyChanged() predicate.Funcs {
@@ -83,7 +84,7 @@ func InheritedPolicyChanged() predicate.Funcs {
 // inheritedPolicy returns the part of tc's spec its machines and pools
 // inherit (Resolve), for InheritedPolicyChanged to compare.
 func inheritedPolicy(tc *infrav1.TerraformCluster) []any {
-	return []any{tc.Spec.Defaults, tc.Spec.IdentityRef, tc.Spec.Drift}
+	return []any{tc.Spec.Defaults, tc.Spec.IdentityRef, tc.Spec.Drift, tc.Spec.DeletionPolicy}
 }
 
 // ManagedSecret passes Secrets labeled captf.io/managed=true: state, durable

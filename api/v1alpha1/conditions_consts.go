@@ -305,6 +305,14 @@ const (
 	StateLockedReason = "StateLocked"
 	// StateNotFoundReason is the Unknown reason when no state exists yet.
 	StateNotFoundReason = "StateNotFound"
+	// RetainedStateFoundReason is the False reason when the object's state
+	// Secrets, state backups or durable inputs were kept by an earlier
+	// object of the same kind, namespace and name, deleted with
+	// deletionPolicy Retain (labeled captf.io/retained-from-uid with its
+	// uid). Retained state is never adopted silently: no Job runs until
+	// spec.adoptRetainedState is true, and deleting the object removes its
+	// finalizer without touching those Secrets.
+	RetainedStateFoundReason = "RetainedStateFound"
 )
 
 // RestoreJobSucceeded: positive polarity; never in Ready. Set only once a
@@ -639,7 +647,7 @@ func ConditionReasons() map[string]map[metav1.ConditionStatus][]string {
 		},
 		StateReadableCondition: {
 			metav1.ConditionTrue:    {StateReadReason},
-			metav1.ConditionFalse:   {StateEncryptedReason, StateCorruptReason, StateInconsistentReason, StateLostReason, StateLockedReason},
+			metav1.ConditionFalse:   {StateEncryptedReason, StateCorruptReason, StateInconsistentReason, StateLostReason, StateLockedReason, RetainedStateFoundReason},
 			metav1.ConditionUnknown: {StateNotFoundReason},
 		},
 		RestoreJobSucceededCondition: {

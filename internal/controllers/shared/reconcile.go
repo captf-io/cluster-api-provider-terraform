@@ -178,6 +178,11 @@ type reconciler struct {
 	// abandonWhy is why the abandon annotation released the deletion, for
 	// the InfrastructureAbandoned event; "" unless abandoned this pass.
 	abandonWhy string
+	// retainedFrom is the uid of the earlier object whose retained Secrets
+	// this pass found (checkRetained); "" when none.
+	retainedFrom string
+	// adopted is true when this pass adopted them (adoptRetained).
+	adopted bool
 	// isPaused is true on the paused branch: no Job starts.
 	isPaused bool
 	// inputsBytes is the size of the inputs rendered this pass, else of the
@@ -477,6 +482,11 @@ func (r *reconciler) run(ctx context.Context) (ctrl.Result, error) {
 		}
 	}
 	view, stateErr := r.readState(ctx, bk, lastRefresh)
+	if errors.Is(stateErr, errRetainedState) {
+		// Before repairOwners: another object's retained Secrets are never
+		// owned without spec.adoptRetainedState.
+		return r.heldOnRetained(ctx, bk)
+	}
 	if stateErr != nil && !errors.Is(stateErr, errStateUnreadable) {
 		return ctrl.Result{}, stateErr
 	}
@@ -489,8 +499,11 @@ func (r *reconciler) run(ctx context.Context) (ctrl.Result, error) {
 		})
 	}
 	held := stateErr != nil
+	// deletionPolicy Retain releases any deletion, held or not: decide
+	// returns ActionRetain before a restore or a destroy.
+	retain := r.deleting && r.eff.DeletionPolicy == infrav1.DeletionPolicyRetain
 	// Before the restore and destroy decisions: neither may hide it.
-	if r.deleting && r.abandonRequested() {
+	if r.deleting && !retain && r.abandonRequested() {
 		if why := r.abandonCause(held, bk); why != "" {
 			return r.abandon(ctx, bk, why)
 		}
@@ -505,11 +518,11 @@ func (r *reconciler) run(ctx context.Context) (ctrl.Result, error) {
 	}
 	// A restore is what an unreadable or lost state waits for, so it is
 	// looked for before giving up on one; a deletion waits for it too.
-	backup, restore, err := r.restoreTarget(ctx, held)
+	backup, restore, err := r.restoreTarget(ctx, held && !retain)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if held && !restore {
+	if held && !restore && !retain {
 		if r.deleting {
 			return r.deletionHeld(ctx, bk)
 		}
@@ -519,6 +532,7 @@ func (r *reconciler) run(ctx context.Context) (ctrl.Result, error) {
 	di := r.decideInput(bk, view)
 	di.Restore = restore
 	di.StateHeld = r.deleting && held
+	di.Retain = retain
 	dec, waiting := decide(di)
 	klog.FromContext(ctx).V(LogFlow).Info("Decided", "op", decisionOp(dec), "reason", dec.Reason, "requeueAfter", dec.RequeueAfter)
 	r.d.Metrics.Decision(r.k.Kind(), decisionOp(dec), dec.Reason)
@@ -548,6 +562,8 @@ func (r *reconciler) run(ctx context.Context) (ctrl.Result, error) {
 	switch dec.Action {
 	case ActionDropFinalizer:
 		return r.cleanup(ctx, bk, cleanupNoState)
+	case ActionRetain:
+		return r.cleanup(ctx, bk, cleanupRetained)
 	case ActionJob:
 		if r.deleting {
 			r.deletionCredentials(ctx)
@@ -931,14 +947,23 @@ const (
 	// cleanupAbandoned releases a deletion whose destroy cannot run
 	// without one (AbandonInfrastructureAnnotation).
 	cleanupAbandoned
+	// cleanupRetained keeps the infrastructure and its state for a later
+	// adoption (deletionPolicy Retain).
+	cleanupRetained
+	// cleanupReleased drops the finalizer of an object held on another
+	// object's retained state, touching none of it (heldOnRetained).
+	cleanupReleased
 )
 
-// cleanup runs after a successful destroy, on deletion without state, or
-// when a deletion is abandoned, using ctx and the pass's bookkeeping
-// bk; mode says which. A live Job holding the run lease, which the Job
-// cache has not shown yet, defers it by LagRequeue, as does a credential
-// mirror changed under the owner removal (errMirrorConflict). It returns
-// the result and error from finish, or any other error from Cleanup.
+// cleanup removes the finalizer, using ctx and the pass's bookkeeping bk,
+// after a successful destroy, on deletion without state, when a deletion
+// is abandoned, with deletionPolicy Retain (Retain keeps the state), or
+// for an object held on another object's retained state (release only);
+// mode says which. A live Job holding the run lease, which the Job cache
+// has not shown yet, defers it by LagRequeue, as does a credential mirror
+// changed under the owner removal (errMirrorConflict). It returns the
+// result and error from finish, or any other error from Cleanup, Retain
+// or release.
 func (r *reconciler) cleanup(ctx context.Context, bk *Bookkeeping, mode cleanupMode) (ctrl.Result, error) {
 	holder, live, err := runLive(ctx, r.d, r.obj.GetNamespace(), r.suffix)
 	if err != nil {
@@ -948,7 +973,15 @@ func (r *reconciler) cleanup(ctx context.Context, bk *Bookkeeping, mode cleanupM
 		klog.FromContext(ctx).V(LogFlow).Info("A live Job holds the run lease; the finalizer stays until it finishes", "holder", holder)
 		return r.finish(bk, nil, ctrl.Result{RequeueAfter: LagRequeue})
 	}
-	err = Cleanup(ctx, r.d, r.k, r.suffix, r.identityName)
+	var kept Retained
+	switch mode {
+	case cleanupRetained:
+		kept, err = Retain(ctx, r.d, r.k, r.suffix, r.identityName)
+	case cleanupReleased:
+		err = release(ctx, r.d, r.k, r.identityName)
+	default:
+		err = Cleanup(ctx, r.d, r.k, r.suffix, r.identityName)
+	}
 	if errors.Is(err, errMirrorConflict) {
 		// Cleanup logged the race; the next pass, with the finalizer
 		// still on, runs it again from the mirror read.
@@ -958,13 +991,24 @@ func (r *reconciler) cleanup(ctx context.Context, bk *Bookkeeping, mode cleanupM
 		return ctrl.Result{}, err
 	}
 	r.finalizerDropped = true
-	klog.FromContext(ctx).Info("Removed the finalizer", "destroyed", mode == cleanupDestroyed, "abandoned", mode == cleanupAbandoned)
+	klog.FromContext(ctx).Info("Removed the finalizer", "destroyed", mode == cleanupDestroyed, "abandoned", mode == cleanupAbandoned,
+		"retained", mode == cleanupRetained, "heldOnRetained", mode == cleanupReleased)
 	switch mode {
 	case cleanupDestroyed:
 		r.d.Emit(r.obj, corev1.EventTypeNormal, EventDestroyed, "Delete", "Infrastructure destroyed; state and inputs removed")
 		r.d.Emit(r.obj, corev1.EventTypeNormal, EventFinalizerRemoved, "Delete", "Removed finalizer %s after the destroy", r.k.Finalizer())
 	case cleanupAbandoned:
 		r.emitAbandoned()
+	case cleanupRetained:
+		r.d.Emit(r.obj, corev1.EventTypeNormal, EventInfrastructureRetained, "Delete",
+			"Removed finalizer %s without a destroy (deletionPolicy Retain): the infrastructure keeps running. "+
+				"Kept %d state Secret(s), %d state backup Secret(s) and %d durable inputs Secret, without owner references and labeled %s=%s; "+
+				"a %s of the same namespace and name adopts them with spec.adoptRetainedState: true",
+			r.k.Finalizer(), kept.State, kept.Backups, kept.Inputs, state.RetainedFromUIDLabel, r.obj.GetUID(), r.k.Kind())
+	case cleanupReleased:
+		r.d.Emit(r.obj, corev1.EventTypeNormal, EventFinalizerRemoved, "Delete",
+			"Removed finalizer %s without a destroy: this object never ran a Job, and the state it found was retained by an earlier object (%s=%s), "+
+				"which is left untouched", r.k.Finalizer(), state.RetainedFromUIDLabel, r.retainedFrom)
 	default:
 		r.d.Emit(r.obj, corev1.EventTypeNormal, EventFinalizerRemoved, "Delete", "Removed finalizer %s: there was no state, so nothing to destroy", r.k.Finalizer())
 	}
@@ -1246,6 +1290,14 @@ func (r *reconciler) readState(ctx context.Context, bk *Bookkeeping, prevRefresh
 		conditions.Set(r.obj, metav1.Condition{Type: t, Status: status, Reason: reason, Message: msg})
 	}
 	st, err := r.d.State.Read(ctx, r.obj.GetNamespace(), r.suffix)
+	var chunks []metav1.ObjectMeta
+	if err == nil {
+		chunks = st.Metadata
+	}
+	// Before anything reads, adopts, backs up or maps that state.
+	if err := r.checkRetained(ctx, chunks, err == nil); err != nil {
+		return StateView{}, err
+	}
 	switch {
 	case errors.Is(err, state.ErrNoState):
 		return StateView{}, r.noState(ctx)

@@ -116,7 +116,7 @@ func decisionOp(dec Decision) string {
 	switch dec.Action {
 	case ActionJob:
 		return string(dec.Op)
-	case ActionDropFinalizer:
+	case ActionDropFinalizer, ActionRetain:
 		return "finalizer"
 	}
 	return "none"

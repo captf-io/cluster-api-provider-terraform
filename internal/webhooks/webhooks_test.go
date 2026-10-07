@@ -306,6 +306,12 @@ func TestTerraformMachineUpdate(t *testing.T) {
 		{name: "change remediation", mutate: func(_, u *infrav1.TerraformMachine) {
 			u.Spec.Remediation = &infrav1.MachineRemediation{AnnotateMachine: new(false)}
 		}},
+		{name: "change deletionPolicy and adoptRetainedState while deleting", mutate: func(o, u *infrav1.TerraformMachine) {
+			now := metav1.Now()
+			o.DeletionTimestamp, u.DeletionTimestamp = &now, &now
+			u.Spec.DeletionPolicy = infrav1.DeletionPolicyRetain
+			u.Spec.AdoptRetainedState = new(true)
+		}},
 		{name: "new jobs policy is still validated", mutate: func(_, u *infrav1.TerraformMachine) {
 			u.Spec.Jobs.SecurityContext = &corev1.SecurityContext{Privileged: new(true)}
 		}, invalid: true, frag: "spec.jobs.securityContext.privileged"},

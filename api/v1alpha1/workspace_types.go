@@ -66,6 +66,32 @@ type WorkspaceSpec struct {
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=16
 	VariablesFrom []VariablesSource `json:"variablesFrom,omitempty"`
+
+	// deletionPolicy is what deleting this object does with its
+	// infrastructure. Destroy runs a destroy Job and then deletes the
+	// state. Retain removes the finalizer without a destroy, leaving the
+	// infrastructure running, and keeps the state Secrets, the state
+	// backups and the durable inputs, labeled captf.io/retained-from-uid,
+	// for a later object of the same kind, namespace and name to adopt
+	// (adoptRetainedState). Unset inherits: a TerraformMachine or
+	// TerraformMachinePool takes its cluster's defaults.deletionPolicy,
+	// else the TerraformCluster's own deletionPolicy; then Destroy. Mutable,
+	// also while the object is being deleted: Retain then releases a
+	// deletion that is held on a lost or unreadable state, or whose destroy
+	// failed or cannot start. A Job that is running finishes first.
+	// +optional
+	DeletionPolicy DeletionPolicy `json:"deletionPolicy,omitempty"`
+
+	// adoptRetainedState lets this object take over the state that an
+	// earlier object of the same kind, namespace and name kept when it was
+	// deleted with deletionPolicy Retain. Retained state is never adopted
+	// otherwise: StateReadable is False with reason RetainedStateFound and
+	// no Job runs. With true, the controller removes the
+	// captf.io/retained-from-uid label from those Secrets, owns them, and
+	// manages the infrastructure they describe as this object's. It is not
+	// inherited. Mutable.
+	// +optional
+	AdoptRetainedState *bool `json:"adoptRetainedState,omitempty"`
 }
 
 // WorkspaceStatus is the part of a Job-running kind's status every such kind

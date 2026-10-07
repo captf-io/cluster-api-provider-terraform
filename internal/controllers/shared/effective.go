@@ -59,6 +59,10 @@ type EffectiveConfig struct {
 	HealthCheckInterval time.Duration
 	// ApplyPolicy is the TerraformCluster's applyPolicy, else Automatic.
 	ApplyPolicy infrav1.ApplyPolicy
+	// DeletionPolicy is the object's own deletionPolicy, else (for a kind
+	// that inherits defaults) the cluster's defaults.deletionPolicy, else
+	// the TerraformCluster's own deletionPolicy, else Destroy.
+	DeletionPolicy infrav1.DeletionPolicy
 	// MembershipRefreshInterval is a TerraformMachinePool's
 	// membershipRefreshIntervalSeconds, else the cluster's
 	// defaults.membershipRefreshIntervalSeconds, else
@@ -88,11 +92,19 @@ const DefaultMembershipRefreshInterval = 60 * time.Second
 // false for kinds whose drift is always reported, never auto-applied
 // (machines). It returns the resolved EffectiveConfig.
 func Resolve(spec SpecView, cluster *infrav1.TerraformCluster, driftDefault time.Duration, mutable bool) EffectiveConfig {
-	e := EffectiveConfig{DriftInterval: driftDefault, DriftAction: infrav1.DriftActionReport, ApplyPolicy: cmp.Or(spec.ApplyPolicy, infrav1.ApplyPolicyAutomatic)}
+	e := EffectiveConfig{
+		DriftInterval: driftDefault, DriftAction: infrav1.DriftActionReport, ApplyPolicy: cmp.Or(spec.ApplyPolicy, infrav1.ApplyPolicyAutomatic),
+		DeletionPolicy: cmp.Or(spec.DeletionPolicy, infrav1.DeletionPolicyDestroy),
+	}
 	var interval *int32
 	if spec.InheritsDefaults {
 		defaults := clusterDefaults(cluster)
 		e.IdentityName, _ = identity.EffectiveName(spec.IdentityRef, cluster)
+		var clusterPolicy infrav1.DeletionPolicy
+		if cluster != nil {
+			clusterPolicy = cluster.Spec.DeletionPolicy
+		}
+		e.DeletionPolicy = cmp.Or(spec.DeletionPolicy, defaults.DeletionPolicy, clusterPolicy, infrav1.DeletionPolicyDestroy)
 		e.Jobs = MergeJobPolicy(spec.Jobs, defaults.Jobs)
 		if spec.PoolDrift != nil {
 			interval = e.resolvePool(spec, cluster)

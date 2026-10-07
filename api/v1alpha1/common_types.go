@@ -134,6 +134,24 @@ type JobPolicy struct {
 	PodSecurityContext *corev1.PodSecurityContext `json:"podSecurityContext,omitempty"`
 }
 
+// DeletionPolicy is what deleting a TerraformCluster, TerraformMachine or
+// TerraformMachinePool does with the infrastructure it manages.
+// +kubebuilder:validation:Enum=Destroy;Retain
+type DeletionPolicy string
+
+const (
+	// DeletionPolicyDestroy runs a destroy Job, then deletes the state, its
+	// backups and the durable inputs, and removes the finalizer.
+	DeletionPolicyDestroy DeletionPolicy = "Destroy"
+	// DeletionPolicyRetain removes the finalizer without a destroy: the
+	// infrastructure keeps running. The state Secrets, the state backups
+	// and the durable inputs are kept, without owner references and
+	// labeled captf.io/retained-from-uid with the object's uid, so a later
+	// object of the same kind, namespace and name can adopt them
+	// (adoptRetainedState).
+	DeletionPolicyRetain DeletionPolicy = "Retain"
+)
+
 // DriftAction is what the controller does when a drift check finds changes.
 // +kubebuilder:validation:Enum=Report;Remediate
 type DriftAction string

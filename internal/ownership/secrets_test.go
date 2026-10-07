@@ -115,6 +115,7 @@ func TestLabeledForAndNeedsRepair(t *testing.T) {
 		{"unlabeled", nil, nil, false},
 		{"labeled for another name", map[string]string{state.OwnerKindLabel: state.KindTerraformMachine, state.OwnerNameLabel: "tm2"}, nil, false},
 		{"labeled for another kind", map[string]string{state.OwnerKindLabel: state.KindTerraformCluster, state.OwnerNameLabel: "tm1"}, nil, false},
+		{"retained", map[string]string{state.OwnerKindLabel: state.KindTerraformMachine, state.OwnerNameLabel: "tm1", state.RetainedFromUIDLabel: "old"}, nil, false},
 	}
 	for _, tt := range tests {
 		meta := &metav1.ObjectMeta{Labels: tt.labels, OwnerReferences: tt.refs}
@@ -226,5 +227,80 @@ func TestRepairSecretPatchError(t *testing.T) {
 	s := secret("s", true)
 	if _, err := RepairSecret(t.Context(), c, &s.ObjectMeta, wantRef); !errors.Is(err, boom) {
 		t.Errorf("err = %v, want boom", err)
+	}
+}
+
+// TestRetainAndUnretain proves Retain drops every owner reference to the
+// object, whatever its UID, keeps other owners and the data, labels the
+// Secret with the object's UID, and issues no call when that is done
+// already; Unretain removes the label (and only then patches), after
+// which NeedsRepair claims the Secret again. A vanished Secret is no
+// patch, and a patch error is returned wrapped.
+func TestRetainAndUnretain(t *testing.T) {
+	t.Parallel()
+	other := ref("cluster.x-k8s.io/v1beta2", "Machine", "m", "mu")
+	stale := ref(wantRef.APIVersion, wantRef.Kind, "tm1", "old")
+	read := func(t *testing.T, c client.Client, name string) *corev1.Secret {
+		t.Helper()
+		s := &corev1.Secret{}
+		if err := c.Get(t.Context(), client.ObjectKey{Namespace: "ns", Name: name}, s); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	var patches int
+	c := fake.NewClientBuilder().WithInterceptorFuncs(patchCounter(&patches)).WithObjects(
+		secret("owned", true, other, wantRef, stale), secret("unlabeled", false, wantRef),
+	).Build()
+	for _, name := range []string{"owned", "unlabeled"} {
+		s := read(t, c, name)
+		if ok, err := Retain(t.Context(), c, &s.ObjectMeta, wantRef); !ok || err != nil {
+			t.Fatalf("%s: %v, %v", name, ok, err)
+		}
+		got := read(t, c, name)
+		if state.RetainedFrom(got.Labels) != "new" || string(got.Data["k"]) != "v" {
+			t.Errorf("%s: labels %v, data %q", name, got.Labels, got.Data)
+		}
+		if ok, err := Retain(t.Context(), c, &got.ObjectMeta, wantRef); ok || err != nil {
+			t.Errorf("%s retained again: %v, %v", name, ok, err)
+		}
+	}
+	if got := read(t, c, "owned"); !reflect.DeepEqual(got.OwnerReferences, []metav1.OwnerReference{other}) || NeedsRepair(&got.ObjectMeta, wantRef) {
+		t.Errorf("retained owners %+v, NeedsRepair %v", got.OwnerReferences, NeedsRepair(&got.ObjectMeta, wantRef))
+	}
+	if patches != 2 {
+		t.Errorf("patches = %d, want 2", patches)
+	}
+
+	s := read(t, c, "owned")
+	if ok, err := Unretain(t.Context(), c, &s.ObjectMeta); !ok || err != nil {
+		t.Fatalf("Unretain: %v, %v", ok, err)
+	}
+	got := read(t, c, "owned")
+	if _, ok := got.Labels[state.RetainedFromUIDLabel]; ok || !NeedsRepair(&got.ObjectMeta, wantRef) {
+		t.Errorf("unretained labels %v, NeedsRepair %v", got.Labels, NeedsRepair(&got.ObjectMeta, wantRef))
+	}
+	if ok, err := Unretain(t.Context(), c, &got.ObjectMeta); ok || err != nil || patches != 3 {
+		t.Errorf("Unretain without the label: %v, %v, patches %d", ok, err, patches)
+	}
+
+	gone := secret("gone", true)
+	gone.ResourceVersion = "1"
+	if ok, err := Retain(t.Context(), c, &gone.ObjectMeta, wantRef); ok || err != nil {
+		t.Errorf("gone: %v, %v", ok, err)
+	}
+	boom := errors.New("boom")
+	failing := fake.NewClientBuilder().WithInterceptorFuncs(interceptor.Funcs{
+		Patch: func(context.Context, client.WithWatch, client.Object, client.Patch, ...client.PatchOption) error {
+			return boom
+		},
+	}).Build()
+	labeled := secret("s", true)
+	labeled.Labels[state.RetainedFromUIDLabel] = "new"
+	if _, err := Unretain(t.Context(), failing, &labeled.ObjectMeta); !errors.Is(err, boom) {
+		t.Errorf("err = %v, want boom", err)
+	}
+	if _, err := Retain(t.Context(), failing, &metav1.ObjectMeta{Name: "x"}, metav1.OwnerReference{APIVersion: "a/b/c"}); err == nil {
+		t.Error("malformed apiVersion accepted")
 	}
 }

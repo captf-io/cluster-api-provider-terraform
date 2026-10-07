@@ -36,6 +36,23 @@ const (
 	ManagedLabel = "captf.io/managed"
 )
 
+// RetainedFromUIDLabel marks a Secret that deletionPolicy Retain kept when
+// its object was deleted: a state chunk, a state backup or the durable
+// inputs. Its value is the uid of the object that retained it. Such a
+// Secret has no owner reference to that object, so it outlives it; an
+// object of the same kind, namespace and name finds it again by its
+// deterministic names and selectors, and adopts it only with
+// spec.adoptRetainedState, which removes the label. The backend's
+// selector matches a superset of its labels, so the label does not hide a
+// state chunk from Terraform or OpenTofu.
+const RetainedFromUIDLabel = "captf.io/retained-from-uid"
+
+// RetainedFrom returns the uid of the object that retained a Secret with
+// labels (RetainedFromUIDLabel), or "" when it was not retained.
+func RetainedFrom(labels map[string]string) string {
+	return labels[RetainedFromUIDLabel]
+}
+
 // Labels the backend sets itself on every state Secret and on the Lease.
 const (
 	BackendStateLabel     = "tfstate"

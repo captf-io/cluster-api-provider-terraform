@@ -108,6 +108,19 @@ const (
 	// captf.io/abandon-infrastructure naming the object's uid; the
 	// finalizer was removed without a destroy.
 	EventInfrastructureAbandoned = "InfrastructureAbandoned"
+	// EventInfrastructureRetained: a deletion with deletionPolicy Retain
+	// removed the finalizer without a destroy and kept the state, its
+	// backups and the durable inputs, labeled captf.io/retained-from-uid,
+	// for a later object of the same name to adopt.
+	EventInfrastructureRetained = "InfrastructureRetained"
+	// EventRetainedStateFound: the object found state another object of
+	// its kind, namespace and name retained (StateReadable
+	// False/RetainedStateFound); nothing runs until it is adopted.
+	EventRetainedStateFound = "RetainedStateFound"
+	// EventRetainedStateAdopted: with spec.adoptRetainedState, the object
+	// removed captf.io/retained-from-uid from the retained Secrets it found
+	// and now manages that infrastructure.
+	EventRetainedStateAdopted = "RetainedStateAdopted"
 	// EventPaused: the Paused condition changed to True; reconciliation
 	// stops starting Jobs.
 	EventPaused = "Paused"
@@ -230,7 +243,8 @@ func DocumentedEvents() []string {
 		EventStuckJobDeleted, EventDestructivePlanBlocked,
 		EventPlanReady, EventPlanApproved, EventPlanApplied, EventPlanChanged, EventPlanSuperseded,
 		EventWaitingForRunLease, EventWaitingForClusterOperation, EventWaitingForMachineOperations,
-		EventDeletionStarted, EventDestroyed, EventFinalizerRemoved, EventInfrastructureAbandoned, EventPaused, EventResumed, EventProvisioned,
+		EventDeletionStarted, EventDestroyed, EventFinalizerRemoved, EventInfrastructureAbandoned,
+		EventInfrastructureRetained, EventRetainedStateFound, EventRetainedStateAdopted, EventPaused, EventResumed, EventProvisioned,
 		EventProviderIDSet, EventControlPlaneEndpointSet, EventFailureDomainsChanged, EventExportsNotPublished,
 		EventInputsChanged, EventDigestPinned, EventDigestUnknown, EventForceUnlocked, EventStateAdopted,
 		EventStateLost, EventStateLocked, EventStateUnreadable, EventOutputsInvalid,
@@ -572,6 +586,8 @@ func badStateReason(c metav1.Condition) string {
 		return EventStateLost
 	case c.Reason == infrav1.StateLockedReason:
 		return EventStateLocked
+	case c.Reason == infrav1.RetainedStateFoundReason:
+		return EventRetainedStateFound
 	}
 	return EventStateUnreadable
 }

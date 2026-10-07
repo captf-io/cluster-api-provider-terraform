@@ -106,9 +106,10 @@ type TerraformClusterSpec struct {
 // TerraformMachinePools of a cluster inherit when they do not set them.
 // Operational policy inherits in this order: the machine's or pool's own
 // field, then spec.defaults, then the TerraformCluster's own field of the
-// same name where it has one (identityRef, drift.action), then the
-// built-in default. Module inputs (source, variables, variablesFrom) are
-// never inherited: every role names its own image.
+// same name where it has one (identityRef, drift.action, deletionPolicy),
+// then the built-in default. Module inputs (source, variables,
+// variablesFrom) and adoptRetainedState are never inherited: every role
+// names its own image.
 type TerraformClusterDefaults struct {
 	// identityRef is used by machines and pools without their own
 	// identityRef. When unset, such machines and pools use
@@ -142,6 +143,12 @@ type TerraformClusterDefaults struct {
 	// +kubebuilder:validation:Minimum=15
 	// +kubebuilder:validation:Maximum=86400
 	MembershipRefreshIntervalSeconds int32 `json:"membershipRefreshIntervalSeconds,omitempty"`
+
+	// deletionPolicy is the deletionPolicy of each machine and pool that
+	// does not set its own. When unset they take the TerraformCluster's own
+	// spec.deletionPolicy, else Destroy.
+	// +optional
+	DeletionPolicy DeletionPolicy `json:"deletionPolicy,omitempty"`
 }
 
 // TerraformClusterStatus is the observed state of a TerraformCluster. Nothing

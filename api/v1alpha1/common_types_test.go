@@ -169,6 +169,7 @@ func TestEnumsMatchMarkers(t *testing.T) {
 		{"PlanTargetKind", []string{string(PlanTargetCluster), string(PlanTargetMachinePool)}},
 		{"PlanReason", []string{string(PlanReasonManual), string(PlanReasonDestructive), string(PlanReasonExportsChange)}},
 		{"PlanPhase", []string{string(PlanPhasePending), string(PlanPhaseApproved), string(PlanPhaseApplied), string(PlanPhaseSuperseded), string(PlanPhaseFailed)}},
+		{"DeletionPolicy", []string{string(DeletionPolicyDestroy), string(DeletionPolicyRetain)}},
 	}
 	cluster, err := os.ReadFile("terraformcluster_types.go")
 	if err != nil {

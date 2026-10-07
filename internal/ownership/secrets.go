@@ -126,10 +126,12 @@ func LabeledFor(labels map[string]string, kind, name string) bool {
 }
 
 // NeedsRepair reports whether the Secret whose metadata is meta is labeled
-// for want's object (LabeledFor) and lacks exactly one owner reference to
-// it with its current UID (EnsureRef would change it).
+// for want's object (LabeledFor), is not retained
+// (state.RetainedFromUIDLabel: only Unretain gives such a Secret an owner
+// again), and lacks exactly one owner reference to it with its current
+// UID (EnsureRef would change it).
 func NeedsRepair(meta *metav1.ObjectMeta, want metav1.OwnerReference) bool {
-	if !LabeledFor(meta.Labels, want.Kind, want.Name) {
+	if !LabeledFor(meta.Labels, want.Kind, want.Name) || state.RetainedFrom(meta.Labels) != "" {
 		return false
 	}
 	_, change := EnsureRef(meta.OwnerReferences, want)
@@ -149,17 +151,76 @@ func RepairSecret(ctx context.Context, c client.Writer, meta *metav1.ObjectMeta,
 		return false, nil
 	}
 	refs, _ := EnsureRef(meta.OwnerReferences, want)
-	// Metadata only: the diff, and so the patch, is the owner references
-	// plus the resourceVersion of the optimistic lock, never the data.
+	return patchMeta(ctx, c, meta, func(s *corev1.Secret) { s.OwnerReferences = refs })
+}
+
+// Retain makes the Secret whose metadata is meta, as read with its
+// resourceVersion, outlive want's object, for deletionPolicy Retain: it
+// drops every owner reference to that object, whatever its UID, and
+// labels the Secret state.RetainedFromUIDLabel with want's UID, with one
+// merge patch of its metadata through c using ctx, locked to meta's
+// resourceVersion. References to other owners are kept, and a Secret
+// already retained by want's UID with no reference to the object is left
+// as it is. The caller finds the Secret by the object's deterministic
+// names and selectors; unlike RepairSecret, Retain does not require the
+// owner labels, since a state chunk that lacked them would otherwise keep
+// its reference and be garbage-collected with the object. It reports
+// whether it patched. A Secret gone since it was read is false with a nil
+// error; every patch error, a conflict included, is returned.
+func Retain(ctx context.Context, c client.Writer, meta *metav1.ObjectMeta, want metav1.OwnerReference) (bool, error) {
+	gv, err := schema.ParseGroupVersion(want.APIVersion)
+	if err != nil {
+		return false, fmt.Errorf("ownership: owner reference of Secret %s: %w", meta.Name, err)
+	}
+	refs := make([]metav1.OwnerReference, 0, len(meta.OwnerReferences))
+	for _, ref := range meta.OwnerReferences {
+		if !sameObject(ref, gv.Group, want.Kind, want.Name) {
+			refs = append(refs, ref)
+		}
+	}
+	uid := string(want.UID)
+	if len(refs) == len(meta.OwnerReferences) && state.RetainedFrom(meta.Labels) == uid {
+		return false, nil
+	}
+	return patchMeta(ctx, c, meta, func(s *corev1.Secret) {
+		s.OwnerReferences = refs
+		metav1.SetMetaDataLabel(&s.ObjectMeta, state.RetainedFromUIDLabel, uid)
+	})
+}
+
+// Unretain removes state.RetainedFromUIDLabel from the Secret whose
+// metadata is meta, as read with its resourceVersion, with one merge patch
+// of its metadata through c using ctx, locked to meta's resourceVersion:
+// the Secret is then an ordinary one of the object it is labeled for,
+// which NeedsRepair and RepairSecret give an owner reference again. A
+// Secret without the label is left alone. It reports whether it patched.
+// A Secret gone since it was read is false with a nil error; every patch
+// error, a conflict included, is returned.
+func Unretain(ctx context.Context, c client.Writer, meta *metav1.ObjectMeta) (bool, error) {
+	if _, ok := meta.Labels[state.RetainedFromUIDLabel]; !ok {
+		return false, nil
+	}
+	return patchMeta(ctx, c, meta, func(s *corev1.Secret) {
+		delete(s.Labels, state.RetainedFromUIDLabel)
+	})
+}
+
+// patchMeta applies change to a copy of the Secret whose metadata is meta
+// and sends the difference as a merge patch through c using ctx, locked to
+// meta's resourceVersion. Metadata only: the patch is what change set plus
+// the resourceVersion of the optimistic lock, never the data. It reports
+// whether it patched: a Secret gone since it was read is false with a nil
+// error.
+func patchMeta(ctx context.Context, c client.Writer, meta *metav1.ObjectMeta, change func(*corev1.Secret)) (bool, error) {
 	orig := &corev1.Secret{ObjectMeta: *meta.DeepCopy()}
 	s := orig.DeepCopy()
-	s.OwnerReferences = refs
+	change(s)
 	err := c.Patch(ctx, s, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{}))
 	switch {
 	case apierrors.IsNotFound(err):
 		return false, nil
 	case err != nil:
-		return false, fmt.Errorf("ownership: owner references of Secret %s: %w", meta.Name, err)
+		return false, fmt.Errorf("ownership: metadata of Secret %s: %w", meta.Name, err)
 	}
 	return true, nil
 }

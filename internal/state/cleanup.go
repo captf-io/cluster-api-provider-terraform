@@ -45,6 +45,14 @@ func Cleanup(ctx context.Context, c client.Client, namespace, suffix string) err
 			return fmt.Errorf("state: delete Secret %s: %w", list.Items[i].Name, err)
 		}
 	}
+	return DeleteLock(ctx, c, namespace, suffix)
+}
+
+// DeleteLock deletes, in namespace through c using ctx, the lock Lease of
+// the state of suffix, and returns any error but its being gone already.
+// Call it only when no Job of the object is active: the backend holds the
+// Lease while a run has the state locked.
+func DeleteLock(ctx context.Context, c client.Client, namespace, suffix string) error {
 	lease := &coordinationv1.Lease{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: LeaseName(suffix)}}
 	if err := c.Delete(ctx, lease); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("state: delete Lease %s: %w", lease.Name, err)

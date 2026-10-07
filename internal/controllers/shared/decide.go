@@ -58,6 +58,10 @@ const (
 	// ActionDropFinalizer removes the finalizer without a Job: deleting,
 	// with no state and no Job, and the deletion not held (StateHeld).
 	ActionDropFinalizer
+	// ActionRetain removes the finalizer without a Job and keeps the state,
+	// its backups and the durable inputs for a later adoption: deleting,
+	// with deletionPolicy Retain and no Job (Retain).
+	ActionRetain
 )
 
 // Decision is DecideOp's result.
@@ -218,6 +222,12 @@ type DecideInput struct {
 	// for a restore (which Restore then starts) or for the infrastructure
 	// to be abandoned.
 	StateHeld bool
+	// Retain is deletionPolicy Retain: a deletion keeps the
+	// infrastructure, and with it the state, instead of destroying it.
+	// Only an active Job comes first: it is checked before any restore or
+	// destroy, so it also releases a deletion that is held (StateHeld) or
+	// whose destroy fails or cannot start.
+	Retain bool
 	// ManualApply is a TerraformCluster's applyPolicy Manual: every apply
 	// but the first (no state) runs only once the plan of its inputs is
 	// approved.
@@ -237,12 +247,18 @@ const ReasonDestructivePlanBlocked = "DestructivePlanBlocked"
 // applyPolicy Manual waits for the approval of its plan.
 const ReasonPlanAwaitingApproval = "PlanAwaitingApproval"
 
+// ReasonDeletionRetained is the decision reason of a deletion with
+// deletionPolicy Retain.
+const ReasonDeletionRetained = "DeletionRetained"
+
 // ReasonDeletionHeld is the decision reason while a deletion waits on a
 // lost or unreadable state (StateHeld).
 const ReasonDeletionHeld = "DeletionHeld"
 
-// DecideOp picks the next operation, in this order: deleting with its
-// state held (lost or unreadable) → Restore when one is requested, else
+// DecideOp picks the next operation, in this order: deleting with
+// deletionPolicy Retain → keep the state and drop the finalizer, without a
+// Job; deleting with its state held (lost or unreadable) → Restore when
+// one is requested, else
 // wait; deleting → Destroy, or drop the finalizer with no state; a
 // requested restore of an existing backup → Restore (whatever the state);
 // no state → Apply; state without
@@ -296,6 +312,11 @@ func DecideOp(in DecideInput) Decision {
 func decide(in DecideInput) (Decision, string) {
 	if in.Jobs.Active {
 		return Decision{RequeueAfter: ActiveJobRequeue, Reason: "JobActive"}, ""
+	}
+	if in.Deleting && in.Retain {
+		// Before a restore or a destroy: nothing is run against the
+		// infrastructure that is kept.
+		return Decision{Action: ActionRetain, Reason: ReasonDeletionRetained}, ""
 	}
 	if in.Restore && (!in.Deleting || in.StateHeld) {
 		// Before everything but a deletion that can proceed: it is what the
