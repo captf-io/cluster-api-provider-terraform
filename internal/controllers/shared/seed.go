@@ -41,7 +41,8 @@ import (
 // (seedExports), records them and builds again, so this pass's guard
 // reads them. bk is this pass's bookkeeping; view is the state as read
 // this pass, whose CurrentHash it sets. It returns the built inputs, the
-// gate (nil when none), and any error from building, hashing or seeding.
+// gate (nil when none), and any error from building, superseding, hashing
+// or seeding.
 func (r *reconciler) buildInputs(ctx context.Context, bk *Bookkeeping, view *StateView) (any, *Gate, error) {
 	in, gate, err := r.build(ctx, view)
 	if err != nil || gate != nil {
@@ -55,15 +56,16 @@ func (r *reconciler) buildInputs(ctx context.Context, bk *Bookkeeping, view *Sta
 }
 
 // build builds the kind's inputs using ctx from the owners and the
-// durable Secret, an ExportsGuard kind's with the change of the cluster's
-// exports its approved TerraformPlan approves (approvedExports), sets
-// DependenciesReady from the gate, and, without a gate, reads how the kind
-// guards them (observeGuard) and sets view's CurrentHash, and the pass's
+// durable Secret, an ExportsGuard kind's knowing which change of the
+// cluster's exports waits for approval (waitingExports), sets DependenciesReady from
+// the gate, and, without a gate, reads how the kind guards them
+// (observeGuard), supersedes a plan of a change it no longer renders
+// (supersedeWithdrawn), and sets view's CurrentHash, and the pass's
 // bookkeeping's, for a mutable kind. It returns the built inputs, the gate
-// (nil when none), and any error from building or hashing.
+// (nil when none), and any error from building, superseding or hashing.
 func (r *reconciler) build(ctx context.Context, view *StateView) (any, *Gate, error) {
 	if eg, ok := r.k.(ExportsGuard); ok {
-		eg.ApproveExports(r.approvedExports())
+		eg.WaitExports(r.waitingExports())
 	}
 	in, gate, err := r.k.BuildInputs(ctx, r.owner, r.durable)
 	if err != nil {
@@ -75,6 +77,9 @@ func (r *reconciler) build(ctx context.Context, view *StateView) (any, *Gate, er
 	}
 	captfconds.SetDependenciesReady(r.obj, metav1.ConditionTrue, infrav1.DependenciesReadyReason, "")
 	r.observeGuard()
+	if err := r.supersedeWithdrawn(ctx); err != nil {
+		return nil, nil, err
+	}
 	if r.k.Mutable() {
 		if view.CurrentHash, err = r.inputsHash(in); err != nil {
 			return nil, nil, err

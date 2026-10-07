@@ -700,21 +700,36 @@ func TestHoldExportsChangeAgainAndRevert(t *testing.T) {
 }
 
 // TestHoldExportsRevertThenReturn: exports that revert to the applied
-// ones and then return to the blocked change, with no apply between
-// (the same bootstrap data), hold that change again: the pool is not
-// frozen waiting on the blocked Job, and keeps applying a rotation with
-// the held exports.
+// ones supersede the plan of the change they leave; a return to the
+// change, with no apply between (the same bootstrap data), guards it
+// again, unapproved, and its block makes a new plan: the pool then holds
+// the change again and keeps applying a rotation with the held exports.
 func TestHoldExportsRevertThenReturn(t *testing.T) {
 	t.Parallel()
 	e := newHoldEnv(t)
-	b1, approval := e.blockChange(exportsE1)
+	_, approval := e.blockChange(exportsE1)
 	e.reconcileIdle()
+	first := e.livePlan(approval)
 	e.setExports(exportsE0)
 	e.reconcileIdle()
+	if p := e.plan(first.Name); p.Labels[infrav1.PlanPhaseLabel] != string(infrav1.PlanPhaseSuperseded) || e.pool().Status.PendingPlanRef.Name != "" {
+		t.Fatalf("the withdrawn change's plan: %+v, pendingPlanRef %+v", p.Labels, e.pool().Status.PendingPlanRef)
+	}
+	if got := e.rec.count(shared.EventPlanSuperseded); got != 1 {
+		t.Errorf("%d PlanSuperseded events, want 1", got)
+	}
 	e.setExports(exportsE1)
+	r := e.reconcileStarts(jobs.OpApply)
+	if !e.guarded(r) || e.flag(r, "--inputs-hash") != approval || e.flag(r, "--allow-deletes-hash") != "" || !sameExports(t, e.rendered(r).ClusterOutputs, exportsE1) {
+		t.Fatalf("return to the change: args %v, annotations %v", e.args(r), r.Annotations)
+	}
+	e.block(r)
 	e.reconcileIdle()
-	if got := e.heldHash(b1.Name); got != approval {
+	if got := e.heldHash(r.Name); got != approval {
 		t.Errorf("held condition after the return approves %s, want %s", got, approval)
+	}
+	if p := e.livePlan(approval); p == nil || p.Name == first.Name {
+		t.Errorf("no new plan of the returned change: %+v", e.plans())
 	}
 	data := e.rotate("#cloud-config\n# rotated\n")
 	h := e.reconcileStarts(jobs.OpApply)
@@ -724,10 +739,52 @@ func TestHoldExportsRevertThenReturn(t *testing.T) {
 	}
 }
 
+// TestHoldExportsRevertIgnoresApproval: an approved plan of a change that
+// is withdrawn before its apply ran is superseded, its approval ignored
+// (Approved False/ApprovalIgnored, a Warning), and a return to the change
+// is guarded again without it; so is a change replaced by another.
+func TestHoldExportsRevertIgnoresApproval(t *testing.T) {
+	t.Parallel()
+	for name, leave := range map[string]func(*holdEnv){
+		"reverted": func(e *holdEnv) { e.setExports(exportsE0); e.reconcileIdle() },
+		"replaced": func(e *holdEnv) { e.blockChange(exportsE2) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e := newHoldEnv(t)
+			_, approval := e.blockChange(exportsE1)
+			e.reconcileIdle()
+			first := e.livePlan(approval)
+			e.approve(approval)
+			leave(e)
+			p := e.plan(first.Name)
+			if p.Labels[infrav1.PlanPhaseLabel] != string(infrav1.PlanPhaseSuperseded) ||
+				conditions.GetReason(p, infrav1.PlanApprovedCondition) != infrav1.PlanApprovalIgnoredReason {
+				t.Fatalf("the approved plan of the left change: labels %v, status %+v", p.Labels, p.Status)
+			}
+			warned := false
+			for _, ev := range e.rec.events() {
+				if ev.reason == shared.EventPlanSuperseded && ev.eventType == corev1.EventTypeWarning && strings.Contains(ev.note, "alice") {
+					warned = true
+				}
+			}
+			if !warned {
+				t.Errorf("no PlanSuperseded Warning naming the approver: %v", e.rec.reasons)
+			}
+			e.setExports(exportsE1)
+			r := e.reconcileStarts(jobs.OpApply)
+			if !e.guarded(r) || e.flag(r, "--inputs-hash") != approval || e.flag(r, "--allow-deletes-hash") != "" || r.Annotations[shared.PlanAnnotation] != "" {
+				t.Errorf("return to the left change: args %v, annotations %v", e.args(r), r.Annotations)
+			}
+		})
+	}
+}
+
 // TestHoldExportsRevertCondition: right after the exports return to the
 // applied ones, with no apply, ApplyJobSucceeded no longer reports the
 // withdrawn change's block and approve command: the last successful
-// apply stands. A return to the change reports it held again.
+// apply stands. A return to the change guards it again, and its block is
+// reported held.
 func TestHoldExportsRevertCondition(t *testing.T) {
 	t.Parallel()
 	e := newHoldEnv(t)
@@ -745,8 +802,10 @@ func TestHoldExportsRevertCondition(t *testing.T) {
 		t.Errorf("the reverted condition changed on the next pass: %s", again.Message)
 	}
 	e.setExports(exportsE1)
+	r := e.reconcileStarts(jobs.OpApply)
+	e.block(r)
 	e.reconcileIdle()
-	if got := e.heldHash(b1.Name); got != approval {
+	if got := e.heldHash(r.Name); got != approval {
 		t.Errorf("held condition after the return approves %s, want %s", got, approval)
 	}
 }

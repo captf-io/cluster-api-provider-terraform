@@ -281,14 +281,35 @@ func (r *reconciler) planView() *PlanView {
 	return &PlanView{Name: p.Name, Reason: p.Spec.Reason, InputsHash: p.Spec.InputsHash, PlanHash: p.Spec.PlanHash, Approved: approved(p)}
 }
 
-// approvedExports returns the inputs hash (the approval hash) of the
-// object's live ExportsChange plan once it is approved, "" otherwise: the
-// change of the cluster's exports it approves is no longer held.
-func (r *reconciler) approvedExports() string {
-	if p := r.livePlan(); p != nil && p.Spec.Reason == infrav1.PlanReasonExportsChange && approved(p) {
+// waitingExports returns the approval hash the object's live
+// ExportsChange plan was made for while it waits for approval, "" when no
+// such plan waits.
+func (r *reconciler) waitingExports() string {
+	if p := r.livePlan(); p != nil && p.Spec.Reason == infrav1.PlanReasonExportsChange && !approved(p) {
 		return p.Spec.InputsHash
 	}
 	return ""
+}
+
+// supersedeWithdrawn supersedes, using ctx, the object's live
+// ExportsChange plan once this pass's guard (r.guard, of the inputs just
+// built) neither holds nor guards the change it was made for: the
+// cluster's exports are those of the last successful apply again
+// (withdrawn), or another change of them, or an edit, moved the approval
+// hash off it (superseded). A plan left live would approve the change
+// again, with no new look, should the exports return to it. The build
+// that calls it runs only when no Job runs, the object is neither paused
+// nor deleting, and nothing gates the inputs. It returns any write error.
+func (r *reconciler) supersedeWithdrawn(ctx context.Context) error {
+	p, g := r.livePlan(), r.guard
+	if p == nil || g == nil || p.Spec.Reason != infrav1.PlanReasonExportsChange || ((g.Held || g.Guarded) && g.ApprovalHash == p.Spec.InputsHash) {
+		return nil
+	}
+	why := "the change of the cluster's exports it was made for was withdrawn: the exports are those of the last successful apply again"
+	if !g.Settled {
+		why = "the pool's inputs moved on: another change of the cluster's exports, or an edit, changed the approval hash it was made for"
+	}
+	return r.supersede(ctx, p, why, "")
 }
 
 // approveHint returns how to approve the plan made for inputsHash: "approve

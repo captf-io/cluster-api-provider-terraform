@@ -301,7 +301,6 @@ func (r *reconciler) bookkeep(ctx context.Context) (*Bookkeeping, error) {
 	if err := r.recordPlans(ctx, bk); err != nil {
 		return nil, err
 	}
-	r.setPendingPlanRef()
 	return bk, nil
 }
 
@@ -321,7 +320,8 @@ func (r *reconciler) phase() captfconds.Phase {
 	return captfconds.BeforeProvisioned
 }
 
-// finish sets the object's apply condition from applyCond, else from the
+// finish points status.pendingPlanRef at the live TerraformPlan as the pass
+// leaves it, sets the object's apply condition from applyCond, else from the
 // wait for a plan's approval that stands (planWaitCondition), else from
 // bk's ApplyJob (applyJobCondition: the held condition while a change of
 // the cluster's exports waits for approval), sets the Ready condition for
@@ -330,6 +330,7 @@ func (r *reconciler) phase() captfconds.Phase {
 // dropped). It returns res unchanged along with any error from setting
 // Ready.
 func (r *reconciler) finish(bk *Bookkeeping, applyCond *metav1.Condition, res ctrl.Result) (ctrl.Result, error) {
+	r.setPendingPlanRef()
 	if applyCond == nil {
 		applyCond = r.planWaitCondition(bk)
 	}

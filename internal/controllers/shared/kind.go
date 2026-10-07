@@ -186,11 +186,13 @@ type ExportsGuard interface {
 	// ExportsGuard returns how an apply of the inputs the last BuildInputs
 	// call built is guarded; the zero Guard before any.
 	ExportsGuard() Guard
-	// ApproveExports tells the next BuildInputs call which change of the
-	// exports is approved: approvalHash is the approval hash its approved
-	// TerraformPlan was made for, "" when none is. An approved change is
-	// not held.
-	ApproveExports(approvalHash string)
+	// WaitExports tells the next BuildInputs call which change of the
+	// exports waits for approval: approvalHash is the approval hash the
+	// kind's live ExportsChange TerraformPlan was made for while it waits,
+	// "" when no such plan waits. A change is held only while its plan
+	// waits: an approved one applies, and one whose plan was superseded is
+	// guarded again, so its block makes a plan to approve.
+	WaitExports(approvalHash string)
 }
 
 // Guard is how an apply of an ExportsGuard kind's built inputs is guarded.
@@ -227,9 +229,9 @@ type Guard struct {
 	// records them.
 	Unknown bool
 	// Held is true while a change of the exports waits for approval (its
-	// guarded apply was blocked, and no approved TerraformPlan names its
-	// ApprovalHash): the inputs render the exports of the last successful
-	// apply instead, and their apply is not guarded.
+	// guarded apply was blocked, and its TerraformPlan, made for its
+	// ApprovalHash, waits): the inputs render the exports of the last
+	// successful apply instead, and their apply is not guarded.
 	Held bool
 	// ApprovalHash is the inputs hash a TerraformPlan of the change is made
 	// for: hash.Approval of the inputs with the cluster's current exports.

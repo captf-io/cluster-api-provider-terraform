@@ -676,17 +676,32 @@ func poolOutputs(providerIDs, replicas string) map[string]string {
 	}
 }
 
-// recorder records event reasons.
+// recorder records event reasons, and the events in full.
 type recorder struct {
 	mu      sync.Mutex
 	reasons []string
+	full    []event
 }
 
-// Eventf records reason from an events.EventRecorder.Eventf call.
-func (r *recorder) Eventf(_, _ runtime.Object, _, reason, _, _ string, _ ...any) {
+// event is one event the recorder saw.
+type event struct {
+	eventType, reason, note string
+}
+
+// Eventf records reason, and the event of eventType with the note
+// formatted from note and args, from an events.EventRecorder.Eventf call.
+func (r *recorder) Eventf(_, _ runtime.Object, eventType, reason, _, note string, args ...any) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.reasons = append(r.reasons, reason)
+	r.full = append(r.full, event{eventType: eventType, reason: reason, note: fmt.Sprintf(note, args...)})
+}
+
+// events returns the events recorded so far.
+func (r *recorder) events() []event {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.full)
 }
 
 // count returns how many recorded events have reason.

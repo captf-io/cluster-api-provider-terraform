@@ -49,10 +49,10 @@ type adapter struct {
 	// guard is how an apply of the inputs BuildInputs built last is
 	// guarded (guardExports).
 	guard shared.Guard
-	// approvedExports is the approval hash of the change of the cluster's
-	// exports an approved TerraformPlan approves (ApproveExports); "" when
-	// none does.
-	approvedExports string
+	// waitingExports is the approval hash of the change of the cluster's
+	// exports whose live ExportsChange TerraformPlan waits for approval
+	// (WaitExports); "" when none does.
+	waitingExports string
 }
 
 var (
