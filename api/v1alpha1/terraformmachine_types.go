@@ -96,7 +96,7 @@ type TerraformMachineStatus struct {
 }
 
 // +kubebuilder:object:root=true
-// +kubebuilder:resource:path=terraformmachines,scope=Namespaced,categories=cluster-api
+// +kubebuilder:resource:path=terraformmachines,scope=Namespaced,shortName=tfm,categories=cluster-api
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:printcolumn:name="Cluster",type="string",JSONPath=".metadata.labels['cluster\\.x-k8s\\.io/cluster-name']",description="Cluster"

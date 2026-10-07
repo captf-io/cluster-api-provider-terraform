@@ -203,7 +203,7 @@ type TerraformClusterStatus struct {
 const MaxPublishedExportsBytes = 64 << 10
 
 // +kubebuilder:object:root=true
-// +kubebuilder:resource:path=terraformclusters,scope=Namespaced,categories=cluster-api
+// +kubebuilder:resource:path=terraformclusters,scope=Namespaced,shortName=tfc,categories=cluster-api
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:printcolumn:name="Cluster",type="string",JSONPath=".metadata.labels['cluster\\.x-k8s\\.io/cluster-name']",description="Cluster"

@@ -142,7 +142,7 @@ type TerraformMachineTemplateStatus struct {
 }
 
 // +kubebuilder:object:root=true
-// +kubebuilder:resource:path=terraformmachinetemplates,scope=Namespaced,categories=cluster-api
+// +kubebuilder:resource:path=terraformmachinetemplates,scope=Namespaced,shortName=tfmt,categories=cluster-api
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:printcolumn:name="Image",type="string",JSONPath=".spec.template.spec.source.image",description="Module image"

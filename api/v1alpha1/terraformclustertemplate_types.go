@@ -40,7 +40,7 @@ type TerraformClusterTemplateResource struct {
 }
 
 // +kubebuilder:object:root=true
-// +kubebuilder:resource:path=terraformclustertemplates,scope=Namespaced,categories=cluster-api
+// +kubebuilder:resource:path=terraformclustertemplates,scope=Namespaced,shortName=tfct,categories=cluster-api
 // +kubebuilder:storageversion
 // +kubebuilder:printcolumn:name="Image",type="string",JSONPath=".spec.template.spec.source.image",description="Module image"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp",description="Time since creation"

@@ -261,7 +261,7 @@ type TerraformPlanStatus struct {
 }
 
 // +kubebuilder:object:root=true
-// +kubebuilder:resource:path=terraformplans,scope=Namespaced,categories=cluster-api
+// +kubebuilder:resource:path=terraformplans,scope=Namespaced,shortName=tfplan,categories=cluster-api
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:printcolumn:name="Target",type="string",JSONPath=".spec.targetRef.name",description="Target object"

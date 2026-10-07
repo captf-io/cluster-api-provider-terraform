@@ -111,7 +111,7 @@ type TerraformClusterIdentityStatus struct {
 }
 
 // +kubebuilder:object:root=true
-// +kubebuilder:resource:path=terraformclusteridentities,scope=Cluster,categories=cluster-api
+// +kubebuilder:resource:path=terraformclusteridentities,scope=Cluster,shortName=tfci,categories=cluster-api
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:printcolumn:name="Secret",type="string",JSONPath=".spec.secretRef.name",description="Credentials Secret"

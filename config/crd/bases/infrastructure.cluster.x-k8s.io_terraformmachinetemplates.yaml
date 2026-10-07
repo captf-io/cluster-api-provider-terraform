@@ -13,6 +13,8 @@ spec:
     kind: TerraformMachineTemplate
     listKind: TerraformMachineTemplateList
     plural: terraformmachinetemplates
+    shortNames:
+    - tfmt
     singular: terraformmachinetemplate
   scope: Namespaced
   versions:

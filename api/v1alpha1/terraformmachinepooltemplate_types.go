@@ -40,7 +40,7 @@ type TerraformMachinePoolTemplateResource struct {
 }
 
 // +kubebuilder:object:root=true
-// +kubebuilder:resource:path=terraformmachinepooltemplates,scope=Namespaced,categories=cluster-api
+// +kubebuilder:resource:path=terraformmachinepooltemplates,scope=Namespaced,shortName=tfmpt,categories=cluster-api
 // +kubebuilder:storageversion
 // +kubebuilder:printcolumn:name="Image",type="string",JSONPath=".spec.template.spec.source.image",description="Module image"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp",description="Time since creation"

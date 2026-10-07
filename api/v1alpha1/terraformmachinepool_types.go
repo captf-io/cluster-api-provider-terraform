@@ -174,7 +174,7 @@ type TerraformMachinePoolStatus struct {
 }
 
 // +kubebuilder:object:root=true
-// +kubebuilder:resource:path=terraformmachinepools,scope=Namespaced,categories=cluster-api
+// +kubebuilder:resource:path=terraformmachinepools,scope=Namespaced,shortName=tfmp,categories=cluster-api
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
 // +kubebuilder:printcolumn:name="Cluster",type="string",JSONPath=".metadata.labels['cluster\\.x-k8s\\.io/cluster-name']",description="Cluster"
