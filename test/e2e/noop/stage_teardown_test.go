@@ -208,9 +208,10 @@ func (s *suite) jobCount(ctx context.Context, t *testing.T, kind, name, op strin
 	return len(list.Items)
 }
 
-// checkSweep waits until the namespace holds no CAPTF Secret (state,
-// inputs, plan key, run inputs, backups, mirror), no CAPTF Lease, and no
-// runner ServiceAccount or RoleBinding, failing t with what is left.
+// checkSweep waits until the namespace holds no CAPTF Secret (state, the
+// attempt and applied inputs records captf-inputs-* and captf-applied-*,
+// per-run captf-run-*, plan key, backups, mirror), no Job, no CAPTF Lease,
+// and no runner ServiceAccount or RoleBinding, failing t with what is left.
 // It waits under ctx.
 func (s *suite) checkSweep(ctx context.Context, t *testing.T) {
 	t.Helper()
@@ -226,6 +227,13 @@ func (s *suite) checkSweep(ctx context.Context, t *testing.T) {
 			return err
 		}
 		left = append(left, prefixAll("Secret ", named)...)
+		jobs, err := s.c.Kube.BatchV1().Jobs(s.ns).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return err
+		}
+		for i := range jobs.Items {
+			left = append(left, "Job "+jobs.Items[i].Name)
+		}
 		leases, err := s.c.Kube.CoordinationV1().Leases(s.ns).List(ctx, metav1.ListOptions{})
 		if err != nil {
 			return err
@@ -245,8 +253,8 @@ func (s *suite) checkSweep(ctx context.Context, t *testing.T) {
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("expected no CAPTF Secret, Lease or runner RBAC left once every Terraform* object is gone: %v; inspect: %s",
-			err, s.kubectlNS("get secrets,leases,serviceaccounts,rolebindings"))
+		t.Fatalf("expected no CAPTF Secret, Job, Lease or runner RBAC left once every Terraform* object is gone: %v; inspect: %s",
+			err, s.kubectlNS("get secrets,jobs,leases,serviceaccounts,rolebindings"))
 	}
 }
 
