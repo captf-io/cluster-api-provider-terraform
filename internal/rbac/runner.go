@@ -26,6 +26,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -110,7 +111,16 @@ func ensureServiceAccount(ctx context.Context, c client.Client, namespace string
 		Name:      ServiceAccount,
 		Labels:    map[string]string{state.ManagedLabel: "true"},
 	}}
-	err := c.Create(ctx, sa)
+	// Get first: every live pass calls this, and a Create of an existing
+	// ServiceAccount is a POST through admission that always answers 409.
+	err := c.Get(ctx, client.ObjectKeyFromObject(sa), &corev1.ServiceAccount{})
+	if err == nil {
+		return nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("rbac: get serviceaccount %s/%s: %w", namespace, ServiceAccount, err)
+	}
+	err = c.Create(ctx, sa)
 	if apierrors.IsAlreadyExists(err) {
 		return nil
 	}
@@ -160,6 +170,26 @@ func newBinding(namespace string, subjects []rbacv1.Subject) *rbacv1.RoleBinding
 // nil on success, or an error from a failed read, create, delete or update,
 // including ErrBindingConflict when the existing binding is not managed.
 func ensureBinding(ctx context.Context, c client.Client, namespace, sa string) error {
+	return retryBinding(func() error { return ensureBindingOnce(ctx, c, namespace, sa) })
+}
+
+// retryBinding runs fn, which reads the RoleBinding afresh on each call,
+// again while it fails with a conflict or an already-exists (the
+// retry.DefaultRetry backoff): several objects first using a namespace
+// race to create and update the one binding, and the loser only has to
+// look again. It returns fn's last error.
+func retryBinding(fn func() error) error {
+	return retry.OnError(retry.DefaultRetry, func(err error) bool {
+		return apierrors.IsConflict(err) || apierrors.IsAlreadyExists(err)
+	}, fn)
+}
+
+// ensureBindingOnce is one attempt of ensureBinding: ctx bounds every call
+// it makes through client c, against the RoleBinding of namespace, and sa
+// is the ServiceAccount to bind. It returns nil on success, or an error
+// from a failed read, create, delete or update, including
+// ErrBindingConflict when the existing binding is not managed.
+func ensureBindingOnce(ctx context.Context, c client.Client, namespace, sa string) error {
 	want := subject(namespace, sa)
 	rb := &rbacv1.RoleBinding{}
 	err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: RoleBinding}, rb)
@@ -243,6 +273,14 @@ func allowedSubjects(ctx context.Context, c client.Client, namespace string, sub
 // returns nil when the binding is missing or not managed, or an error from
 // a failed read, delete or update.
 func removeSubject(ctx context.Context, c client.Client, namespace, sa string) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error { return removeSubjectOnce(ctx, c, namespace, sa) })
+}
+
+// removeSubjectOnce is one attempt of removeSubject: it reads the
+// RoleBinding of namespace afresh through client c bounded by ctx, and
+// drops sa from it. It returns nil when the binding is missing or not
+// managed, or an error from a failed read, delete or update.
+func removeSubjectOnce(ctx context.Context, c client.Client, namespace, sa string) error {
 	rb := &rbacv1.RoleBinding{}
 	err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: RoleBinding}, rb)
 	if apierrors.IsNotFound(err) {
