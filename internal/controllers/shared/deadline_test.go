@@ -82,7 +82,7 @@ func TestDeadlineJobIgnoresInterruptedAnnotation(t *testing.T) {
 	stale.Annotations = map[string]string{BookkeptAnnotation: "true", InterruptedAnnotation: "true"}
 	e := newEnv(t, world(machine(withFinalizer, notPaused))...)
 	e.runner.jobs = append(e.runner.jobs, stale)
-	got, err := collectFinished(t.Context(), e.d, e.runner.jobs)
+	got, err := collectFinished(t.Context(), e.d, e.runner.jobs, testNS, "s")
 	if err != nil || len(got) != 1 || got[0].interrupted {
 		t.Errorf("collectFinished = %+v, %v; want the deadline Job not interrupted", got, err)
 	}

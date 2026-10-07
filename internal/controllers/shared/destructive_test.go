@@ -439,7 +439,7 @@ func TestDestructivePlanBlocksCostNoBackoff(t *testing.T) {
 		t.Errorf("retry number = %d, want 2 (only a2 failed)", n)
 	}
 	e := newEnv(t, world(machine(withFinalizer, notPaused))...)
-	got, err := collectFinished(t.Context(), e.d, []batchv1.Job{bookkept})
+	got, err := collectFinished(t.Context(), e.d, []batchv1.Job{bookkept}, testNS, "s")
 	if err != nil || len(got) != 1 || !got[0].blocked {
 		t.Errorf("collectFinished = %+v, %v; want the bookkept Job marked blocked", got, err)
 	}

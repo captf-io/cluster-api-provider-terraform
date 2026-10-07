@@ -898,6 +898,24 @@ func TestBuildSafeToEvict(t *testing.T) {
 	}
 }
 
+// TestBuildStateLockVersion checks that only an apply Job records the
+// state lock version it was given, and none records an empty one.
+func TestBuildStateLockVersion(t *testing.T) {
+	t.Parallel()
+	for op, want := range map[Op]string{OpApply: "42", OpDestroy: "", OpPlan: "", OpRestore: ""} {
+		s := spec(op)
+		s.StateLockVersion = "42"
+		job, _ := Build(s, "runner:img")
+		if got := job.Annotations[StateLockVersionAnnotation]; got != want {
+			t.Errorf("%s: %s = %q, want %q", op, StateLockVersionAnnotation, got, want)
+		}
+	}
+	job, _ := Build(spec(OpApply), "runner:img")
+	if _, ok := job.Annotations[StateLockVersionAnnotation]; ok {
+		t.Error("an apply without a recorded version carries the annotation")
+	}
+}
+
 // TestBuildReservedEnvWins checks that user env named like a variable the
 // Job sets itself is dropped, so the built-in value is the only one.
 func TestBuildReservedEnvWins(t *testing.T) {

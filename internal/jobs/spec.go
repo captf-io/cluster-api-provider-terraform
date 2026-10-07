@@ -127,6 +127,10 @@ type Spec struct {
 	// Suffix and BackendLabels complete the kubernetes backend.
 	Suffix        string
 	BackendLabels map[string]string
+	// StateLockVersion is the state lock Lease's resourceVersion at
+	// creation (StateLockVersionAnnotation), recorded on an apply Job;
+	// "" records nothing.
+	StateLockVersion string
 	// ForceUnlockID, when set, makes the runner force-unlock this stale
 	// lock after init: force-unlock needs backend initialization
 	// (internal/runner.Steps).
@@ -273,6 +277,12 @@ func Build(s Spec, runnerImage string) (*batchv1.Job, []string) {
 			annotations = map[string]string{}
 		}
 		annotations[RestoreSerialAnnotation] = strconv.FormatInt(s.Restore.Serial, 10)
+	}
+	if s.Op == OpApply && s.StateLockVersion != "" {
+		if annotations == nil {
+			annotations = map[string]string{}
+		}
+		annotations[StateLockVersionAnnotation] = s.StateLockVersion
 	}
 
 	job := &batchv1.Job{

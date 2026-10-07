@@ -183,7 +183,7 @@ func TestInterruptedJobsCostNoBackoff(t *testing.T) {
 	// The mark survives bookkeeping: the collector reads it back from the Job.
 	e := newEnv(t, world(machine(withFinalizer, notPaused))...)
 	e.runner.jobs = append(e.runner.jobs, bookkeptInterrupted)
-	got, err := collectFinished(t.Context(), e.d, e.runner.jobs)
+	got, err := collectFinished(t.Context(), e.d, e.runner.jobs, testNS, "s")
 	if err != nil || len(got) != 1 || !got[0].interrupted || !got[0].bookkept {
 		t.Errorf("collectFinished = %+v, %v; want the bookkept Job marked interrupted", got, err)
 	}

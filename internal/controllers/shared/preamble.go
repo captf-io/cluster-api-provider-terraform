@@ -23,6 +23,7 @@ import (
 	"slices"
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -350,7 +351,35 @@ func hasStateOrJob(ctx context.Context, d Deps, k Kind, suffix string) (bool, er
 		}
 		return true, nil
 	}
-	return jobRunning(ctx, d, k, suffix)
+	if busy, err := jobRunning(ctx, d, k, suffix); err != nil || busy {
+		return busy, err
+	}
+	return unbookkeptApply(ctx, d, k)
+}
+
+// unbookkeptApply reports, using ctx and the shared dependencies d,
+// whether k's object has an apply Job bookkeeping has not read yet: a
+// finished one not marked bookkept, or the one status.activeJob names
+// that is gone. Either may be an apply whose outcome is unconfirmed
+// (recordCrashed, recordVanishedApply), which only the full reconcile
+// records; releasing before that would drop the finalizer over resources
+// it may have created. It returns any error listing the Jobs.
+func unbookkeptApply(ctx context.Context, d Deps, k Kind) (bool, error) {
+	obj := k.Object()
+	list, err := d.Jobs.List(ctx, obj, k.Kind())
+	if err != nil {
+		return false, fmt.Errorf("list jobs: %w", err)
+	}
+	for i := range list {
+		j := &list[i]
+		if jobs.OpOf(j) == jobs.OpApply && jobs.OutcomeOf(j) != jobs.Running && j.Annotations[BookkeptAnnotation] != "true" {
+			return true, nil
+		}
+	}
+	a := k.Status().ActiveJob
+	vanished := a.Name != "" && a.Operation == infrav1.Operation(jobs.OpApply) &&
+		!slices.ContainsFunc(list, func(j batchv1.Job) bool { return j.Name == a.Name })
+	return vanished, nil
 }
 
 // jobRunning reports, using ctx and the shared dependencies d, whether k's

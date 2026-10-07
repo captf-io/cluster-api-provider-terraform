@@ -1407,7 +1407,7 @@ func (r *reconciler) noState(ctx context.Context) error {
 		if err := r.confirmNoResources(ctx); err != nil {
 			return err
 		}
-		if job := r.interruptedApply(); job != "" {
+		if job := unconfirmedApply(r.durable); job != "" {
 			r.outcomeUnknown(job)
 			return errStateUnreadable
 		}

@@ -158,8 +158,11 @@ func appliedExportsHash(durable *inputs.Durable) string {
 // mayHaveApplied reports whether f, a failed apply, may have changed
 // resources: its result lists the apply step, or there is no result to
 // tell and its runner started (an interrupted or killed run) or its pod
-// is gone. A pod whose runner never started (unschedulable until the
-// deadline, or its image never pulled) changed nothing.
+// is gone without proof that it never ran. A pod whose runner never
+// started (unschedulable, its image never pulled) changed nothing, and
+// neither did a Job whose pod is gone or never existed (deleted at the
+// deadline, refused by a quota) when it left the state lock untouched
+// (lockUntouched).
 func mayHaveApplied(f *finished) bool {
 	switch {
 	case f.result != nil:
@@ -167,7 +170,7 @@ func mayHaveApplied(f *finished) bool {
 	case f.pod != nil:
 		return runnerStarted(f.pod)
 	}
-	return true
+	return !f.lockUntouched
 }
 
 // runnerStarted reports whether pod's runner container

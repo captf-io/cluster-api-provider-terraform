@@ -320,6 +320,14 @@ func startJob(ctx context.Context, d Deps, k Kind, req JobRequest) (job *batchv1
 	// approved apply fingerprint their plan; all must key it with the same
 	// per-object key, so the Secret exists before any of those Jobs does.
 	var planKey string
+	// An apply records the state lock's version, so a Job that ends with
+	// no pod and no result can prove it never ran (lockUntouched).
+	var lockVersion string
+	if req.Op == jobs.OpApply {
+		if lockVersion, err = stateLockVersion(ctx, d.APIReader, obj.GetNamespace(), req.Suffix); err != nil {
+			return nil, false, err
+		}
+	}
 	if (jobs.Spec{Op: req.Op, OwnerKind: k.Kind(), ApprovalHash: req.ApprovalHash, ExpectPlan: req.ExpectPlan}).Fingerprints() {
 		name, err := plankey.Ensure(ctx, d.Client, obj)
 		if err != nil {
@@ -347,6 +355,8 @@ func startJob(ctx context.Context, d Deps, k Kind, req JobRequest) (job *batchv1
 		Suffix:         req.Suffix,
 		BackendLabels:  state.BackendLabels(k.Kind(), obj.GetName(), req.ClusterName),
 		ForceUnlockID:  req.ForceUnlockID,
+
+		StateLockVersion: lockVersion,
 
 		AllowDeletesHash: req.AllowDeletesHash,
 		ApprovalHash:     req.ApprovalHash,

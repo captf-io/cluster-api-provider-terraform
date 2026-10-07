@@ -49,6 +49,19 @@ const (
 // backup it pushes.
 const RestoreSerialAnnotation = "captf.io/restore-serial"
 
+// StateLockVersionAnnotation records, on an apply Job, the
+// resourceVersion of its object's state lock Lease when the Job was
+// created, or StateLockAbsent when there was no Lease. Terraform and
+// OpenTofu take that lock before they change anything, and every lock and
+// unlock writes the Lease: an apply Job that ended with no pod and no
+// result left the Lease as recorded only if it never reached its runtime,
+// so it created nothing.
+const StateLockVersionAnnotation = "captf.io/state-lock-version"
+
+// StateLockAbsent is StateLockVersionAnnotation's value when the state
+// lock Lease did not exist.
+const StateLockAbsent = "none"
+
 // RestoreChunkDir is where a restore Job's config volume holds the backup's
 // chunks, named 0, 1, …: a subdirectory, so the runner's copy of the
 // rendered root (top-level files only) leaves them out.

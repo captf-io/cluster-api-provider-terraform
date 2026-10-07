@@ -272,6 +272,11 @@ type finished struct {
 	// planUnreadable is true for a plan Job that succeeded without a
 	// readable plan: it counts as failed (PlanUnreadableAnnotation).
 	planUnreadable bool
+	// lockUntouched is true for a failed apply with neither a pod nor a
+	// result that left the state lock Lease as it was when the Job was
+	// created (lockUntouched): its runtime never ran, so it changed
+	// nothing.
+	lockUntouched bool
 	// counted is true when this pass deleted the per-run Secret
 	// (deleteRuns), which happens once per Job: its completion is counted
 	// now.
@@ -308,7 +313,7 @@ func Bookkeep(ctx context.Context, d Deps, k Kind, eff EffectiveConfig, suffix s
 		bk.View.FailedLimit = max(int(*eff.Jobs.FailedJobsHistoryLimit), 1)
 	}
 
-	done, err := collectFinished(ctx, d, list)
+	done, err := collectFinished(ctx, d, list, obj.GetNamespace(), suffix)
 	if err != nil {
 		return nil, err
 	}
@@ -369,9 +374,11 @@ func Bookkeep(ctx context.Context, d Deps, k Kind, eff EffectiveConfig, suffix s
 
 // collectFinished reads, using ctx and the shared dependencies d, each
 // finished Job of list's newest pod and result; a bookkept Job costs no
-// API call. Its per-run Secret stays until deleteRuns. It returns the
-// finished Jobs found, or any error reading pods.
-func collectFinished(ctx context.Context, d Deps, list []batchv1.Job) ([]finished, error) {
+// API call. A failed apply with neither a pod nor a result also reads
+// the state lock Lease of suffix in namespace (lockUntouched). Its
+// per-run Secret stays until deleteRuns. It returns the finished Jobs
+// found, or any error reading pods.
+func collectFinished(ctx context.Context, d Deps, list []batchv1.Job, namespace, suffix string) ([]finished, error) {
 	var done []finished
 	for i := range list {
 		job := &list[i]
@@ -407,6 +414,9 @@ func collectFinished(ctx context.Context, d Deps, list []batchv1.Job) ([]finishe
 				f.blocked = !f.ok && r.Error != nil && r.Error.Kind == string(infrav1.RunErrorKindBlocked) && jobs.OpOf(job) == jobs.OpApply
 				f.planChanged = !f.ok && r.Error != nil && r.Error.Kind == string(infrav1.RunErrorKindPlanChanged) && jobs.OpOf(job) == jobs.OpApply
 			}
+		}
+		if !f.ok && f.pod == nil && f.result == nil && jobs.OpOf(job) == jobs.OpApply {
+			f.lockUntouched = lockUntouched(ctx, d.APIReader, job, namespace, suffix)
 		}
 		if f.ok && jobs.OpOf(job) == jobs.OpPlan && (f.result == nil || f.result.Plan == nil) {
 			// Without its plan there is nothing to approve; as a success it

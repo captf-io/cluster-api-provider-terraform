@@ -29,6 +29,7 @@ import (
 	"github.com/captf-io/cluster-api-provider-terraform/internal/controllers/shared"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/inputs"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/jobs"
+	"github.com/captf-io/cluster-api-provider-terraform/internal/runner"
 )
 
 // unknownWhy is what a blocked apply's condition says while the exports
@@ -245,13 +246,14 @@ func TestSeedRecorded(t *testing.T) {
 }
 
 // TestSeedNeverApplied: a pool that never applied has no exports to
-// know: its first apply, and its retry after that one failed, are not
-// guarded, and nothing is seeded.
+// know: its first apply, and its retry after that one failed (before its
+// apply step: one that failed after it with no state saved is held as
+// unconfirmed), are not guarded, and nothing is seeded.
 func TestSeedNeverApplied(t *testing.T) {
 	t.Parallel()
 	e := newPoolEnv(t)
 	first := e.reconcileStarts(jobs.OpApply)
-	e.fail(first)
+	e.failAt(first, runner.StepPlan)
 	r := e.reconcileStarts(jobs.OpApply)
 	if e.guarded(r) || r.Annotations[shared.ApprovalHashAnnotation] != "" {
 		t.Errorf("retry of a failed first apply: args %v, annotations %v", e.args(r), r.Annotations)

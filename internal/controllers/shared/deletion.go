@@ -53,17 +53,38 @@ import (
 // k's object ever applied or may have, so a missing state is not one that
 // was never written: it applied (appliedBefore), or an apply Job whose
 // outcome is unconfirmed is recorded on durable, the inputs records as
-// read (nil when none). That Job ended without a result or vanished
-// before any state was written, so it may have created resources: for
-// every kind, a deletion is held rather than released, and no second
-// first apply runs (ApplyOutcomeUnknown). suffix is the object's state
-// suffix, which names its backups. It returns whether the object ever
-// applied or may have, and any error listing the backups.
+// read (nil when none; unconfirmedApply). That Job ended without a
+// result, vanished, or failed after its apply step ran, with no state
+// written, so it may have created resources: for every kind, a deletion
+// is held rather than released, and no second first apply runs
+// (ApplyOutcomeUnknown). suffix is the object's state suffix, which names
+// its backups. It returns whether the object ever applied or may have,
+// and any error listing the backups.
 func everApplied(ctx context.Context, d Deps, k Kind, suffix string, durable *inputs.Durable) (bool, error) {
-	if durable != nil && durable.InterruptedApply != "" {
+	if unconfirmedApply(durable) != "" {
 		return true, nil
 	}
 	return appliedBefore(ctx, d, k, suffix, durable)
+}
+
+// unconfirmedApply returns the apply Job on durable, the inputs records as
+// read (nil when none), whose outcome no state may record: the one
+// recorded as interrupted (InterruptedApply: it ended without a result or
+// vanished), else the attempt record's Job when it failed after its apply
+// step may have run (MayHaveApplied) and is not the applied record's. It
+// returns "" when there is none. Only a missing state makes it matter:
+// with a state, the state records what the Job left.
+func unconfirmedApply(durable *inputs.Durable) string {
+	switch {
+	case durable == nil:
+		return ""
+	case durable.InterruptedApply != "":
+		return durable.InterruptedApply
+	}
+	if t := durable.Attempt; t != nil && t.MayHaveApplied && (durable.Applied == nil || durable.Applied.Job != t.Job) {
+		return t.Job
+	}
+	return ""
 }
 
 // appliedBefore reports, using ctx and the shared dependencies d, whether
@@ -113,13 +134,14 @@ func (r *reconciler) lostOnDelete() {
 }
 
 // outcomeUnknown sets StateReadable False/ApplyOutcomeUnknown for an
-// object without state whose apply Job job ended without a result or
-// disappeared, so it may have created resources no state records: no
-// apply runs, and a deletion is held (heldNote). The message names the
+// object without state whose apply Job job ended without a result,
+// disappeared, or failed after its apply step ran without saving a state
+// (unconfirmedApply), so it may have created resources no state records:
+// no apply runs, and a deletion is held (heldNote). The message names the
 // Job and the ways out: a restore, confirming the Job created nothing
 // (ConfirmNoResourcesAnnotation), or, deleting, Retain.
 func (r *reconciler) outcomeUnknown(job string) {
-	msg := "No state exists, but apply Job " + job + " ended without a result or disappeared while it ran, " +
+	msg := "No state exists, but apply Job " + job + " ended without a result, disappeared while it ran, or failed after its apply step without saving a state, " +
 		"so it may have created resources that no state records. "
 	if r.deleting {
 		msg += "Once the infrastructure is checked and holds nothing it created, set " + infrav1.ConfirmNoResourcesAnnotation + "=" + job +
@@ -136,26 +158,40 @@ func (r *reconciler) outcomeUnknown(job string) {
 
 // confirmNoResources consumes ConfirmNoResourcesAnnotation, using ctx,
 // when it names the apply Job whose outcome is unconfirmed
-// (interruptedApply): the operator checked that the Job created nothing,
-// so the record is removed (inputs.ClearInterruptedApply), then the
-// annotation (removeAnnotation), and a missing state reads as none yet in
-// this same pass. An annotation naming another Job, or set while none is
-// recorded, is left alone. It returns any error from removing either.
+// (unconfirmedApply): the operator checked that the Job created nothing,
+// so its record is removed (inputs.ClearInterruptedApply, or
+// inputs.ClearMayHaveApplied on the attempt record), then the annotation
+// (removeAnnotation), and a missing state reads as none yet in this same
+// pass. An annotation naming another Job is left alone; one left with no
+// Job unconfirmed any more (a pass cut short between the two removals, or
+// a record a successful apply cleared since) is removed. It returns any
+// error from removing either.
 func (r *reconciler) confirmNoResources(ctx context.Context) error {
-	v, job := strings.TrimSpace(r.annotation(infrav1.ConfirmNoResourcesAnnotation)), r.interruptedApply()
-	if v == "" || job == "" {
-		return nil
-	}
+	v, job := strings.TrimSpace(r.annotation(infrav1.ConfirmNoResourcesAnnotation)), unconfirmedApply(r.durable)
 	logger := klog.FromContext(ctx)
-	if v != job {
+	switch {
+	case v == "":
+		return nil
+	case job == "":
+		logger.V(LogFlow).Info("No apply Job is unconfirmed; removing the stale confirmation", "annotation", infrav1.ConfirmNoResourcesAnnotation, "names", v)
+		return r.removeAnnotation(ctx, infrav1.ConfirmNoResourcesAnnotation)
+	case v != job:
 		logger.Info("The confirmation that an apply Job created nothing names another Job; ignored",
 			"annotation", infrav1.ConfirmNoResourcesAnnotation, "names", v, "unconfirmed", job)
 		return nil
 	}
-	if err := inputs.ClearInterruptedApply(ctx, r.d.Client, r.obj); err != nil && !errors.Is(err, inputs.ErrNotFound) {
-		return err
+	if r.durable.InterruptedApply != "" {
+		if err := inputs.ClearInterruptedApply(ctx, r.d.Client, r.obj); err != nil && !errors.Is(err, inputs.ErrNotFound) {
+			return err
+		}
+		r.durable.InterruptedApply = ""
 	}
-	r.durable.InterruptedApply = ""
+	if t := r.durable.Attempt; t != nil && t.MayHaveApplied && t.Job == job {
+		if err := inputs.ClearMayHaveApplied(ctx, r.d.Client, r.obj); err != nil && !errors.Is(err, inputs.ErrNotFound) {
+			return err
+		}
+		t.MayHaveApplied = false
+	}
 	if err := r.removeAnnotation(ctx, infrav1.ConfirmNoResourcesAnnotation); err != nil {
 		return err
 	}

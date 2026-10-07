@@ -766,13 +766,13 @@ func TestPlanChangedCostsNoBackoff(t *testing.T) {
 	e := newEnv(t, world(machine(withFinalizer, notPaused))...)
 	unreadable := job("p1", jobs.OpPlan, jobs.Succeeded, t0)
 	e.runner.jobs = append(e.runner.jobs, unreadable)
-	got, err := collectFinished(t.Context(), e.d, []batchv1.Job{bookkept, unreadable})
+	got, err := collectFinished(t.Context(), e.d, []batchv1.Job{bookkept, unreadable}, testNS, "s")
 	if err != nil || len(got) != 2 || !got[0].planChanged || got[1].ok || !got[1].planUnreadable {
 		t.Fatalf("collectFinished = %+v, %v; want a3 plan-changed, p1 failed as unreadable", got, err)
 	}
 	marked := unreadable.DeepCopy()
 	marked.Annotations = map[string]string{BookkeptAnnotation: "true", PlanUnreadableAnnotation: "true"}
-	if got, err := collectFinished(t.Context(), e.d, []batchv1.Job{*marked}); err != nil || got[0].ok {
+	if got, err := collectFinished(t.Context(), e.d, []batchv1.Job{*marked}, testNS, "s"); err != nil || got[0].ok {
 		t.Errorf("bookkept unreadable plan = %+v, %v; want still failed", got, err)
 	}
 }
