@@ -110,6 +110,10 @@ func release(ctx context.Context, d Deps, k Kind, identityName string) error {
 					"object", klog.KObj(obj), "mirror", klog.KObj(mirror))
 				return fmt.Errorf("%w: %w", errMirrorConflict, err)
 			}
+			if apierrors.IsNotFound(err) {
+				// Revoked or removed by another object meanwhile: gone.
+				break
+			}
 			if err != nil {
 				return err
 			}

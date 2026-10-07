@@ -138,6 +138,9 @@ func ReconcileWithOwner(ctx context.Context, d Deps, k Kind) (_ ctrl.Result, _ O
 	} else {
 		res, err = r.run(ctx)
 	}
+	if err == nil && r.credsErr != nil {
+		err = r.credsErr
+	}
 	if errors.Is(err, errAnnotationConflict) {
 		klog.FromContext(ctx).V(LogFlow).Info("The object changed while removing a consumed annotation; deciding again", "reason", err.Error())
 		return ctrl.Result{RequeueAfter: LagRequeue}, pre.Owner, nil
@@ -171,10 +174,14 @@ type reconciler struct {
 	// their owner references this pass.
 	chunks []metav1.ObjectMeta
 
-	identityName     string
-	identityKind     infrav1.IdentityKind
-	identityAllowed  bool
-	credsReady       bool
+	identityName    string
+	identityKind    infrav1.IdentityKind
+	identityAllowed bool
+	credsReady      bool
+	// credsErr is the error credentials returned this pass; reconcile
+	// returns it, after the status patch, once run finished without one, so
+	// the pass requeues with backoff.
+	credsErr         error
 	serviceAccount   string
 	finalizerDropped bool
 	// retainedFrom is the uid of the earlier object whose retained Secrets
@@ -425,11 +432,6 @@ func (r *reconciler) paused(ctx context.Context) (ctrl.Result, error) {
 // returns the controller-runtime result and any error from that path.
 func (r *reconciler) run(ctx context.Context) (ctrl.Result, error) {
 	r.resolveIdentity()
-	if !r.deleting {
-		if err := r.credentials(ctx); err != nil {
-			return ctrl.Result{}, err
-		}
-	}
 	lastRefresh := r.st.LastRefresh
 	bk, err := r.bookkeep(ctx)
 	if err != nil {
@@ -496,6 +498,16 @@ func (r *reconciler) run(ctx context.Context) (ctrl.Result, error) {
 	}
 	if stateErr != nil && !errors.Is(stateErr, errStateUnreadable) {
 		return ctrl.Result{}, stateErr
+	}
+	// Credentials only matter for starting a Job, so they are prepared here,
+	// after bookkeeping and the state read, and only while no Job runs: a
+	// persistent credential failure must not stop a finished Job from being
+	// bookkept. A failure gates the Job starts (credsReady) and is returned
+	// by reconcile after the status patch (credsErr).
+	if !r.deleting {
+		if err := r.credentials(ctx); err != nil {
+			r.credsReady, r.credsErr = false, err
+		}
 	}
 	// No Job is active, and cleanup has not started: the object's Secrets
 	// can be re-owned (after a restore, or a chunk written without a ref).
@@ -1137,8 +1149,16 @@ func (r *reconciler) identity(ctx context.Context) (bool, error) {
 	id, err := identity.Get(ctx, r.d.APIReader, r.identityName)
 	if apierrors.IsNotFound(err) {
 		set(metav1.ConditionFalse, infrav1.IdentityNotFoundReason, "TerraformClusterIdentity "+r.identityName+" not found")
-		pending("No identity")
-		return false, nil
+		pending("No identity; mirror revoked")
+		// The identity's delete guard may let a delete through (failure
+		// policy Ignore), so the mirror of a deleted identity is cleaned up
+		// here, as for a namespace it no longer allows.
+		removed, err := identity.Revoke(ctx, r.d.Client, r.identityName, ns)
+		if removed && err == nil {
+			r.d.Emit(r.obj, corev1.EventTypeNormal, EventMirrorRemoved, "Credentials",
+				"Removed credential mirror %s: TerraformClusterIdentity %s no longer exists", identity.MirrorName(r.identityName), r.identityName)
+		}
+		return false, err
 	}
 	if err != nil {
 		set(metav1.ConditionUnknown, infrav1.IdentityCheckFailedReason, err.Error())
@@ -1187,7 +1207,11 @@ func (r *reconciler) identity(ctx context.Context) (bool, error) {
 	// Many objects of a namespace share one mirror, so a concurrent update
 	// conflicts now and then; EnsureMirror re-reads it on each try.
 	var res identity.MirrorResult
-	err = retry.RetryOnConflict(retry.DefaultRetry, func() error {
+	// A NotFound on its update is the mirror removed under us (RemoveOwner
+	// or Revoke of another object); the next attempt creates it again.
+	err = retry.OnError(retry.DefaultRetry, func(err error) bool {
+		return apierrors.IsConflict(err) || apierrors.IsNotFound(err)
+	}, func() error {
 		var err error
 		_, res, err = identity.EnsureMirror(ctx, r.d.Client, r.d.APIReader, id, ns, r.obj)
 		return err

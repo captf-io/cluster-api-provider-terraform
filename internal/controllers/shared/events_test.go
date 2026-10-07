@@ -474,6 +474,12 @@ func TestLifecycleEvents(t *testing.T) {
 		if err := e.c.Update(t.Context(), id); err != nil {
 			t.Fatal(err)
 		}
+		// Credentials are only looked at while no Job runs.
+		for i := range e.runner.jobs {
+			e.runner.jobs[i].Status.Conditions = []batchv1.JobCondition{{
+				Type: batchv1.JobComplete, Status: corev1.ConditionTrue, LastTransitionTime: metav1.NewTime(t0),
+			}}
+		}
 		reconcileMachine(t, e, readyOwner)
 		reconcileMachine(t, e, readyOwner)
 		if n, m := e.rec.count(EventMirrorRemoved), e.rec.count(EventIdentityNotAllowed); n != 1 || m != 1 {
