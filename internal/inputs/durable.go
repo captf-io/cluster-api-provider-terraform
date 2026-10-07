@@ -215,8 +215,11 @@ func fileData(files render.Files) map[string][]byte {
 // successful apply records the exports again.
 //
 // It sets the image, identity, identity-kind, inputs-hash and job
-// annotations from rec, and removes MayHaveAppliedAnnotation: that marks
-// a Job of the record it replaces. It never touches AppliedAnnotation,
+// annotations from rec, and keeps MayHaveAppliedAnnotation: it marks that
+// an attempt since the last successful apply may have changed resources
+// the applied record does not describe, which a retry that fails before
+// its apply step does not undo, so only a successful apply's promotion
+// or a restore removes it (ClearMayHaveApplied). It never touches AppliedAnnotation,
 // PendingClusterOutputsAnnotation, PartialClusterOutputsAnnotation,
 // AppliedClusterOutputsHashAnnotation, InterruptedApplyAnnotation or
 // UnpullableImagesAnnotation, nor the applied Secret. rec.Digest and rec.MayHaveApplied are ignored.
@@ -255,7 +258,6 @@ func WriteAttempt(ctx context.Context, c client.Client, owner client.Object, rec
 	orig := existing.DeepCopy()
 	applied := existing.Data[AppliedClusterOutputsKey]
 	setRecord(existing, refs, kind, owner.GetName(), rec)
-	delete(existing.Annotations, MayHaveAppliedAnnotation)
 	if len(applied) > 0 && fitsNext(rec.Files, applied) {
 		existing.Data[AppliedClusterOutputsKey] = applied
 	}

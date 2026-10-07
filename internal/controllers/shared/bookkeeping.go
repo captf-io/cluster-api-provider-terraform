@@ -876,6 +876,14 @@ func (bk *Bookkeeping) promote(ctx context.Context, d Deps, k Kind, f *finished,
 	if err := bk.clearUnpullable(ctx, d, k, durable); err != nil {
 		return err
 	}
+	// The mark of an earlier failed attempt (inputs.WriteAttempt keeps it
+	// across retries) is spent: this apply converged the state.
+	if t := durable.LastAttempt(); t != nil && t.MayHaveApplied {
+		if err := inputs.ClearMayHaveApplied(ctx, d.Client, k.Object()); err != nil && !errors.Is(err, inputs.ErrNotFound) {
+			return err
+		}
+		bk.MayHaveAppliedCleared = true
+	}
 	logger.V(LogFlow).Info("Promoted the apply's inputs to the applied record", "inputsHash", rec.InputsHash, "digest", rec.Digest)
 	switch {
 	case rec.Digest == "":

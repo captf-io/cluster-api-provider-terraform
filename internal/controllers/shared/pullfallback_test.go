@@ -419,6 +419,9 @@ func TestPromotionClearsUnpullable(t *testing.T) {
 	if err := writeInputs(t.Context(), e.c, k.obj, renderMachine(t), testMeta{Image: specRef, Identity: testIdentity}); err != nil {
 		t.Fatal(err)
 	}
+	if err := inputs.SetMayHaveApplied(t.Context(), e.c, k.obj); err != nil {
+		t.Fatal(err)
+	}
 	if _, _, err := inputs.AddUnpullable(t.Context(), e.c, k.obj, nil, pinnedRef, t0); err != nil {
 		t.Fatal(err)
 	}
@@ -430,6 +433,10 @@ func TestPromotionClearsUnpullable(t *testing.T) {
 	d, err := inputs.Read(t.Context(), e.c, testNS, "m", testName)
 	if err != nil || d.Applied == nil || d.Applied.Job != seedJob || d.Unpullable != nil {
 		t.Errorf("records = %+v, %v; want the apply promoted and no unpullable images", d, err)
+	}
+	// An earlier failed attempt's mark is spent by the success.
+	if d.Attempt == nil || d.Attempt.MayHaveApplied {
+		t.Errorf("attempt = %+v, want the may-have-applied mark cleared", d.Attempt)
 	}
 }
 

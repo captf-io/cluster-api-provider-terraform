@@ -225,7 +225,8 @@ func TestWriteAttemptRead(t *testing.T) {
 		t.Fatalf("rewrite: %v", err)
 	}
 	d, _ = Read(ctx, c, ns, "m", "m")
-	if a := d.Attempt; a.Image != "ghcr.io/x/m:v2" || a.Identity != "id2" || a.IdentityKind != "" || a.InputsHash != "h1:b" || a.Job != "j2" || a.MayHaveApplied {
+	// The mark survives the rewrite: only a success or a restore spends it.
+	if a := d.Attempt; a.Image != "ghcr.io/x/m:v2" || a.Identity != "id2" || a.IdentityKind != "" || a.InputsHash != "h1:b" || a.Job != "j2" || !a.MayHaveApplied {
 		t.Errorf("after rewrite attempt = %+v", a)
 	}
 	if err := SetMayHaveApplied(ctx, c, owner); err != nil {
