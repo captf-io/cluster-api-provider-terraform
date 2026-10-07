@@ -37,7 +37,8 @@ import (
 // providerID on an existing TerraformMachine and change the plan-phase label
 // of a TerraformPlan; empty refuses those updates for everyone. schemas is
 // where the workload webhooks look up the variables schema of an image they
-// have already seen (nil checks none); they never contact a registry. It
+// have already seen, reading a missing one within SchemaFetchTimeout (nil
+// checks none). It
 // returns nil once every webhook is registered, or an error
 // from the first registration or scheme check that fails.
 func SetupWebhooks(mgr ctrl.Manager, managerUser string, schemas SchemaLookup) error {

@@ -17,6 +17,7 @@ limitations under the License.
 package options
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -83,7 +84,7 @@ func TestFlagSet(t *testing.T) {
 		"terraformcluster-concurrency", "terraformmachine-concurrency",
 		"terraformmachinetemplate-concurrency", "terraformmachinepool-concurrency", "webhook-port", "webhook-cert-dir",
 		"health-addr", "profiler-address", "diagnostics-address", "insecure-diagnostics",
-		"feature-gates", "runner-image", "runner-events", "drift-default-interval", "cluster-operation-gate", "max-active-jobs", "cluster-max-active-jobs", "state-backups", "logging-format", "v", "kubeconfig",
+		"feature-gates", "runner-image", "runner-events", "drift-default-interval", "cluster-operation-gate", "max-active-jobs", "cluster-max-active-jobs", "state-backups", "image-inspect-allow-private-registries", "image-inspect-allowed-registries", "logging-format", "v", "kubeconfig",
 	} {
 		if fs.Lookup(name) == nil {
 			t.Errorf("flag --%s is missing", name)
@@ -125,6 +126,8 @@ func TestDefaults(t *testing.T) {
 		{"max-active-jobs", o.MaxActiveJobs, 200},
 		{"cluster-max-active-jobs", o.ClusterMaxActiveJobs, 20},
 		{"state-backups", o.StateBackups, 5},
+		{"image-inspect-allow-private-registries", o.ImageInspectAllowPrivate, false},
+		{"image-inspect-allowed-registries", len(o.ImageInspectAllowedRegistries), 0},
 		{"verbosity", int(o.Logs.Verbosity), 2},
 	}
 	for _, c := range checks {
@@ -298,5 +301,27 @@ func TestManagerUser(t *testing.T) {
 				t.Errorf("ManagerUser = %q, want %q", o.ManagerUser, tt.want)
 			}
 		})
+	}
+}
+
+// TestImageInspectRegistries proves --image-inspect-allowed-registries is
+// split on commas and normalized (case, docker.io), and that Validate
+// rejects an entry that is not a registry host. It does not run
+// t.Parallel, for the reason TestFlagSet gives.
+func TestImageInspectRegistries(t *testing.T) {
+	o := parse(t, "--image-inspect-allow-private-registries", "--image-inspect-allowed-registries=GHCR.io, docker.io,reg.example.com:5000,")
+	if !o.ImageInspectAllowPrivate {
+		t.Error("--image-inspect-allow-private-registries not set")
+	}
+	got, err := o.AllowedRegistries()
+	if want := []string{"ghcr.io", "index.docker.io", "reg.example.com:5000"}; err != nil || !slices.Equal(got, want) {
+		t.Errorf("AllowedRegistries = %v, %v, want %v", got, err, want)
+	}
+	for _, bad := range []string{"ghcr.io/captf-io", "Not A Host", "user@ghcr.io"} {
+		o := parse(t, "--image-inspect-allowed-registries="+bad)
+		o.Complete(envWith(testImage))
+		if err := o.Validate(); err == nil || !strings.Contains(err.Error(), "--image-inspect-allowed-registries") {
+			t.Errorf("Validate(%q) = %v, want an allowed-registries error", bad, err)
+		}
 	}
 }

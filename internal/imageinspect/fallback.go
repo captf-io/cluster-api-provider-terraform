@@ -46,9 +46,10 @@ func (f fixedKeychain) Resolve(authn.Resource) (authn.Authenticator, error) { re
 
 // Config reads ref's image config through f.Inner, bounded by ctx and
 // selecting platform as Inspector.Config does, trying each of keychain's
-// matching credentials in order until one is not refused. It returns the
-// first success, the first refusal when every credential is refused, or
-// the first non-authentication error as soon as it occurs.
+// matching credentials in order until one is not refused, all within one
+// Timeout. It returns the first success, the first refusal when every
+// credential is refused, or the first non-authentication error as soon as
+// it occurs.
 func (f FallbackInspector) Config(ctx context.Context, ref string, keychain authn.Keychain, platform *v1.Platform) (*Config, error) {
 	k, ok := keychain.(*Keychain)
 	if !ok {
@@ -62,6 +63,9 @@ func (f FallbackInspector) Config(ctx context.Context, ref string, keychain auth
 	if len(candidates) < 2 {
 		return f.Inner.Config(ctx, ref, keychain, platform)
 	}
+	// One deadline for all candidates, not a fresh Timeout for each.
+	ctx, cancel := context.WithTimeout(ctx, Timeout)
+	defer cancel()
 	var first error
 	for _, a := range candidates {
 		cfg, err := f.Inner.Config(ctx, ref, fixedKeychain{auth: a}, platform)

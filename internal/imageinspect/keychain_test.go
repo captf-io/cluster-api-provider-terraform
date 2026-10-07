@@ -162,7 +162,7 @@ func TestFallbackInspector(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f := FallbackInspector{Inner: Remote{Insecure: true}}
+	f := FallbackInspector{Inner: Remote{Insecure: true, AllowPrivate: true}}
 	k := keychainOf(t, pullSecret("s", `{
 		"`+host+`/team":{"username":"stale","password":"x"},
 		"`+host+`":{"username":"good","password":"pw"}}`))

@@ -215,7 +215,7 @@ func (r *Reconciler) validateVariables(ctx context.Context, t *infrav1.Terraform
 	set := func(status metav1.ConditionStatus, reason, msg string) {
 		conditions.Set(t, metav1.Condition{Type: infrav1.VariablesValidCondition, Status: status, Reason: reason, Message: msg})
 	}
-	schema, schemaErr := r.Deps.Schemas.Remember(spec.Source.Image, cfg)
+	schema, schemaErr := r.Deps.Schemas.Remember(t.Namespace, spec.Source.Image, cfg)
 	vars, gate, err := shared.ResolveVariables(ctx, r.Deps.APIReader, t.Namespace, contract.RoleMachine,
 		shared.VariablesSpec{Inline: spec.Variables, From: spec.VariablesFrom})
 	switch {
@@ -262,8 +262,8 @@ func capacityNote(c corev1.ResourceList) string {
 }
 
 // InspectFailure returns the condition message for a failed inspection of
-// image: the image name and a class of err's failure (unauthorized, not
-// found, unreachable, invalid, other), never the registry's or the
+// image: the image name and a class of err's failure (egress denied, too
+// large, unauthorized, not found, unreachable, invalid, other), never the registry's or the
 // network's own error text.
 func InspectFailure(image string, err error) string {
 	var (
@@ -272,6 +272,10 @@ func InspectFailure(image string, err error) string {
 		nerr net.Error
 	)
 	switch {
+	case errors.Is(err, imageinspect.ErrEgressDenied):
+		return "Reading image " + image + " failed: the registry is not allowed by the manager's image-inspection egress policy"
+	case errors.Is(err, imageinspect.ErrConfigTooLarge):
+		return "Reading image " + image + " failed: the image config is too large"
 	case errors.As(err, &terr) && (terr.StatusCode == http.StatusUnauthorized || terr.StatusCode == http.StatusForbidden):
 		return "Reading image " + image + " failed: unauthorized; check the pull Secrets"
 	case errors.As(err, &terr) && terr.StatusCode == http.StatusNotFound:

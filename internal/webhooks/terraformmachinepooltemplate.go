@@ -58,7 +58,7 @@ var _ admission.Validator[*infrav1.TerraformMachinePoolTemplate] = &TerraformMac
 func (w *TerraformMachinePoolTemplate) ValidateCreate(ctx context.Context, obj *infrav1.TerraformMachinePoolTemplate) (admission.Warnings, error) {
 	errs := validatePoolTemplate(obj, nil)
 	if len(errs) == 0 {
-		errs = schemaErrors(w.Schemas, templateSpecPath, &obj.Spec.Template.Spec.WorkspaceSpec, nil)
+		errs = schemaErrors(ctx, w.Schemas, obj.Namespace, templateSpecPath, &obj.Spec.Template.Spec.WorkspaceSpec, nil)
 	}
 	return nil, invalid(ctx, terraformMachinePoolTemplateKind, obj.Name, errs)
 }
@@ -82,7 +82,7 @@ func (w *TerraformMachinePoolTemplate) ValidateUpdate(ctx context.Context, oldOb
 		errs = append(errs, immutable(templateSpecPath, terraformMachinePoolTemplateKind))
 	}
 	if len(errs) == 0 {
-		errs = schemaErrors(w.Schemas, templateSpecPath, &newObj.Spec.Template.Spec.WorkspaceSpec, &prior.WorkspaceSpec)
+		errs = schemaErrors(ctx, w.Schemas, newObj.Namespace, templateSpecPath, &newObj.Spec.Template.Spec.WorkspaceSpec, &prior.WorkspaceSpec)
 	}
 	return nil, invalid(ctx, terraformMachinePoolTemplateKind, newObj.Name, errs)
 }

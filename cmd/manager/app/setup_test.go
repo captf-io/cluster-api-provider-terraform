@@ -29,6 +29,7 @@ import (
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	"github.com/captf-io/cluster-api-provider-terraform/cmd/manager/app/options"
+	"github.com/captf-io/cluster-api-provider-terraform/internal/imageinspect"
 	captfmanager "github.com/captf-io/cluster-api-provider-terraform/internal/manager"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/metrics"
 )
@@ -233,6 +234,9 @@ func TestNewDeps(t *testing.T) {
 	}
 	if deps.StateBackups != opts.StateBackups {
 		t.Errorf("StateBackups = %d, want %d", deps.StateBackups, opts.StateBackups)
+	}
+	if fb, ok := deps.Inspector.(imageinspect.FallbackInspector); !ok || fb.Inner.(imageinspect.Remote).AllowPrivate != opts.ImageInspectAllowPrivate {
+		t.Errorf("Inspector = %#v, want a Remote with AllowPrivate %v", deps.Inspector, opts.ImageInspectAllowPrivate)
 	}
 	if deps.MaxActiveJobs != opts.MaxActiveJobs || deps.ClusterMaxActiveJobs != opts.ClusterMaxActiveJobs {
 		t.Errorf("Job limits = %d/%d, want %d/%d", deps.MaxActiveJobs, deps.ClusterMaxActiveJobs, opts.MaxActiveJobs, opts.ClusterMaxActiveJobs)

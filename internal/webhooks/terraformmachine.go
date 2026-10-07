@@ -76,7 +76,7 @@ func (w *TerraformMachine) ValidateCreate(ctx context.Context, obj *infrav1.Terr
 	specPath := field.NewPath("spec")
 	errs := validateMachineSpec(specPath, &obj.Spec, nil)
 	if len(errs) == 0 {
-		errs = schemaErrors(w.Schemas, specPath, &obj.Spec.WorkspaceSpec, nil)
+		errs = schemaErrors(ctx, w.Schemas, obj.Namespace, specPath, &obj.Spec.WorkspaceSpec, nil)
 	}
 	return nil, invalid(ctx, terraformMachineKind, obj.Name, errs)
 }
@@ -130,7 +130,7 @@ func (w *TerraformMachine) ValidateUpdate(ctx context.Context, oldObj, newObj *i
 		errs = append(errs, immutable(specPath.Child("variablesFrom"), terraformMachineKind))
 	}
 	if len(errs) == 0 {
-		errs = schemaErrors(w.Schemas, specPath, &newObj.Spec.WorkspaceSpec, &prior.WorkspaceSpec)
+		errs = schemaErrors(ctx, w.Schemas, newObj.Namespace, specPath, &newObj.Spec.WorkspaceSpec, &prior.WorkspaceSpec)
 	}
 	return nil, invalid(ctx, terraformMachineKind, newObj.Name, errs)
 }

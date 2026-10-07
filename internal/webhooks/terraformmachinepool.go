@@ -59,7 +59,7 @@ func (w *TerraformMachinePool) ValidateCreate(ctx context.Context, obj *infrav1.
 	specPath := field.NewPath("spec")
 	errs := validatePoolSpec(specPath, &obj.Spec, nil)
 	if len(errs) == 0 {
-		errs = schemaErrors(w.Schemas, specPath, &obj.Spec.WorkspaceSpec, nil)
+		errs = schemaErrors(ctx, w.Schemas, obj.Namespace, specPath, &obj.Spec.WorkspaceSpec, nil)
 	}
 	return nil, invalid(ctx, terraformMachinePoolKind, obj.Name, errs)
 }
@@ -82,7 +82,7 @@ func (w *TerraformMachinePool) ValidateUpdate(ctx context.Context, oldObj, newOb
 	specPath := field.NewPath("spec")
 	errs := validatePoolSpec(specPath, &newObj.Spec, prior)
 	if len(errs) == 0 {
-		errs = schemaErrors(w.Schemas, specPath, &newObj.Spec.WorkspaceSpec, &prior.WorkspaceSpec)
+		errs = schemaErrors(ctx, w.Schemas, newObj.Namespace, specPath, &newObj.Spec.WorkspaceSpec, &prior.WorkspaceSpec)
 	}
 	return nil, invalid(ctx, terraformMachinePoolKind, newObj.Name, errs)
 }

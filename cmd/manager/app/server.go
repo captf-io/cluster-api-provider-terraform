@@ -230,16 +230,18 @@ func setup(ctx context.Context, getConfig func() *rest.Config, opts *options.Opt
 	rec.ActiveJobs().Bind(mgr.GetCache())
 	warnManagerUserUnset(klog.FromContext(ctx), opts.ManagerUser)
 	// One schema cache: the controllers fill it as they inspect images, and
-	// the webhooks read it without ever contacting a registry.
+	// every replica's webhooks read it, filling a miss with a short,
+	// bounded registry read of their own.
 	schemas := imageinspect.NewSchemaCache()
-	if err := webhooks.SetupWebhooks(mgr, opts.ManagerUser, schemas); err != nil {
+	deps := newDeps(mgr, opts, rec)
+	deps.Schemas = schemas
+	fetcher := webhooks.SchemaFetcher{Cache: schemas, Inspector: deps.Inspector, Reader: deps.APIReader}
+	if err := webhooks.SetupWebhooks(mgr, opts.ManagerUser, fetcher); err != nil {
 		return nil, err
 	}
 	if err := shared.SetupIndexes(ctx, mgr); err != nil {
 		return nil, err
 	}
-	deps := newDeps(mgr, opts, rec)
-	deps.Schemas = schemas
 	// The spec.variablesFrom watches need their own label-scoped cache.
 	varCache, err := ctrlcache.New(mgr.GetConfig(),
 		captfmanager.VariablesCacheOptions(opts.Namespace, scheme, mgr.GetRESTMapper(), mgr.GetHTTPClient()))
@@ -312,6 +314,9 @@ func setupReconcilers(ctx context.Context, mgr ctrl.Manager, opts *options.Optio
 // rec.
 func newDeps(mgr ctrl.Manager, opts *options.Options, rec *metrics.Recorder) shared.Deps {
 	c, apiReader := mgr.GetClient(), mgr.GetAPIReader()
+	// Validate has accepted the list, so the error cannot occur.
+	allowed, _ := opts.AllowedRegistries()
+	remote := imageinspect.Remote{AllowPrivate: opts.ImageInspectAllowPrivate, AllowedRegistries: allowed}
 	return shared.Deps{
 		Client:       c,
 		APIReader:    apiReader,
@@ -321,7 +326,7 @@ func newDeps(mgr ctrl.Manager, opts *options.Options, rec *metrics.Recorder) sha
 		Jobs:         jobs.NewRunner(c, apiReader),
 		State:        state.NewReader(c),
 		Clock:        clock.RealClock{},
-		Inspector:    imageinspect.FallbackInspector{Inner: imageinspect.Remote{}},
+		Inspector:    imageinspect.FallbackInspector{Inner: remote},
 		RunnerImage:  opts.RunnerImage,
 		RunnerEvents: opts.RunnerEvents,
 		DriftDefault: opts.DriftDefaultInterval,

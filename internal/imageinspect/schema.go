@@ -53,16 +53,23 @@ type schemaEntry struct {
 	invalid error
 }
 
-// refEntry binds an image reference to the digest it resolved to.
+// refEntry binds an image reference, as one namespace read it, to the
+// digest it resolved to.
 type refEntry struct {
-	digest  string
+	digest string
+	// expires is when a mutable tag's binding lapses; zero for a
+	// reference that pins a digest.
 	expires time.Time
 }
 
 // SchemaCache holds the variables schemas of the images the manager has
 // inspected, by digest, and the digest each reference last resolved to.
-// The admission webhook reads it without contacting a registry. The zero
-// value is not usable; call NewSchemaCache. It is safe for concurrent use.
+// Schemas are shared by digest, but a reference resolves and is authorized
+// per namespace: a pull Secret is namespace-local, so a namespace may
+// learn a private image's schema only from a read that namespace made
+// itself, never from another tenant's. The admission webhook reads it
+// without contacting a registry. The zero value is not usable; call
+// NewSchemaCache. It is safe for concurrent use.
 type SchemaCache struct {
 	// now is the time source; tests replace it.
 	now func() time.Time
@@ -80,9 +87,17 @@ type failure struct {
 }
 
 // NewSchemaCache returns an empty SchemaCache.
-func NewSchemaCache() *SchemaCache {
-	return &SchemaCache{now: time.Now, byDigest: map[string]schemaEntry{}, byRef: map[string]refEntry{}, failed: map[string]failure{}}
+func NewSchemaCache() *SchemaCache { return NewSchemaCacheWithClock(time.Now) }
+
+// NewSchemaCacheWithClock returns an empty SchemaCache that reads time from
+// now, so a test can make a tag binding lapse.
+func NewSchemaCacheWithClock(now func() time.Time) *SchemaCache {
+	return &SchemaCache{now: now, byDigest: map[string]schemaEntry{}, byRef: map[string]refEntry{}, failed: map[string]failure{}}
 }
+
+// PinsDigest reports whether ref names its image by digest, so it never
+// resolves to anything else; a tag is mutable.
+func PinsDigest(ref string) bool { return digestOf(ref) != "" }
 
 // digestOf returns the digest of ref, a reference that pins one
 // ("repo@sha256:…", possibly with a tag before the @), or "".
@@ -93,44 +108,48 @@ func digestOf(ref string) string {
 	return ""
 }
 
-// Cached returns what ref's image declares when the cache already knows
-// it: the schema (nil when the image declares none or an unusable one) and
-// true. It never contacts a registry; for an unknown reference it returns
-// nil and false.
-func (c *SchemaCache) Cached(ref string) (*varschema.Schema, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	digest := digestOf(ref)
-	if digest == "" {
-		r, ok := c.byRef[ref]
-		if !ok || !c.now().Before(r.expires) {
-			return nil, false
-		}
-		digest = r.digest
-	}
-	e, ok := c.byDigest[digest]
+// refKey returns the cache key of ref as namespace reads it.
+func refKey(namespace, ref string) string { return namespace + "\x00" + ref }
+
+// Cached returns what ref's image declares when namespace itself has
+// already read it: the schema (nil when the image declares none or an
+// unusable one) and true. It never contacts a registry; for a reference
+// namespace has not read, or a tag binding that lapsed, it returns nil and
+// false, even when another namespace has read the image.
+func (c *SchemaCache) Cached(namespace, ref string) (*varschema.Schema, bool) {
+	e, ok := c.lookup(namespace, ref)
 	return e.schema, ok
 }
 
-// Schema returns the variables schema ref's image declares, from the cache
-// or else by reading the image config with insp, bounded by ctx and
-// authenticated with keychain, and caches the answer by digest. A nil
+// lookup returns the entry namespace's reading of ref resolved to; a nil
+// cache knows nothing.
+func (c *SchemaCache) lookup(namespace, ref string) (schemaEntry, bool) {
+	if c == nil {
+		return schemaEntry{}, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	r, ok := c.byRef[refKey(namespace, ref)]
+	if !ok || (!r.expires.IsZero() && !c.now().Before(r.expires)) {
+		return schemaEntry{}, false
+	}
+	e, ok := c.byDigest[r.digest]
+	return e, ok
+}
+
+// Schema returns the variables schema ref's image declares, from namespace's
+// entries in the cache or else by reading the image config with insp,
+// bounded by ctx and authenticated with keychain (namespace's pull
+// Secrets), and caches the answer by digest and for namespace. A nil
 // schema with a nil error means the image declares none. It returns an
 // error when the image cannot be read or its label is present but invalid
 // (wrapping varschema.ErrInvalid or varschema.ErrTooLarge); an invalid
 // label is cached too, so it is reported once.
-func (c *SchemaCache) Schema(ctx context.Context, insp Inspector, ref string, keychain authn.Keychain) (*varschema.Schema, error) {
-	if digest := digestOf(ref); digest != "" {
-		c.mu.Lock()
-		e, ok := c.byDigest[digest]
-		c.mu.Unlock()
-		if ok {
-			return e.schema, e.invalid
-		}
-	} else if s, ok := c.Cached(ref); ok {
-		return s, c.invalidOf(ref)
+func (c *SchemaCache) Schema(ctx context.Context, insp Inspector, namespace, ref string, keychain authn.Keychain) (*varschema.Schema, error) {
+	if e, ok := c.lookup(namespace, ref); ok {
+		return e.schema, e.invalid
 	}
-	if err := c.recentFailure(ref); err != nil {
+	if err := c.recentFailure(namespace, ref); err != nil {
 		return nil, err
 	}
 	cfg, err := insp.Config(ctx, ref, keychain, DefaultPlatform())
@@ -139,11 +158,11 @@ func (c *SchemaCache) Schema(ctx context.Context, insp Inspector, ref string, ke
 		if len(c.failed) >= maxSchemaEntries {
 			c.failed = map[string]failure{}
 		}
-		c.failed[ref] = failure{err: err, expires: c.now().Add(SchemaFailureTTL)}
+		c.failed[refKey(namespace, ref)] = failure{err: err, expires: c.now().Add(SchemaFailureTTL)}
 		c.mu.Unlock()
 		return nil, err
 	}
-	return c.Remember(ref, cfg)
+	return c.Remember(namespace, ref, cfg)
 }
 
 // SchemaOf returns the variables schema in cfg's labels: nil with a nil
@@ -162,53 +181,51 @@ func SchemaOf(cfg *Config) (*varschema.Schema, error) {
 	return s, nil
 }
 
-// Remember records the schema in cfg, the image config ref resolved to, by
-// its digest and returns it as SchemaOf does. The receiver may be nil,
-// which records nothing.
-func (c *SchemaCache) Remember(ref string, cfg *Config) (*varschema.Schema, error) {
+// Remember records the schema in cfg, the image config namespace's read of
+// ref resolved to, by its digest, binds ref to it for namespace, and
+// returns the schema as SchemaOf does. The receiver may be nil, which
+// records nothing.
+func (c *SchemaCache) Remember(namespace, ref string, cfg *Config) (*varschema.Schema, error) {
 	s, err := SchemaOf(cfg)
 	if c != nil {
-		c.put(ref, cfg.Digest, schemaEntry{schema: s, invalid: err})
+		c.put(namespace, ref, cfg.Digest, schemaEntry{schema: s, invalid: err})
 	}
 	return s, err
 }
 
-// recentFailure returns the error of ref's last failed read when it is
-// still remembered, else nil.
-func (c *SchemaCache) recentFailure(ref string) error {
+// recentFailure returns the error of namespace's last failed read of ref
+// when it is still remembered, else nil.
+func (c *SchemaCache) recentFailure(namespace, ref string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	f, ok := c.failed[ref]
+	k := refKey(namespace, ref)
+	f, ok := c.failed[k]
 	if !ok || !c.now().Before(f.expires) {
-		delete(c.failed, ref)
+		delete(c.failed, k)
 		return nil
 	}
 	return f.err
 }
 
-// invalidOf returns the cached label problem of ref's image, or nil.
-func (c *SchemaCache) invalidOf(ref string) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.byDigest[c.byRef[ref].digest].invalid
-}
-
-// put records e for digest and, for a reference that does not pin one,
-// binds ref to it for SchemaTagTTL.
-func (c *SchemaCache) put(ref, digest string, e schemaEntry) {
+// put records e for digest and binds ref to it for namespace: for
+// SchemaTagTTL when ref is a mutable tag, for good when it pins a digest.
+func (c *SchemaCache) put(namespace, ref, digest string, e schemaEntry) {
 	if digest == "" {
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if len(c.byDigest) >= maxSchemaEntries {
+	if len(c.byDigest) >= maxSchemaEntries || len(c.byRef) >= maxSchemaEntries {
 		c.byDigest, c.byRef, c.failed = map[string]schemaEntry{}, map[string]refEntry{}, map[string]failure{}
 	}
 	c.byDigest[digest] = e
-	delete(c.failed, ref)
+	k := refKey(namespace, ref)
+	delete(c.failed, k)
+	r := refEntry{digest: digest}
 	if digestOf(ref) == "" {
-		c.byRef[ref] = refEntry{digest: digest, expires: c.now().Add(SchemaTagTTL)}
+		r.expires = c.now().Add(SchemaTagTTL)
 	}
+	c.byRef[k] = r
 }
 
 // String describes the cache's size, for logs. It returns the counts.

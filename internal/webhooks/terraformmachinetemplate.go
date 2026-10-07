@@ -58,7 +58,7 @@ var _ admission.Validator[*infrav1.TerraformMachineTemplate] = &TerraformMachine
 func (w *TerraformMachineTemplate) ValidateCreate(ctx context.Context, obj *infrav1.TerraformMachineTemplate) (admission.Warnings, error) {
 	errs := validateMachineTemplate(obj, nil)
 	if len(errs) == 0 {
-		errs = schemaErrors(w.Schemas, templateSpecPath, &obj.Spec.Template.Spec.WorkspaceSpec, nil)
+		errs = schemaErrors(ctx, w.Schemas, obj.Namespace, templateSpecPath, &obj.Spec.Template.Spec.WorkspaceSpec, nil)
 	}
 	return nil, invalid(ctx, terraformMachineTemplateKind, obj.Name, errs)
 }
@@ -85,7 +85,7 @@ func (w *TerraformMachineTemplate) ValidateUpdate(ctx context.Context, oldObj, n
 		errs = append(errs, immutable(templateSpecPath, terraformMachineTemplateKind))
 	}
 	if len(errs) == 0 {
-		errs = schemaErrors(w.Schemas, templateSpecPath, &newObj.Spec.Template.Spec.WorkspaceSpec, &prior.WorkspaceSpec)
+		errs = schemaErrors(ctx, w.Schemas, newObj.Namespace, templateSpecPath, &newObj.Spec.Template.Spec.WorkspaceSpec, &prior.WorkspaceSpec)
 	}
 	return nil, invalid(ctx, terraformMachineTemplateKind, newObj.Name, errs)
 }

@@ -61,7 +61,7 @@ func (w *TerraformCluster) ValidateCreate(ctx context.Context, obj *infrav1.Terr
 	errs := validateCluster(specPath, &obj.Spec, nil)
 	errs = append(errs, validateEndpointComplete(specPath.Child("controlPlaneEndpoint"), obj.Spec.ControlPlaneEndpoint)...)
 	if len(errs) == 0 {
-		errs = schemaErrors(w.Schemas, specPath, &obj.Spec.WorkspaceSpec, nil)
+		errs = schemaErrors(ctx, w.Schemas, obj.Namespace, specPath, &obj.Spec.WorkspaceSpec, nil)
 	}
 	return nil, invalid(ctx, terraformClusterKind, obj.Name, errs)
 }
@@ -89,7 +89,7 @@ func (w *TerraformCluster) ValidateUpdate(ctx context.Context, oldObj, newObj *i
 		errs = append(errs, validateEndpointComplete(epPath, cur)...)
 	}
 	if len(errs) == 0 {
-		errs = schemaErrors(w.Schemas, specPath, &newObj.Spec.WorkspaceSpec, &prior.WorkspaceSpec)
+		errs = schemaErrors(ctx, w.Schemas, newObj.Namespace, specPath, &newObj.Spec.WorkspaceSpec, &prior.WorkspaceSpec)
 	}
 	return nil, invalid(ctx, terraformClusterKind, newObj.Name, errs)
 }

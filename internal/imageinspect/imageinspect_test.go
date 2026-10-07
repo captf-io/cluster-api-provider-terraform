@@ -238,7 +238,7 @@ func TestRemoteConfig(t *testing.T) {
 	armOnly := push("armonly:1", index(entry("attest", attestation), entry("arm", arm)))
 	noLinux := push("nolinux:1", index(entry("attest", attestation)))
 
-	r := Remote{Insecure: true}
+	r := Remote{Insecure: true, AllowPrivate: true}
 	anon := authn.NewMultiKeychain()
 	cfg, err := r.Config(t.Context(), single, anon, nil)
 	if err != nil || cfg.Labels[CapacityLabel] != `{"cpu":"1"}` || cfg.User != "65532" || cfg.Platform != "" || !strings.HasPrefix(cfg.Digest, "sha256:") {

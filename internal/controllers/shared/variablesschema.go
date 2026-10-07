@@ -94,12 +94,12 @@ func VariablesSchemaGateOf(schema *varschema.Schema, vars contract.Variables) *G
 // authenticate it. It returns the schema, or an error from reading the
 // image or its label.
 func schemaOf(ctx context.Context, d Deps, namespace, image string, pullSecrets []string) (*varschema.Schema, error) {
-	if s, ok := d.Schemas.Cached(image); ok {
+	if s, ok := d.Schemas.Cached(namespace, image); ok {
 		return s, nil
 	}
 	keychain, _, err := imageinspect.PullSecretsKeychain(ctx, d.APIReader, namespace, pullSecrets)
 	if err != nil {
 		return nil, err
 	}
-	return d.Schemas.Schema(ctx, d.Inspector, image, keychain)
+	return d.Schemas.Schema(ctx, d.Inspector, namespace, image, keychain)
 }

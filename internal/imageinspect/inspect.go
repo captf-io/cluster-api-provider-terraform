@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"runtime"
 	"time"
 
@@ -32,6 +33,16 @@ import (
 // Timeout bounds one inspection, so a hanging registry cannot hold a
 // reconcile worker.
 const Timeout = 30 * time.Second
+
+// MaxConfigBytes caps the image config blob the inspector reads. Module
+// image configs are a few KiB of labels; go-containerregistry reads the
+// blob in full, sized by the registry's own manifest, so without the cap
+// any tenant's registry could exhaust the manager's memory.
+const MaxConfigBytes = 1 << 20
+
+// ErrConfigTooLarge reports an image whose config blob is declared larger
+// than MaxConfigBytes (or with an invalid size).
+var ErrConfigTooLarge = errors.New("imageinspect: the image config is too large")
 
 // ErrNoLinuxImage reports an index without any linux image.
 var ErrNoLinuxImage = errors.New("imageinspect: the index has no linux image")
@@ -63,6 +74,15 @@ type Remote struct {
 	// Insecure allows plain-HTTP registries. Only tests set it; v1 has no
 	// insecure-registry or custom-CA option.
 	Insecure bool
+	// AllowPrivate lets the inspector connect to loopback, link-local,
+	// private and other non-public addresses; see Egress.
+	AllowPrivate bool
+	// AllowedRegistries, when not empty, restricts inspection to the
+	// registries (host[:port], lowercase, as name.Registry.RegistryStr
+	// spells them) it lists.
+	AllowedRegistries []string
+	// Transport overrides the egress-restricted default; tests set it.
+	Transport http.RoundTripper
 }
 
 var _ Inspector = Remote{}
@@ -73,7 +93,8 @@ func DefaultPlatform() *v1.Platform {
 }
 
 // Config resolves ref and reads one image config, bounded by ctx and
-// authenticated with keychain. For an index it takes the linux image of
+// authenticated with keychain, over the egress-restricted transport (see
+// Egress). For an index it takes the linux image of
 // platform's architecture, else the first linux image: capacity describes
 // the instance type, not the image platform, so images SHOULD carry
 // identical labels on every platform. Non-linux entries, such as buildx
@@ -94,7 +115,10 @@ func (r Remote) Config(ctx context.Context, ref string, keychain authn.Keychain,
 	if platform == nil {
 		platform = DefaultPlatform()
 	}
-	desc, err := remote.Get(parsed, remote.WithContext(ctx), remote.WithAuthFromKeychain(keychain))
+	if err := r.checkRegistry(parsed.Context().RegistryStr()); err != nil {
+		return nil, err
+	}
+	desc, err := remote.Get(parsed, remote.WithContext(ctx), remote.WithAuthFromKeychain(keychain), remote.WithTransport(r.roundTripper()))
 	if err != nil {
 		return nil, fmt.Errorf("imageinspect: get %s: %w", parsed, err)
 	}
@@ -122,6 +146,14 @@ func (r Remote) Config(ctx context.Context, ref string, keychain authn.Keychain,
 		return nil, fmt.Errorf("imageinspect: image %s: %w", parsed, err)
 	}
 
+	m, err := img.Manifest()
+	if err != nil {
+		return nil, fmt.Errorf("imageinspect: manifest of %s: %w", parsed, err)
+	}
+	// A negative size would disable the library's size limit.
+	if m.Config.Size < 0 || m.Config.Size > MaxConfigBytes || int64(len(m.Config.Data)) > MaxConfigBytes {
+		return nil, fmt.Errorf("%w: %s declares %d bytes, the limit is %d", ErrConfigTooLarge, parsed, m.Config.Size, MaxConfigBytes)
+	}
 	cf, err := img.ConfigFile()
 	if err != nil {
 		return nil, fmt.Errorf("imageinspect: config of %s: %w", parsed, err)

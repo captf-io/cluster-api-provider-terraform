@@ -63,7 +63,7 @@ var _ admission.Validator[*infrav1.TerraformClusterTemplate] = &TerraformCluster
 func (w *TerraformClusterTemplate) ValidateCreate(ctx context.Context, obj *infrav1.TerraformClusterTemplate) (admission.Warnings, error) {
 	errs := validateClusterTemplate(obj, nil)
 	if len(errs) == 0 {
-		errs = schemaErrors(w.Schemas, templateSpecPath, &obj.Spec.Template.Spec.WorkspaceSpec, nil)
+		errs = schemaErrors(ctx, w.Schemas, obj.Namespace, templateSpecPath, &obj.Spec.Template.Spec.WorkspaceSpec, nil)
 	}
 	return clusterTemplateWarnings(obj), invalid(ctx, terraformClusterTemplateKind, obj.Name, errs)
 }
@@ -85,7 +85,7 @@ func (w *TerraformClusterTemplate) ValidateUpdate(ctx context.Context, oldObj, n
 		errs = append(errs, immutable(templateSpecPath, terraformClusterTemplateKind))
 	}
 	if len(errs) == 0 {
-		errs = schemaErrors(w.Schemas, templateSpecPath, &newObj.Spec.Template.Spec.WorkspaceSpec, &prior.WorkspaceSpec)
+		errs = schemaErrors(ctx, w.Schemas, newObj.Namespace, templateSpecPath, &newObj.Spec.Template.Spec.WorkspaceSpec, &prior.WorkspaceSpec)
 	}
 	return clusterTemplateWarnings(newObj), invalid(ctx, terraformClusterTemplateKind, newObj.Name, errs)
 }

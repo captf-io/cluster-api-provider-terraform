@@ -20,9 +20,11 @@ import (
 	"crypto/tls"
 	goflag "flag"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/distribution/reference"
+	"github.com/google/go-containerregistry/pkg/name"
 	"k8s.io/apimachinery/pkg/runtime"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
@@ -124,6 +126,16 @@ type Options struct {
 	// (--state-backups); 0 disables backups.
 	StateBackups int
 
+	// ImageInspectAllowPrivate lets the manager inspect images on
+	// registries at loopback, link-local, private or CGNAT addresses
+	// (--image-inspect-allow-private-registries).
+	ImageInspectAllowPrivate bool
+	// ImageInspectAllowedRegistries restricts image inspection to these
+	// registry hosts (--image-inspect-allowed-registries); empty is any
+	// host that passes the address check. Use AllowedRegistries for the
+	// normalized form.
+	ImageInspectAllowedRegistries []string
+
 	// Diagnostics holds CAPI's diagnostics and TLS flags.
 	Diagnostics flags.ManagerOptions
 	// Logs holds the logsv1 flags.
@@ -205,6 +217,12 @@ func (o *Options) Flags() cliflag.NamedFlagSets {
 	runner.IntVar(&o.StateBackups, "state-backups", 5,
 		"State backups to keep per object: every new state serial is copied into captf-state-backup-* Secrets and older copies are pruned. 0 takes no backups (existing ones stay and can still be restored).")
 
+	inspect := fss.FlagSet("image inspection")
+	inspect.BoolVar(&o.ImageInspectAllowPrivate, "image-inspect-allow-private-registries", false,
+		"Let the manager inspect module images on registries at loopback, link-local, private (RFC 1918, fc00::/7) or CGNAT (100.64.0.0/10) addresses. The address is checked at dial time, after DNS, so redirects and token realms are covered. Off by default: a tenant-written image reference must not make the manager probe the cluster network.")
+	inspect.StringSliceVar(&o.ImageInspectAllowedRegistries, "image-inspect-allowed-registries", nil,
+		"Comma-separated registry hosts (host[:port], e.g. ghcr.io,registry.example.com:5000) whose images the manager may inspect. Empty allows any host that passes the address check. An image on another registry is not inspected: its capacity and variables are not checked.")
+
 	flags.AddManagerOptions(fss.FlagSet("diagnostics"), &o.Diagnostics)
 	logsv1.AddFlags(o.Logs, fss.FlagSet("logs"))
 	o.FeatureGates.AddFlag(fss.FlagSet("feature gates"))
@@ -253,6 +271,9 @@ func (o *Options) Validate() error {
 			errs = append(errs, fmt.Errorf("--%s must not be negative, got %d", name, v))
 		}
 	}
+	if _, err := o.AllowedRegistries(); err != nil {
+		errs = append(errs, err)
+	}
 	if o.StateBackups < 0 {
 		errs = append(errs, fmt.Errorf("--state-backups must not be negative, got %d", o.StateBackups))
 	}
@@ -268,6 +289,25 @@ func (o *Options) Validate() error {
 		return fmt.Errorf("manager: invalid flags: %w", err)
 	}
 	return nil
+}
+
+// AllowedRegistries returns --image-inspect-allowed-registries normalized
+// the way go-containerregistry spells a registry (lowercase, docker.io as
+// index.docker.io), without empty entries, or an error naming an entry
+// that is not a registry host.
+func (o *Options) AllowedRegistries() ([]string, error) {
+	var out []string
+	for _, h := range o.ImageInspectAllowedRegistries {
+		if h = strings.TrimSpace(h); h == "" {
+			continue
+		}
+		r, err := name.NewRegistry(h)
+		if err != nil || strings.ContainsAny(h, "/@") {
+			return nil, fmt.Errorf("--image-inspect-allowed-registries: %q is not a registry host[:port]", h)
+		}
+		out = append(out, strings.ToLower(r.RegistryStr()))
+	}
+	return out, nil
 }
 
 // ManagerOptions builds the controller-runtime manager options: diagnostics

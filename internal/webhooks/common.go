@@ -335,33 +335,52 @@ func immutable(fldPath *field.Path, kind string) *field.Error {
 	return field.Forbidden(fldPath, fmt.Sprintf("%s %s is immutable; create a new %s instead", kind, fldPath.String(), kind))
 }
 
-// SchemaLookup is what the webhooks need of imageinspect.SchemaCache: the
-// variables schema an image is already known to declare. It never
-// contacts a registry.
+// SchemaLookup is what the webhooks need to check variables against an
+// image's schema: what the cache holds for a namespace, and a bounded read
+// to fill a miss.
 type SchemaLookup interface {
-	// Cached returns the schema of ref's image (nil when it declares none)
-	// and true, or false when the image has not been inspected.
-	Cached(ref string) (*varschema.Schema, bool)
+	// Cached returns the schema of ref's image as namespace has already
+	// read it (nil when it declares none) and true, or false when it has
+	// not. It never contacts a registry.
+	Cached(namespace, ref string) (*varschema.Schema, bool)
+	// Fetch reads ref's schema for namespace with the pull Secrets named
+	// by pullSecrets, bounded by ctx, and caches it. It returns an error
+	// when the image cannot be read or its label is invalid.
+	Fetch(ctx context.Context, namespace, ref string, pullSecrets []string) (*varschema.Schema, error)
 }
 
-// schemaErrors checks ws's inline variables against the variables schema
-// lookup already holds for ws's image; it returns nil when lookup is nil,
-// the image is unknown or declares no schema, there are no inline
-// variables, or old (the stored spec on an update, nil on create) has the
-// same image and variables. variablesFrom sources are not readable at
-// admission, so a required variable is not reported here: the controller
-// checks the merged variables before the Job. specPath is rooted at the
-// spec holding ws. No error carries a value. It returns the field errors
-// found.
-func schemaErrors(lookup SchemaLookup, specPath *field.Path, ws, old *infrav1.WorkspaceSpec) field.ErrorList {
+// schemaErrors checks ws's inline variables, for an object in namespace,
+// against the variables schema of ws's image: the one lookup holds, else
+// one read within SchemaFetchTimeout. It is best-effort: it returns nil
+// when lookup is nil, the image cannot be read (a registry down, a pull
+// Secret the object's own jobs do not name, a slow answer) or declares no
+// schema, there are no inline variables, or old (the stored spec on an
+// update, nil on create) has the same image and variables; the controller
+// then checks the merged variables before the Job. variablesFrom sources
+// are not readable at admission, so a required variable is not reported
+// here. specPath is rooted at the spec holding ws. No error carries a
+// value. ctx bounds the registry read. It returns the field errors found.
+func schemaErrors(ctx context.Context, lookup SchemaLookup, namespace string, specPath *field.Path, ws, old *infrav1.WorkspaceSpec) field.ErrorList {
 	if lookup == nil || len(ws.Variables.Raw) == 0 {
 		return nil
 	}
 	if old != nil && old.Source.Image == ws.Source.Image && equalVariables(old.Variables, ws.Variables) {
 		return nil
 	}
-	schema, ok := lookup.Cached(ws.Source.Image)
-	if !ok || schema == nil {
+	schema, ok := lookup.Cached(namespace, ws.Source.Image)
+	if !ok {
+		var pullSecrets []string
+		if ws.Jobs != nil {
+			for _, s := range ws.Jobs.ImagePullSecrets {
+				pullSecrets = append(pullSecrets, s.Name)
+			}
+		}
+		var err error
+		if schema, err = lookup.Fetch(ctx, namespace, ws.Source.Image, pullSecrets); err != nil {
+			return nil
+		}
+	}
+	if schema == nil {
 		return nil
 	}
 	raw, err := contract.ParseVariables(ws.Variables.Raw)
