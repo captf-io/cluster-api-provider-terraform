@@ -154,11 +154,11 @@ spec:
                           drift:
                             description: |-
                               drift is merged field by field under each machine's or pool's drift
-                              policy. A pool's drift is never fully disabled: an inherited
-                              intervalSeconds of 0 disables a machine's drift checks but not a
-                              pool's, which then uses the controller's default interval. action is
-                              inherited by pools only, before the cluster's own spec.drift.action:
-                              a machine's drift is always reported, never remediated.
+                              policy, and over the TerraformCluster's own spec.drift. A pool's drift
+                              is never fully disabled: an inherited intervalSeconds of 0 disables a
+                              machine's drift checks but not a pool's, which then uses the
+                              controller's default interval. action is inherited by pools only: a
+                              machine's drift is always reported, never remediated.
                             properties:
                               action:
                                 description: |-
@@ -196,7 +196,8 @@ spec:
                           jobs:
                             description: |-
                               jobs is merged field by field under each machine's or pool's jobs
-                              policy (see JobPolicy).
+                              policy, and over the TerraformCluster's own spec.jobs (see
+                              JobPolicy).
                             properties:
                               activeDeadlineSeconds:
                                 description: |-

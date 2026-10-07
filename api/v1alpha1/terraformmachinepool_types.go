@@ -48,10 +48,9 @@ type TerraformMachinePoolSpec struct {
 
 	WorkspaceSpec `json:",inline"`
 
-	// drift is merged field by field over the cluster's defaults.drift;
-	// an unset action then falls back to the cluster's own
-	// spec.drift.action. Unlike a machine's, a pool's drift may be
-	// remediated.
+	// drift is merged field by field over the cluster's defaults.drift,
+	// then the cluster's own spec.drift. Unlike a machine's, a pool's drift
+	// may be remediated.
 	// +optional
 	Drift *MachinePoolDriftPolicy `json:"drift,omitempty"`
 

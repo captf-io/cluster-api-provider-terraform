@@ -441,7 +441,8 @@ func sweepFixture() []client.Object {
 
 // TestSweepPrunesSubjects: in a namespace that still holds objects, the
 // runner binding keeps captf-runner and the ServiceAccounts objects run as
-// (own jobs.serviceAccountName, else the cluster's defaults), and loses the
+// (own jobs.serviceAccountName, else the cluster's defaults, else the
+// cluster's own), and loses the
 // rest: switching from A to B withdraws A's Secret permissions.
 func TestSweepPrunesSubjects(t *testing.T) {
 	t.Parallel()
@@ -487,6 +488,10 @@ func TestSweepPrunesSubjects(t *testing.T) {
 			want: []string{ServiceAccount, "cluster-sa", "machine-sa"}},
 		{name: "machine inherits the cluster defaults", objs: []client.Object{cluster("tc", "c1", "", "defaults-sa"), machine("m", "c1", "")},
 			want: []string{ServiceAccount, "defaults-sa"}},
+		{name: "machine inherits the cluster's own policy without defaults", objs: []client.Object{cluster("tc", "c1", "cluster-sa", ""), machine("m", "c1", "")},
+			want: []string{ServiceAccount, "cluster-sa"}},
+		{name: "defaults win over the cluster's own policy", objs: []client.Object{cluster("tc", "c1", "cluster-sa", "defaults-sa"), machine("m", "c1", "")},
+			want: []string{ServiceAccount, "cluster-sa", "defaults-sa"}},
 		{name: "defaults unused when every machine sets its own", objs: []client.Object{cluster("tc", "c1", "", "defaults-sa"), machine("m", "c1", "machine-sa")},
 			want: []string{ServiceAccount, "machine-sa"}},
 		{name: "machine without a found cluster keeps every cluster default", objs: []client.Object{

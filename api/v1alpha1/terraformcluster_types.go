@@ -91,7 +91,7 @@ type TerraformClusterSpec struct {
 // TerraformMachinePools of a cluster inherit when they do not set them.
 // Operational policy inherits in this order: the machine's or pool's own
 // field, then spec.defaults, then the TerraformCluster's own field of the
-// same name where it has one (identityRef, drift.action, deletionPolicy),
+// same name where it has one (identityRef, jobs, drift, deletionPolicy),
 // then the built-in default. Module inputs (source, variables,
 // variablesFrom) and adoptRetainedState are never inherited: every role
 // names its own image.
@@ -103,16 +103,17 @@ type TerraformClusterDefaults struct {
 	IdentityRef IdentityReference `json:"identityRef,omitempty,omitzero"`
 
 	// jobs is merged field by field under each machine's or pool's jobs
-	// policy (see JobPolicy).
+	// policy, and over the TerraformCluster's own spec.jobs (see
+	// JobPolicy).
 	// +optional
 	Jobs *JobPolicy `json:"jobs,omitempty"`
 
 	// drift is merged field by field under each machine's or pool's drift
-	// policy. A pool's drift is never fully disabled: an inherited
-	// intervalSeconds of 0 disables a machine's drift checks but not a
-	// pool's, which then uses the controller's default interval. action is
-	// inherited by pools only, before the cluster's own spec.drift.action:
-	// a machine's drift is always reported, never remediated.
+	// policy, and over the TerraformCluster's own spec.drift. A pool's drift
+	// is never fully disabled: an inherited intervalSeconds of 0 disables a
+	// machine's drift checks but not a pool's, which then uses the
+	// controller's default interval. action is inherited by pools only: a
+	// machine's drift is always reported, never remediated.
 	// +optional
 	Drift *DriftPolicy `json:"drift,omitempty"`
 

@@ -209,9 +209,9 @@ func pruneSubjects(ctx context.Context, uncached client.Reader, c client.Client,
 // namespace run as. captf-runner is always in it: the caller only asks while
 // objects exist. A cluster runs as its jobs.serviceAccountName, else
 // captf-runner. A machine or pool runs as its own, else its
-// TerraformCluster's spec.defaults.jobs.serviceAccountName
-// (identity.ClusterIndex: the cluster with its cluster-name label), else
-// captf-runner. When a machine or pool without its own has no
+// TerraformCluster's spec.defaults.jobs.serviceAccountName, else that
+// cluster's own spec.jobs.serviceAccountName (identity.ClusterIndex: the
+// cluster with its cluster-name label), else captf-runner. When a machine or pool without its own has no
 // TerraformCluster found, every cluster default of the namespace is kept:
 // pruning one it does use would flap its binding on every sweep.
 //
@@ -239,8 +239,11 @@ func usedServiceAccounts(ctx context.Context, uncached client.Reader, namespace 
 		}
 	}
 	defaultsSA := func(tc *infrav1.TerraformCluster) string {
-		if d := tc.Spec.Defaults; d != nil && d.Jobs != nil {
+		if d := tc.Spec.Defaults; d != nil && d.Jobs != nil && d.Jobs.ServiceAccountName != "" {
 			return d.Jobs.ServiceAccountName
+		}
+		if tc.Spec.Jobs != nil {
+			return tc.Spec.Jobs.ServiceAccountName
 		}
 		return ""
 	}

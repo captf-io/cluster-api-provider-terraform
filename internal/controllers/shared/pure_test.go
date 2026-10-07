@@ -639,6 +639,89 @@ func TestResolveInheritancePrecedence(t *testing.T) {
 	}
 }
 
+// TestResolveClusterSpecLevel proves the third level of the inheritance
+// rule for jobs and drift: a machine or pool without its own value and
+// without one in spec.defaults takes the TerraformCluster's own spec.jobs
+// and spec.drift, field by field; spec.defaults win over them, and the
+// object's own values over both.
+func TestResolveClusterSpecLevel(t *testing.T) {
+	t.Parallel()
+	cluster := func(defaults *infrav1.TerraformClusterDefaults) *infrav1.TerraformCluster {
+		return &infrav1.TerraformCluster{Spec: infrav1.TerraformClusterSpec{
+			WorkspaceSpec: infrav1.WorkspaceSpec{Jobs: &infrav1.JobPolicy{ServiceAccountName: "cluster-sa", ActiveDeadlineSeconds: 900,
+				Env: []corev1.EnvVar{{Name: "A", Value: "cluster"}, {Name: "B", Value: "cluster"}}}},
+			Drift:    &infrav1.DriftPolicy{IntervalSeconds: new(int32(600)), Action: infrav1.DriftActionRemediate},
+			Defaults: defaults,
+		}}
+	}
+	withDefaults := cluster(&infrav1.TerraformClusterDefaults{
+		Jobs:  &infrav1.JobPolicy{ServiceAccountName: "defaults-sa", Env: []corev1.EnvVar{{Name: "A", Value: "defaults"}}},
+		Drift: &infrav1.DriftPolicy{IntervalSeconds: new(int32(120))},
+	})
+	machine := SpecView{InheritsDefaults: true}
+	pool := SpecView{InheritsDefaults: true, PoolDrift: &infrav1.MachinePoolDriftPolicy{}}
+	env := func(e EffectiveConfig) map[string]string {
+		out := map[string]string{}
+		for _, v := range e.Jobs.Env {
+			out[v.Name] = v.Value
+		}
+		return out
+	}
+
+	// No defaults: the cluster's own policy.
+	e := Resolve(machine, cluster(nil), 30*time.Minute, false)
+	if e.Jobs.ServiceAccountName != "cluster-sa" || e.Jobs.ActiveDeadlineSeconds != 900 || e.DriftInterval != 10*time.Minute ||
+		env(e)["A"] != "cluster" || e.DriftAction != infrav1.DriftActionReport {
+		t.Errorf("machine, no defaults: %+v", e)
+	}
+	p := Resolve(pool, cluster(nil), 30*time.Minute, true)
+	if p.Jobs.ServiceAccountName != "cluster-sa" || p.DriftInterval != 10*time.Minute || p.DriftAction != infrav1.DriftActionRemediate {
+		t.Errorf("pool, no defaults: sa %q, interval %s, action %s", p.Jobs.ServiceAccountName, p.DriftInterval, p.DriftAction)
+	}
+	// Defaults win field by field; the cluster fills what they leave unset.
+	e = Resolve(machine, withDefaults, 30*time.Minute, false)
+	if e.Jobs.ServiceAccountName != "defaults-sa" || e.Jobs.ActiveDeadlineSeconds != 900 || e.DriftInterval != 2*time.Minute ||
+		env(e)["A"] != "defaults" || env(e)["B"] != "cluster" {
+		t.Errorf("machine with defaults: %+v, env %v", e.Jobs, env(e))
+	}
+	// The object's own values win over both.
+	own := SpecView{InheritsDefaults: true, WorkspaceSpec: infrav1.WorkspaceSpec{Jobs: &infrav1.JobPolicy{ServiceAccountName: "own-sa"}},
+		MachineDrift: &infrav1.MachineDriftPolicy{IntervalSeconds: new(int32(60))}}
+	if e := Resolve(own, withDefaults, 30*time.Minute, false); e.Jobs.ServiceAccountName != "own-sa" || e.DriftInterval != time.Minute {
+		t.Errorf("own: sa %q, interval %s", e.Jobs.ServiceAccountName, e.DriftInterval)
+	}
+	// The cluster's own interval of 0 disables an inheriting machine's
+	// drift, but never a pool's.
+	off := cluster(nil)
+	off.Spec.Drift.IntervalSeconds = new(int32(0))
+	if e := Resolve(machine, off, 30*time.Minute, false); e.DriftInterval != 0 {
+		t.Errorf("machine under a cluster with drift off: %s, want 0", e.DriftInterval)
+	}
+	if p := Resolve(pool, off, 30*time.Minute, true); p.DriftInterval != 30*time.Minute {
+		t.Errorf("pool under a cluster with drift off: %s, want the manager default", p.DriftInterval)
+	}
+}
+
+// TestMergeDriftPolicy proves MergeDriftPolicy takes own's interval (an
+// explicit 0 included) and action when set, the defaults' otherwise, and
+// shares no memory with its inputs.
+func TestMergeDriftPolicy(t *testing.T) {
+	t.Parallel()
+	d := &infrav1.DriftPolicy{IntervalSeconds: new(int32(60)), Action: infrav1.DriftActionRemediate}
+	if got := MergeDriftPolicy(nil, nil); got.IntervalSeconds != nil || got.Action != "" {
+		t.Errorf("nil, nil = %+v", got)
+	}
+	got := MergeDriftPolicy(&infrav1.DriftPolicy{IntervalSeconds: new(int32(0))}, d)
+	if *got.IntervalSeconds != 0 || got.Action != infrav1.DriftActionRemediate {
+		t.Errorf("merged = %+v", got)
+	}
+	got = MergeDriftPolicy(nil, d)
+	*got.IntervalSeconds = 1
+	if *d.IntervalSeconds != 60 {
+		t.Error("MergeDriftPolicy aliases its input")
+	}
+}
+
 // TestMergeRemediation proves MergeRemediation takes each field own sets
 // and the defaults' otherwise, keeps own's explicit annotateMachine false,
 // and returns a value that shares no memory with either input.

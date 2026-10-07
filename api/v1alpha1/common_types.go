@@ -46,9 +46,11 @@ type Source struct {
 
 // JobPolicy tunes the Kubernetes Jobs that run the module. Every field is
 // optional. On a TerraformMachine or TerraformMachinePool the policy is
-// merged field by field with TerraformCluster.spec.defaults.jobs: a field
-// the machine or pool sets wins, an unset one comes from the defaults, and
-// a field neither sets gets the controller's built-in default. env is
+// merged field by field with TerraformCluster.spec.defaults.jobs, then
+// with the TerraformCluster's own spec.jobs: a field the machine or pool
+// sets wins, an unset one comes from the defaults, then from the
+// cluster's own policy, and a field none sets gets the controller's
+// built-in default. env is
 // merged by name (the machine's or pool's wins on the same name) and
 // imagePullSecrets is the union (the machine's or pool's first); resources,
 // securityContext and podSecurityContext are replaced as a whole. Defaults

@@ -38,8 +38,9 @@ type TerraformMachineSpec struct {
 
 	WorkspaceSpec `json:",inline"`
 
-	// drift is merged field by field over the cluster's defaults.drift. Drift
-	// on a machine is always reported, never remediated.
+	// drift is merged field by field over the cluster's defaults.drift,
+	// then the cluster's own spec.drift (intervalSeconds only). Drift on a
+	// machine is always reported, never remediated.
 	// +optional
 	Drift *MachineDriftPolicy `json:"drift,omitempty"`
 

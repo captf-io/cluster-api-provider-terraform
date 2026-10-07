@@ -35,11 +35,13 @@ type EffectiveConfig struct {
 	// IdentityName is the resolved identity; "" when none is set.
 	IdentityName string
 	// Jobs is the object's jobs policy, merged field by field over the
-	// cluster's defaults.jobs for kinds that inherit them. internal/jobs
+	// cluster's defaults.jobs, then its own spec.jobs, for kinds that
+	// inherit them. internal/jobs
 	// applies the built-in per-field defaults.
 	Jobs infrav1.JobPolicy
 	// DriftInterval is the drift policy's intervalSeconds (for inheriting
-	// kinds, the machine's or pool's else the cluster's defaults.drift),
+	// kinds, the machine's or pool's, else the cluster's defaults.drift,
+	// else its own spec.drift),
 	// else the manager's --drift-default-interval. Zero disables drift
 	// checks; an inherited zero does not disable a pool's (resolvePool).
 	DriftInterval time.Duration
@@ -99,17 +101,18 @@ func Resolve(spec SpecView, cluster *infrav1.TerraformCluster, driftDefault time
 	var interval *int32
 	if spec.InheritsDefaults {
 		defaults := clusterDefaults(cluster)
+		jobs, drift := clusterInherited(cluster)
 		e.IdentityName, _ = identity.EffectiveName(spec.IdentityRef, cluster)
 		var clusterPolicy infrav1.DeletionPolicy
 		if cluster != nil {
 			clusterPolicy = cluster.Spec.DeletionPolicy
 		}
 		e.DeletionPolicy = cmp.Or(spec.DeletionPolicy, defaults.DeletionPolicy, clusterPolicy, infrav1.DeletionPolicyDestroy)
-		e.Jobs = MergeJobPolicy(spec.Jobs, defaults.Jobs)
+		e.Jobs = MergeJobPolicy(spec.Jobs, jobs)
 		if spec.PoolDrift != nil {
-			interval = e.resolvePool(spec, cluster)
+			interval = e.resolvePool(spec, drift, defaults.MembershipRefreshIntervalSeconds)
 		} else {
-			interval = MergeMachineDriftPolicy(spec.MachineDrift, defaults.Drift).IntervalSeconds
+			interval = MergeMachineDriftPolicy(spec.MachineDrift, drift).IntervalSeconds
 			e.Remediation = MergeRemediation(spec.Remediation, defaults.Remediation)
 		}
 	} else {
@@ -148,35 +151,42 @@ func clusterDefaults(cluster *infrav1.TerraformCluster) infrav1.TerraformCluster
 	return *cluster.Spec.Defaults
 }
 
-// resolvePool sets e's drift action and membership refresh interval from
-// spec, a TerraformMachinePool's (spec.PoolDrift non-nil), and cluster,
-// its TerraformCluster (nil when not known), and returns its drift
-// interval in seconds: its own drift.intervalSeconds when set, else the
-// cluster's defaults.drift one when positive, else nil for the manager's
-// default. A pool's drift is never disabled
-// (infrav1.MachinePoolDriftPolicy), so an inherited 0, which disables a
-// machine's drift, does not disable the pool's. The action is the pool's
-// own, else defaults.drift.action, else the cluster's spec.drift.action,
-// else Report; the membership refresh interval the pool's own, else
-// defaults.membershipRefreshIntervalSeconds, else
-// DefaultMembershipRefreshInterval.
-func (e *EffectiveConfig) resolvePool(spec SpecView, cluster *infrav1.TerraformCluster) *int32 {
-	p := spec.PoolDrift
+// clusterInherited returns what a machine or pool of cluster inherits for
+// its jobs and drift policies: cluster's spec.defaults.jobs and
+// spec.defaults.drift merged field by field over the cluster's own
+// spec.jobs and spec.drift. Both are nil when cluster is nil (not known).
+func clusterInherited(cluster *infrav1.TerraformCluster) (*infrav1.JobPolicy, *infrav1.DriftPolicy) {
+	if cluster == nil {
+		return nil, nil
+	}
 	defaults := clusterDefaults(cluster)
-	var defaultAction, clusterAction infrav1.DriftAction
-	if defaults.Drift != nil {
-		defaultAction = defaults.Drift.Action
-	}
-	if cluster != nil && cluster.Spec.Drift != nil {
-		clusterAction = cluster.Spec.Drift.Action
-	}
-	e.DriftAction = cmp.Or(p.Action, defaultAction, clusterAction, infrav1.DriftActionReport)
+	jobs := MergeJobPolicy(defaults.Jobs, cluster.Spec.Jobs)
+	drift := MergeDriftPolicy(defaults.Drift, cluster.Spec.Drift)
+	return &jobs, &drift
+}
+
+// resolvePool sets e's drift action and membership refresh interval from
+// spec, a TerraformMachinePool's (spec.PoolDrift non-nil), drift, the
+// drift policy it inherits (clusterInherited; nil when the cluster is not
+// known), and membership, the cluster's
+// defaults.membershipRefreshIntervalSeconds. It returns the pool's drift
+// interval in seconds: its own drift.intervalSeconds when set, else the
+// inherited one when positive, else nil for the manager's default. A
+// pool's drift is never disabled (infrav1.MachinePoolDriftPolicy), so an
+// inherited 0, which disables a machine's drift, does not disable the
+// pool's. The action is the pool's own, else the inherited one, else
+// Report; the membership refresh interval the pool's own, else
+// membership, else DefaultMembershipRefreshInterval.
+func (e *EffectiveConfig) resolvePool(spec SpecView, drift *infrav1.DriftPolicy, membership int32) *int32 {
+	p := spec.PoolDrift
+	inherited := MergeDriftPolicy(nil, drift)
+	e.DriftAction = cmp.Or(p.Action, inherited.Action, infrav1.DriftActionReport)
 	e.MembershipRefreshInterval = cmp.Or(spec.MembershipRefreshInterval,
-		time.Duration(defaults.MembershipRefreshIntervalSeconds)*time.Second, DefaultMembershipRefreshInterval)
+		time.Duration(membership)*time.Second, DefaultMembershipRefreshInterval)
 	if p.IntervalSeconds > 0 {
 		return &p.IntervalSeconds
 	}
-	if d := MergeMachineDriftPolicy(nil, defaults.Drift).IntervalSeconds; d != nil && *d > 0 {
+	if d := inherited.IntervalSeconds; d != nil && *d > 0 {
 		return d
 	}
 	return nil
@@ -234,8 +244,8 @@ func ValidateEffectiveJobPolicy(p infrav1.JobPolicy) error {
 	return nil
 }
 
-// MergeMachineDriftPolicy merges own over defaults, the cluster's
-// defaults.drift, field by field: its intervalSeconds only, since a
+// MergeMachineDriftPolicy merges own over defaults, the drift policy the
+// machine inherits (clusterInherited), field by field: its intervalSeconds only, since a
 // machine's drift is never remediated and so takes no action. It returns
 // the merged MachineDriftPolicy.
 func MergeMachineDriftPolicy(own *infrav1.MachineDriftPolicy, defaults *infrav1.DriftPolicy) infrav1.MachineDriftPolicy {
@@ -248,6 +258,21 @@ func MergeMachineDriftPolicy(own *infrav1.MachineDriftPolicy, defaults *infrav1.
 		d = *defaults.DeepCopy()
 	}
 	return infrav1.MachineDriftPolicy{IntervalSeconds: firstSet(o.IntervalSeconds, d.IntervalSeconds)}
+}
+
+// MergeDriftPolicy merges own over defaults field by field: an
+// intervalSeconds own sets (0 included) wins, as does a non-empty action.
+// Either may be nil, and the result shares no memory with them. It
+// returns the merged DriftPolicy.
+func MergeDriftPolicy(own, defaults *infrav1.DriftPolicy) infrav1.DriftPolicy {
+	var o, d infrav1.DriftPolicy
+	if own != nil {
+		o = *own.DeepCopy()
+	}
+	if defaults != nil {
+		d = *defaults.DeepCopy()
+	}
+	return infrav1.DriftPolicy{IntervalSeconds: firstSet(o.IntervalSeconds, d.IntervalSeconds), Action: cmp.Or(o.Action, d.Action)}
 }
 
 // MergeRemediation merges own, a TerraformMachine's remediation policy,
