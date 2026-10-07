@@ -47,7 +47,7 @@ func (w *TerraformMachineTemplate) SetupWebhookWithManager(mgr ctrl.Manager) err
 		Complete()
 }
 
-// +kubebuilder:webhook:verbs=create;update,path=/validate-infrastructure-cluster-x-k8s-io-v1alpha1-terraformmachinetemplate,mutating=false,failurePolicy=fail,matchPolicy=Equivalent,groups=infrastructure.cluster.x-k8s.io,resources=terraformmachinetemplates,versions=v1alpha1,name=validation.terraformmachinetemplate.infrastructure.cluster.x-k8s.io,sideEffects=None,admissionReviewVersions=v1
+// +kubebuilder:webhook:verbs=create;update,path=/validate-infrastructure-cluster-x-k8s-io-v1alpha1-terraformmachinetemplate,mutating=false,failurePolicy=fail,matchPolicy=Equivalent,groups=infrastructure.cluster.x-k8s.io,resources=terraformmachinetemplates,versions=v1alpha1,name=validation.terraformmachinetemplate.infrastructure.cluster.x-k8s.io,timeoutSeconds=10,sideEffects=None,admissionReviewVersions=v1
 
 var _ admission.Validator[*infrav1.TerraformMachineTemplate] = &TerraformMachineTemplate{}
 

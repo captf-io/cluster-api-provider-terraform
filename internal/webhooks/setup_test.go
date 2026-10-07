@@ -24,11 +24,13 @@ import (
 	"strings"
 	"testing"
 
+	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	"sigs.k8s.io/yaml"
 
 	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
 )
@@ -67,9 +69,10 @@ func TestSetupWebhooks(t *testing.T) {
 			t.Errorf("%s declares a mutating webhook; nothing is defaulted at admission", f)
 		}
 	}
-	// One validating webhook per kind, and no defaulting webhook.
-	if len(markers) != 8 {
-		t.Fatalf("found %d webhook markers, want 8: %v", len(markers), markers)
+	// One validating webhook per kind plus the split-off DELETE entries of
+	// TerraformMachine and TerraformClusterIdentity, and no defaulting webhook.
+	if len(markers) != 10 {
+		t.Fatalf("found %d webhook markers, want 10: %v", len(markers), markers)
 	}
 	for _, path := range markers {
 		if _, pattern := mux.Handler(httptest.NewRequest(http.MethodPost, path, http.NoBody)); pattern != path {
@@ -78,6 +81,101 @@ func TestSetupWebhooks(t *testing.T) {
 		mutate := strings.Replace(path, "/validate-", "/mutate-", 1)
 		if _, pattern := mux.Handler(httptest.NewRequest(http.MethodPost, mutate, http.NoBody)); pattern == mutate {
 			t.Errorf("defaulting path %s is served", mutate)
+		}
+	}
+}
+
+// TestWebhookManifest proves config/webhook/manifests.yaml wires every kind
+// to a path SetupWebhooks serves, with a timeout on every entry, and with
+// failurePolicy=Ignore on the DELETE-only guardrail entries and Fail on all
+// others, none of which may mix DELETE with another operation.
+func TestWebhookManifest(t *testing.T) {
+	t.Parallel()
+	scheme := testScheme(t)
+	if err := infrav1.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme: %v", err)
+	}
+	mgr, server := newTestManager(t, scheme)
+	if err := SetupWebhooks(mgr, "", nil); err != nil {
+		t.Fatalf("SetupWebhooks: %v", err)
+	}
+	mux := server.WebhookMux()
+
+	raw, err := os.ReadFile("../../config/webhook/manifests.yaml")
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	var cfg admissionregistrationv1.ValidatingWebhookConfiguration
+	if err := yaml.UnmarshalStrict(raw, &cfg); err != nil {
+		t.Fatalf("parse manifest: %v", err)
+	}
+
+	names := map[string]bool{}
+	covered := map[string]map[admissionregistrationv1.OperationType]bool{}
+	for _, wh := range cfg.Webhooks {
+		if names[wh.Name] {
+			t.Errorf("webhook name %s is duplicated", wh.Name)
+		}
+		names[wh.Name] = true
+		if wh.TimeoutSeconds == nil || *wh.TimeoutSeconds != 10 {
+			t.Errorf("%s: timeoutSeconds = %v, want 10", wh.Name, wh.TimeoutSeconds)
+		}
+		if wh.ClientConfig.Service == nil || wh.ClientConfig.Service.Path == nil {
+			t.Fatalf("%s: no service path", wh.Name)
+		}
+		path := *wh.ClientConfig.Service.Path
+		if _, pattern := mux.Handler(httptest.NewRequest(http.MethodPost, path, http.NoBody)); pattern != path {
+			t.Errorf("%s: path %s is not served (matched %q)", wh.Name, path, pattern)
+		}
+		if wh.FailurePolicy == nil {
+			t.Fatalf("%s: no failurePolicy", wh.Name)
+		}
+		for _, r := range wh.Rules {
+			deleteOnly := len(r.Operations) == 1 && r.Operations[0] == admissionregistrationv1.Delete
+			hasDelete := false
+			for _, op := range r.Operations {
+				hasDelete = hasDelete || op == admissionregistrationv1.Delete
+			}
+			if hasDelete && !deleteOnly {
+				t.Errorf("%s: DELETE shares an entry with %v", wh.Name, r.Operations)
+			}
+			want := admissionregistrationv1.Fail
+			if deleteOnly {
+				want = admissionregistrationv1.Ignore
+			}
+			if *wh.FailurePolicy != want {
+				t.Errorf("%s: failurePolicy = %s, want %s", wh.Name, *wh.FailurePolicy, want)
+			}
+			// The path derives from the kind: /validate-<group>-<version>-<kind>.
+			for _, res := range r.Resources {
+				if covered[res] == nil {
+					covered[res] = map[admissionregistrationv1.OperationType]bool{}
+				}
+				for _, op := range r.Operations {
+					covered[res][op] = true
+				}
+				kind := strings.TrimSuffix(res, "s")
+				if res == "terraformclusteridentities" {
+					kind = "terraformclusteridentity"
+				}
+				if want := "/validate-" + strings.ReplaceAll(r.APIGroups[0], ".", "-") + "-" + r.APIVersions[0] + "-" + kind; path != want {
+					t.Errorf("%s: path %s does not match resource %s (want %s)", wh.Name, path, res, want)
+				}
+			}
+		}
+	}
+	for _, res := range []string{
+		"terraformclusters", "terraformclustertemplates", "terraformmachines", "terraformmachinetemplates",
+		"terraformmachinepools", "terraformmachinepooltemplates", "terraformclusteridentities", "terraformplans",
+	} {
+		for _, op := range []admissionregistrationv1.OperationType{admissionregistrationv1.Create, admissionregistrationv1.Update} {
+			if !covered[res][op] {
+				t.Errorf("%s %s is not covered by any webhook", res, op)
+			}
+		}
+		wantDelete := res == "terraformmachines" || res == "terraformclusteridentities"
+		if covered[res][admissionregistrationv1.Delete] != wantDelete {
+			t.Errorf("%s DELETE covered = %v, want %v", res, covered[res][admissionregistrationv1.Delete], wantDelete)
 		}
 	}
 }

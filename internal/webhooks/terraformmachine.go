@@ -63,7 +63,8 @@ func (w *TerraformMachine) SetupWebhookWithManager(mgr ctrl.Manager) error {
 		Complete()
 }
 
-// +kubebuilder:webhook:verbs=create;update;delete,path=/validate-infrastructure-cluster-x-k8s-io-v1alpha1-terraformmachine,mutating=false,failurePolicy=fail,matchPolicy=Equivalent,groups=infrastructure.cluster.x-k8s.io,resources=terraformmachines,versions=v1alpha1,name=validation.terraformmachine.infrastructure.cluster.x-k8s.io,sideEffects=None,admissionReviewVersions=v1
+// +kubebuilder:webhook:verbs=create;update,path=/validate-infrastructure-cluster-x-k8s-io-v1alpha1-terraformmachine,mutating=false,failurePolicy=fail,matchPolicy=Equivalent,groups=infrastructure.cluster.x-k8s.io,resources=terraformmachines,versions=v1alpha1,name=validation.terraformmachine.infrastructure.cluster.x-k8s.io,timeoutSeconds=10,sideEffects=None,admissionReviewVersions=v1
+// +kubebuilder:webhook:verbs=delete,path=/validate-infrastructure-cluster-x-k8s-io-v1alpha1-terraformmachine,mutating=false,failurePolicy=ignore,matchPolicy=Equivalent,groups=infrastructure.cluster.x-k8s.io,resources=terraformmachines,versions=v1alpha1,name=delete.validation.terraformmachine.infrastructure.cluster.x-k8s.io,timeoutSeconds=10,sideEffects=None,admissionReviewVersions=v1
 
 var _ admission.Validator[*infrav1.TerraformMachine] = &TerraformMachine{}
 
@@ -154,6 +155,11 @@ func validateMachineSpec(specPath *field.Path, spec, old *infrav1.TerraformMachi
 // anyone who may update obj can drop or change those, and clusterctl move
 // rewrites ownerReference UIDs, so they cannot be pinned. An object nothing
 // references (a stuck object whose Machine is gone) can always be deleted.
+//
+// It is a best-effort guardrail, not a security boundary: its webhook entry
+// has failurePolicy=Ignore and a 10s timeout, so a delete goes through when
+// the manager is down or slow, and a namespace or the provider can always be
+// removed.
 //
 // clusterctl move is recognized by its delete-for-move annotation only while
 // the owning Cluster (cluster.x-k8s.io/cluster-name label) has

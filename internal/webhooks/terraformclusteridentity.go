@@ -60,7 +60,8 @@ func (w *TerraformClusterIdentity) SetupWebhookWithManager(mgr ctrl.Manager) err
 		Complete()
 }
 
-// +kubebuilder:webhook:verbs=create;update;delete,path=/validate-infrastructure-cluster-x-k8s-io-v1alpha1-terraformclusteridentity,mutating=false,failurePolicy=fail,matchPolicy=Equivalent,groups=infrastructure.cluster.x-k8s.io,resources=terraformclusteridentities,versions=v1alpha1,name=validation.terraformclusteridentity.infrastructure.cluster.x-k8s.io,sideEffects=None,admissionReviewVersions=v1
+// +kubebuilder:webhook:verbs=create;update,path=/validate-infrastructure-cluster-x-k8s-io-v1alpha1-terraformclusteridentity,mutating=false,failurePolicy=fail,matchPolicy=Equivalent,groups=infrastructure.cluster.x-k8s.io,resources=terraformclusteridentities,versions=v1alpha1,name=validation.terraformclusteridentity.infrastructure.cluster.x-k8s.io,timeoutSeconds=10,sideEffects=None,admissionReviewVersions=v1
+// +kubebuilder:webhook:verbs=delete,path=/validate-infrastructure-cluster-x-k8s-io-v1alpha1-terraformclusteridentity,mutating=false,failurePolicy=ignore,matchPolicy=Equivalent,groups=infrastructure.cluster.x-k8s.io,resources=terraformclusteridentities,versions=v1alpha1,name=delete.validation.terraformclusteridentity.infrastructure.cluster.x-k8s.io,timeoutSeconds=10,sideEffects=None,admissionReviewVersions=v1
 
 var _ admission.Validator[*infrav1.TerraformClusterIdentity] = &TerraformClusterIdentity{}
 
@@ -98,10 +99,16 @@ func (w *TerraformClusterIdentity) ValidateUpdate(ctx context.Context, oldObj, n
 // TerraformCluster or TerraformMachine uses it (directly or through the
 // cluster fallback), or status.namespaces still lists a mirror of its
 // Secret. Deleting it would leave those objects unable to run, and destroy,
-// with the credentials that created their resources. ctx bounds the reads
-// this makes to find obj's users. It returns no warnings and an error when
-// obj is still in use or its credentials are still mirrored somewhere, or
-// a nil error when the delete is allowed.
+// with the credentials that created their resources.
+//
+// It is a best-effort guardrail, not a security boundary: its webhook entry
+// has failurePolicy=Ignore and a 10s timeout, so a delete goes through when
+// the manager is down or slow, and a namespace or the provider can always be
+// removed; the reconciler revokes the mirrors of a deleted identity.
+//
+// ctx bounds the reads this makes to find obj's users. It returns no
+// warnings and an error when obj is still in use or its credentials are
+// still mirrored somewhere, or a nil error when the delete is allowed.
 func (w *TerraformClusterIdentity) ValidateDelete(ctx context.Context, obj *infrav1.TerraformClusterIdentity) (admission.Warnings, error) {
 	user, err := identity.FirstUser(ctx, w.Reader, obj.Name)
 	if err != nil {
