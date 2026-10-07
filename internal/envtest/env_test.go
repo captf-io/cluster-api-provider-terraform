@@ -22,6 +22,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,6 +39,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	"k8s.io/klog/v2"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -257,6 +259,12 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, "envtest: KUBEBUILDER_ASSETS is not set; run `make test-envtest`")
 		os.Exit(1)
 	}
+	// The suite reads results, not logs: discard the klog output of the
+	// engine and of controller-runtime, which also settles its unset-logger
+	// warning.
+	klog.LogToStderr(false)
+	klog.SetOutput(io.Discard)
+	ctrl.SetLogger(klog.Background())
 	var wg sync.WaitGroup
 	var errs [3]error
 	for i, s := range []struct {
