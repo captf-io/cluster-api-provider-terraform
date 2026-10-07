@@ -41,6 +41,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/contract"
@@ -1184,6 +1185,9 @@ func TestStartJobRetryAfterCrash(t *testing.T) {
 	existing := first.DeepCopy()
 	existing.ResourceVersion = ""
 	existing.UID = types.UID("existing-job-uid")
+	if err := controllerutil.SetControllerReference(k.obj, existing, e.c.Scheme()); err != nil {
+		t.Fatal(err)
+	}
 	if err := e.c.Create(t.Context(), existing); err != nil {
 		t.Fatal(err)
 	}

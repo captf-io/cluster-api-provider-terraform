@@ -198,12 +198,14 @@ func DeleteStuckJob(ctx context.Context, d Deps, obj Object, job *batchv1.Job) (
 }
 
 // ErrStartDeferred is returned, wrapped, by StartJob when it created no
-// Job and gave back the leases for a reason a later pass resolves: the
-// object or its Cluster was paused live after block-move was written (a
-// clusterctl move started), or the leases grew too old before the create
-// and could not be taken again, or another Job took the run lease
-// meanwhile (ensureFreshLeases). The caller requeues
-// soon instead of counting it as a failure.
+// Job, for a reason a later pass resolves: the object or its Cluster was
+// paused live after block-move was written (a clusterctl move started),
+// or the leases grew too old before the create and could not be taken
+// again, or another Job took the run lease meanwhile
+// (ensureFreshLeases); it gave back the leases then. Or a Job of the same
+// name exists that is not this object's running one (adoptExisting); the
+// leases name that Job then, which frees them once it finished. The
+// caller requeues soon instead of counting it as a failure.
 var ErrStartDeferred = errors.New("job start deferred")
 
 // StartJob starts the Job for req, using ctx, the shared dependencies d
@@ -212,8 +214,9 @@ var ErrStartDeferred = errors.New("job start deferred")
 // Apply, the image choice, leases fresh enough to outlast the create
 // (ensureFreshLeases), the Job, its per-run Secret (the Job first: the
 // Secret is owned by it, and the pod waits for the volume) and
-// status.activeJob. A Job that already exists (a retry after a crash) is
-// taken as the active one. It returns the started (or existing) Job, or
+// status.activeJob. A Job that already exists is taken as the active one
+// only when obj controls it and it runs (a retry after a crash;
+// adoptExisting). It returns the started (or existing) Job, or
 // any error creating it or its per-run Secret; an error wrapping
 // ErrStartDeferred when no Job was created for a reason a later pass
 // resolves.
@@ -332,9 +335,9 @@ func startJob(ctx context.Context, d Deps, k Kind, req JobRequest) (job *batchv1
 			// through: only a rejection proves no Job holds the leases.
 			return nil, !createRejected(err), fmt.Errorf("create job %s: %w", job.Name, err)
 		}
-		existing := &batchv1.Job{}
-		if err := d.Client.Get(ctx, client.ObjectKeyFromObject(job), existing); err != nil {
-			return nil, true, fmt.Errorf("get existing job %s: %w", job.Name, err)
+		existing, err := adoptExisting(ctx, d, obj, job.Name)
+		if err != nil {
+			return nil, true, err
 		}
 		job = existing
 	}
@@ -376,6 +379,48 @@ func startJob(ctx context.Context, d Deps, k Kind, req JobRequest) (job *batchv1
 	}
 	d.EmitRelated(obj, job, corev1.EventTypeNormal, EventJobCreated, "Run", "%s", note)
 	return job, true, nil
+}
+
+// adoptExisting returns the Job name, of obj's namespace, that a create
+// found existing, read using ctx through d's uncached reader, when obj
+// controls it and it still runs: a retry after a crash between the create
+// and the status write, whose Job the cache has not shown yet. Any other
+// Job of that name is not taken as the one this pass started, and the
+// start is deferred (an error wrapping ErrStartDeferred):
+//
+//   - obj's own Job that finished: the cache lagged its finish, and the
+//     attempt computed from it repeated its name. The next pass lists it
+//     and picks the next attempt.
+//   - a Job another object controls, an earlier object of the same name
+//     whose garbage collection is pending: once it finished it is deleted
+//     (only that Job, by UID), so the name is free on the next pass; while
+//     it runs it is left alone, as it runs against the same state.
+//
+// It returns the adopted Job, that deferral, or any error reading or
+// deleting the Job.
+func adoptExisting(ctx context.Context, d Deps, obj Object, name string) (*batchv1.Job, error) {
+	existing := &batchv1.Job{}
+	if err := d.APIReader.Get(ctx, client.ObjectKey{Namespace: obj.GetNamespace(), Name: name}, existing); err != nil {
+		return nil, fmt.Errorf("get existing job %s: %w", name, err)
+	}
+	logger := klog.LoggerWithValues(klog.FromContext(ctx), "Job", klog.KObj(existing))
+	ours, running := metav1.IsControlledBy(existing, obj), jobs.OutcomeOf(existing) == jobs.Running
+	switch {
+	case ours && running:
+		return existing, nil
+	case ours:
+		logger.V(LogFlow).Info("A Job of the name to start exists and has finished; the next pass picks the next attempt")
+		return nil, fmt.Errorf("%w: Job %s exists and has finished", ErrStartDeferred, name)
+	case running:
+		logger.Info("A Job of the name to start, controlled by another object of this name, still runs; the start waits for it")
+		return nil, fmt.Errorf("%w: Job %s of another object still runs", ErrStartDeferred, name)
+	}
+	err := d.Client.Delete(ctx, existing, client.Preconditions{UID: &existing.UID}, client.PropagationPolicy(metav1.DeletePropagationBackground))
+	if err != nil && !apierrors.IsNotFound(err) && !apierrors.IsConflict(err) {
+		return nil, fmt.Errorf("delete finished job %s of another object: %w", name, err)
+	}
+	logger.Info("Deleted a finished Job of the name to start, controlled by another object of this name; the start follows on the next pass")
+	return nil, fmt.Errorf("%w: Job %s of another object was in the way", ErrStartDeferred, name)
 }
 
 // persistBlockMove writes block-move on obj now, using ctx and the client

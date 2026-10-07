@@ -535,10 +535,7 @@ func (r *reconciler) createPlan(ctx context.Context, f *finished, mp madePlan) (
 	err := r.d.Client.Create(ctx, p)
 	switch {
 	case apierrors.IsAlreadyExists(err):
-		// Created by a pass whose bookkept mark was lost; the cache has
-		// not shown it yet, or it predates this object (another UID).
-		klog.FromContext(ctx).V(LogFlow).Info("The TerraformPlan of the Job's plan exists already", "TerraformPlan", klog.KObj(p), "Job", klog.KObj(f.job))
-		return p, false, nil
+		return r.existingPlan(ctx, p, f)
 	case err != nil:
 		return nil, false, fmt.Errorf("create TerraformPlan %s: %w", name, err)
 	}
@@ -548,6 +545,28 @@ func (r *reconciler) createPlan(ctx context.Context, f *finished, mp madePlan) (
 	r.plans = slices.Insert(r.plans, 0, *p)
 	// Create drops the status; it is written now, not on the next pass.
 	return &r.plans[0], true, r.writePlan(ctx, &r.plans[0], infrav1.PlanPhasePending)
+}
+
+// existingPlan handles, using ctx, a create of p, the TerraformPlan of the
+// plan f made, that found it existing: one this object controls was
+// created by a pass whose bookkept mark was lost, and the cache has not
+// shown it yet; it is read through the API reader and added to r.plans,
+// so the rest of the pass sees it. One another object controls predates
+// this one (an earlier object of the same name, its garbage collection
+// pending): it is not this object's plan, so an error is returned and
+// the pass is retried until it is gone. It returns the plan, false (it
+// was not created now), and any read error or that conflict.
+func (r *reconciler) existingPlan(ctx context.Context, p *infrav1.TerraformPlan, f *finished) (*infrav1.TerraformPlan, bool, error) {
+	live := &infrav1.TerraformPlan{}
+	if err := r.d.APIReader.Get(ctx, client.ObjectKeyFromObject(p), live); err != nil {
+		return nil, false, fmt.Errorf("get existing TerraformPlan %s: %w", p.Name, err)
+	}
+	if !metav1.IsControlledBy(live, r.obj) {
+		return nil, false, fmt.Errorf("TerraformPlan %s exists, controlled by another object of this name; retrying once it is gone", p.Name)
+	}
+	klog.FromContext(ctx).V(LogFlow).Info("The TerraformPlan of the Job's plan exists already", "TerraformPlan", klog.KObj(live), "Job", klog.KObj(f.job))
+	r.plans = slices.Insert(r.plans, 0, *live)
+	return &r.plans[0], false, nil
 }
 
 // planEvents emits the events of the plan f, a finished Job read this
