@@ -21,8 +21,10 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-api/util/annotations"
@@ -78,7 +80,23 @@ type PreambleResult struct {
 func Preamble(ctx context.Context, d Deps, k Kind) (PreambleResult, error) {
 	obj := k.Object()
 	if annotations.IsExternallyManaged(obj) {
-		klog.FromContext(ctx).V(LogDebug).Info("Object is externally managed, skipping")
+		if obj.GetDeletionTimestamp().IsZero() {
+			klog.FromContext(ctx).V(LogDebug).Info("Object is externally managed, skipping")
+			return PreambleResult{Stop: true}, nil
+		}
+		// A deleting object that still carries our finalizer would hang
+		// forever: release only the finalizer and leave the state and the
+		// infrastructure to the external manager.
+		removed, err := dropFinalizer(ctx, d.Client, obj, k.Finalizer())
+		if err != nil {
+			return conflictRequeue(err)
+		}
+		if removed {
+			klog.FromContext(ctx).Info("Removed the finalizer",
+				"finalizer", k.Finalizer(), "reason", "externally managed")
+			d.Emit(obj, corev1.EventTypeNormal, EventExternallyManagedReleased, "Delete",
+				"Removed finalizer %s: the object is externally managed, so its state and infrastructure are left to the external manager", k.Finalizer())
+		}
 		return PreambleResult{Stop: true}, nil
 	}
 
@@ -112,7 +130,10 @@ func Preamble(ctx context.Context, d Deps, k Kind) (PreambleResult, error) {
 				d.Emit(obj, corev1.EventTypeNormal, EventFinalizerRemoved, "Delete",
 					"Removed finalizer %s: no owner, no state and no running Job, so nothing to destroy", k.Finalizer())
 			}
-			return PreambleResult{Owner: owner, Stop: true}, err
+			if err != nil {
+				return conflictRequeue(err)
+			}
+			return PreambleResult{Owner: owner, Stop: true}, nil
 		}
 	} else if owner.Gate != nil && !deleting {
 		if err := patchGate(ctx, d, k, owner.Gate); err != nil {
@@ -185,15 +206,26 @@ func patchGate(ctx context.Context, d Deps, k Kind, gate *Gate) error {
 	return nil
 }
 
-// dropFinalizer removes the finalizer with a direct merge patch, using ctx
-// and the client c; removed is false when obj did not carry it. It
-// returns removed and any patch error.
+// conflictRequeue turns a Conflict from an optimistic-lock patch into a
+// stop that requeues shortly, and returns any other err unchanged.
+func conflictRequeue(err error) (PreambleResult, error) {
+	if apierrors.IsConflict(err) {
+		return PreambleResult{Stop: true, Result: ctrl.Result{RequeueAfter: time.Second}}, nil
+	}
+	return PreambleResult{}, err
+}
+
+// dropFinalizer removes the finalizer with a merge patch under an
+// optimistic lock, so a finalizer another controller added since the
+// read is never dropped, using ctx and the client c; removed is false
+// when obj did not carry it. It returns removed and any patch error,
+// which wraps the API Conflict when obj is stale.
 func dropFinalizer(ctx context.Context, c client.Client, obj Object, finalizer string) (removed bool, _ error) {
 	before, ok := obj.DeepCopyObject().(client.Object)
 	if !ok || !controllerutil.RemoveFinalizer(obj, finalizer) {
 		return false, nil
 	}
-	if err := client.IgnoreNotFound(c.Patch(ctx, obj, client.MergeFrom(before))); err != nil {
+	if err := client.IgnoreNotFound(c.Patch(ctx, obj, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{}))); err != nil {
 		return false, fmt.Errorf("remove finalizer: %w", err)
 	}
 	return true, nil

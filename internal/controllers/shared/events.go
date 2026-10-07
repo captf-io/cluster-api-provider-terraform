@@ -231,6 +231,10 @@ const (
 	// EventReplicasManagedExternally: valid autoscaler annotations but a
 	// foreign replicas-managed-by owner; spec.replicas is not written back.
 	EventReplicasManagedExternally = "ReplicasManagedExternally"
+	// EventExternallyManagedReleased: a deleting object that carries the
+	// managed-by annotation lost only this provider's finalizer; its
+	// state and infrastructure are left to the external manager.
+	EventExternallyManagedReleased = "ExternallyManagedReleased"
 )
 
 // DocumentedEvents returns every event reason the manager emits;
@@ -249,6 +253,7 @@ func DocumentedEvents() []string {
 		EventStateBackedUp, EventStateRestored, EventStateRestoreFailed,
 		EventDriftDetected, EventDriftResolved, EventDriftRemediationStarted, EventInstanceHealthy, EventInstanceUnhealthy,
 		EventRemediationRequested, EventRemediationWithdrawn, EventReplicasWrittenBack, EventReplicasManagedExternally,
+		EventExternallyManagedReleased,
 		EventIdentityNotAllowed, EventIdentitySecretFound, EventIdentitySecretNotFound, EventMirrorCreated, EventMirrorRemoved,
 		EventOwnerReferencesRepaired, EventCapacityResolved, EventImageInspectFailed, EventConditionChanged,
 	}
