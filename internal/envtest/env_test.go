@@ -35,6 +35,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -306,4 +307,12 @@ func wantInvalid(t *testing.T, err error, want string) {
 	if !strings.Contains(err.Error(), want) {
 		t.Fatalf("error = %v, want one containing %q", err, want)
 	}
+}
+
+// clientKey returns the namespaced name of o.
+func clientKey(o interface {
+	GetNamespace() string
+	GetName() string
+}) types.NamespacedName {
+	return types.NamespacedName{Namespace: o.GetNamespace(), Name: o.GetName()}
 }
