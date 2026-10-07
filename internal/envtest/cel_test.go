@@ -102,7 +102,7 @@ func TestTerraformMachineCEL(t *testing.T) {
 		{name: "create", new: machineSpec(nil)},
 		{name: "unchanged", old: machineSpec(nil), new: machineSpec(nil)},
 		{name: "operational policy changes", old: machineSpec(nil),
-			new: machineSpec(map[string]any{"jobs": map[string]any{"deadlineSeconds": int64(60)}})},
+			new: machineSpec(map[string]any{"jobs": map[string]any{"activeDeadlineSeconds": int64(600)}})},
 		{name: "source", old: machineSpec(nil),
 			new:  machineSpec(map[string]any{"source": map[string]any{"image": "ghcr.io/captf-io/noop-machine:v2"}}),
 			want: "spec.source is immutable"},
