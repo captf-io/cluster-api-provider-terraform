@@ -138,14 +138,14 @@ spec:
         # Memory, an estimate to be revised with measurements. The informers
         # hold Secrets without their data, so the steady state is the Go
         # runtime, the CAPI and CAPTF objects and the Job informer: about
-        # 50-80Mi. A reconcile can read a whole state: up to 32 chunks and
-        # 64Mi decompressed (state.MaxChunks, MaxStateBytes), held while it
-        # is decoded, about 100-200Mi for that worst case on one reconcile;
-        # real states are 1-5Mi, and there are 10 reconciles per controller
-        # (--*-concurrency). 512Mi covers the steady state, one worst-case
-        # read and a typical concurrent load (~200Mi); request enough for
-        # the steady state with headroom, so the scheduler is not told
-        # to reserve the burst.
+        # 50-80Mi. A reconcile reads a state's payload only when it changed
+        # (state.CachingReader), at most 4 at a time: up to 32 chunks and
+        # 16Mi decompressed each (state.MaxChunks, MaxStateBytes), about
+        # 50Mi held while one is decoded, so about 200Mi for the worst case;
+        # the parsed outputs kept are bounded at 64Mi (MaxCachedBytes), and
+        # real states are 1-5Mi. 512Mi covers the steady state, the cache
+        # and the worst-case reads; request enough for the steady state
+        # with headroom, so the scheduler is not told to reserve the burst.
         resources:
           limits:
             cpu: 500m

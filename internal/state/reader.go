@@ -54,12 +54,15 @@ var (
 const DataKey = "tfstate"
 
 // Limits on what the reader accepts. A kubernetes-backend Secret holds at
-// most 1 MiB of compressed state, and real states compress 10–20×, so 32
-// chunks and 64 MiB decompressed are far beyond any plausible cluster or
-// machine state; beyond them the state is reported corrupt, not read.
+// most 1 MiB of compressed state, and real states are 1–5 MiB
+// decompressed, so 32 chunks and 16 MiB decompressed are far beyond any
+// plausible cluster or machine state; beyond them the state is reported
+// corrupt, not read. The decompressed bound is what one read may hold in
+// the shared manager, several times over while it decodes: a module can
+// write a gzip bomb into its own state.
 const (
 	MaxChunks     = 32
-	MaxStateBytes = 64 << 20
+	MaxStateBytes = 16 << 20
 )
 
 // State is what the controller needs from a state file.

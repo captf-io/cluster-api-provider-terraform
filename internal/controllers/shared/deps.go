@@ -54,8 +54,10 @@ type Deps struct {
 	// Jobs is jobs.NewRunner(Client, APIReader): pods are listed through
 	// the API reader, never an informer.
 	Jobs jobs.Runner
-	// State is state.NewReader(Client). Reads are live (Secrets are
-	// uncached), which the adopt-then-read sequence relies on.
+	// State is state.NewCachingReader(Client). Reads list the state
+	// Secrets' metadata live (Secrets are uncached), which the
+	// adopt-then-read sequence relies on, and parse the payload only when
+	// that metadata changed.
 	State state.Reader
 	// Clock is the time source; unit tests fake it.
 	Clock clock.PassiveClock

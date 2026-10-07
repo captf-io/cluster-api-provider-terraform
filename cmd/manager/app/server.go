@@ -324,7 +324,7 @@ func newDeps(mgr ctrl.Manager, opts *options.Options, rec *metrics.Recorder) sha
 		Recorder:     mgr.GetEventRecorder("captf-manager"),
 		Metrics:      rec,
 		Jobs:         jobs.NewRunner(c, apiReader),
-		State:        state.NewReader(c),
+		State:        state.NewCachingReader(c),
 		Clock:        clock.RealClock{},
 		Inspector:    imageinspect.FallbackInspector{Inner: remote},
 		RunnerImage:  opts.RunnerImage,
