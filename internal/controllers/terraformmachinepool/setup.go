@@ -33,6 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/controllers/shared"
@@ -87,6 +88,9 @@ func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, opt
 		Watches(&clusterv1.Cluster{}, handler.EnqueueRequestsFromMapFunc(clusterToPools),
 			predicates.ClusterPausedTransitionsOrInfrastructureProvisioned(scheme, logger), filter).
 		Owns(&batchv1.Job{}).
+		// An approval is a spec change; the controller's own phase labels
+		// and status writes are not.
+		Owns(&infrav1.TerraformPlan{}, predicate.GenerationChangedPredicate{}).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(SecretToPools(c)), shared.ManagedSecret()).
 		Watches(&infrav1.TerraformClusterIdentity{}, handler.EnqueueRequestsFromMapFunc(shared.IdentityToPools(c))).
 		Watches(&corev1.Namespace{},

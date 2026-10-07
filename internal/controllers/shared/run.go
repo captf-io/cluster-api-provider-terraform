@@ -90,9 +90,9 @@ type JobRequest struct {
 	// AfterInterruptedApply names the apply Job that disappeared while an
 	// apply is due for it (AfterInterruptedApplyAnnotation); "" otherwise.
 	AfterInterruptedApply string
-	// AllowDeletesHash approves a destructive plan of a guarded apply: the
-	// object's captf.io/approve-destructive-plan annotation, set only when
-	// it names InputsHash (a cluster) or ApprovalHash (a pool).
+	// AllowDeletesHash approves a destructive plan of a guarded pool apply:
+	// the approval hash of its approved ExportsChange TerraformPlan
+	// (Decision.AllowDeletes).
 	AllowDeletesHash string
 	// ApprovalHash guards a pool apply that renders a change of the
 	// cluster's exports (jobs.Spec.ApprovalHash), and is recorded on the

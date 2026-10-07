@@ -398,36 +398,6 @@ func TestInputsBytesTooLarge(t *testing.T) {
 	}
 }
 
-// TestApprovalConsumedMetric: the consumed approval is counted.
-func TestApprovalConsumedMetric(t *testing.T) {
-	t.Parallel()
-	r, reg := recorder(t)
-	approved := func(m *infrav1.TerraformMachine) {
-		metav1.SetMetaDataAnnotation(&m.ObjectMeta, infrav1.ApproveDestructivePlanAnnotation, "h2:approved")
-	}
-	e := newEnv(t, world(machine(withFinalizer, notPaused, provisioned, approved))...)
-	e.d.Metrics = r
-	e.state.st = &state.State{InputsHash: "h2:approved"}
-	ok := job("a", jobs.OpApply, jobs.Succeeded, t0.Add(-time.Hour))
-	ok.Annotations = map[string]string{state.InputsHashAnnotation: "h2:approved", BookkeptAnnotation: "true"}
-	e.runner.jobs = append(e.runner.jobs, ok)
-	k := e.kindFor(t, readyOwner)
-	k.asCluster, k.mutable, k.in = true, true, machineIn()
-	k.health = &contract.Health{State: contract.HealthRunning, Healthy: true}
-	k.clusterDrift = &infrav1.DriftPolicy{IntervalSeconds: new(int32(0))}
-	if _, err := reconcileOnce(t, e, k); err != nil {
-		t.Fatal(err)
-	}
-	want := `
-# HELP captf_destructive_plan_approvals_consumed_total [ALPHA] Destructive-plan approvals removed after the approved apply succeeded.
-# TYPE captf_destructive_plan_approvals_consumed_total counter
-captf_destructive_plan_approvals_consumed_total{kind="TerraformCluster"} 1
-`
-	if err := testutil.GatherAndCompare(reg, strings.NewReader(want), metrics.ApprovalsConsumedName); err != nil {
-		t.Error(err)
-	}
-}
-
 // TestRecordTransitionAndObject proves recordTransition counts identity
 // refusals and state-read errors by reason, and recordObject sets the Ready
 // and InfrastructureHealthy gauges from an object's conditions.

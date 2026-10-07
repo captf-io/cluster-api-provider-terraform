@@ -257,13 +257,17 @@ func (e *clusterEnv) succeed(job *batchv1.Job) {
 	e.st.mu.Unlock()
 }
 
+// blockedPlanHash is the hash of the plan a blocked apply reports (block).
+const blockedPlanHash = "p2:blocked"
+
 // block finishes job, an apply, as the runner's guard stops it before a
-// destructive plan.
+// destructive plan, which it reports.
 func (e *clusterEnv) block(job *batchv1.Job) {
 	e.t.Helper()
 	res := runner.Result{
 		Version: runner.ResultVersion, Op: runner.OpApply, Steps: []runner.Step{{Name: "init"}, {Name: "plan", Exit: 2}, {Name: "show-json"}},
 		Error: &runner.Error{Kind: runner.ErrorKindBlocked, Tail: "the plan deletes or replaces 1 resource(s): module.role.aws_lb.this (delete)"},
+		Plan:  &runner.Plan{Hash: blockedPlanHash, Delete: 1, Resources: []string{"module.role.aws_lb.this (delete)"}},
 	}
 	cs := corev1.ContainerStatus{Name: jobs.SourceContainer}
 	cs.State.Terminated = &corev1.ContainerStateTerminated{Message: string(runner.Encode(res))}
@@ -309,14 +313,19 @@ func (e *clusterEnv) cluster() *infrav1.TerraformCluster {
 	return tc
 }
 
-// approve sets the approval annotation on the cluster to value.
-func (e *clusterEnv) approve(value string) {
+// approve approves the cluster's live TerraformPlan (status.pendingPlanRef)
+// as alice and returns it.
+func (e *clusterEnv) approve() *infrav1.TerraformPlan {
 	e.t.Helper()
-	tc := e.cluster()
-	metav1.SetMetaDataAnnotation(&tc.ObjectMeta, infrav1.ApproveDestructivePlanAnnotation, value)
-	if err := e.c.Update(e.t.Context(), tc); err != nil {
+	tp := &infrav1.TerraformPlan{}
+	if err := e.c.Get(e.t.Context(), client.ObjectKey{Namespace: ns, Name: e.cluster().Status.PendingPlanRef.Name}, tp); err != nil {
 		e.t.Fatal(err)
 	}
+	tp.Spec.Approved, tp.Spec.ApprovedBy = new(true), "alice"
+	if err := e.c.Update(e.t.Context(), tp); err != nil {
+		e.t.Fatal(err)
+	}
+	return tp
 }
 
 // interrupted returns the apply Job the durable Secret records as gone
@@ -384,16 +393,19 @@ func TestInterruptedApply(t *testing.T) {
 	e.reconcileNoApply()
 	e.reconcileNoApply()
 	if c := e.applyCondition(); c.Reason != infrav1.DestructivePlanBlockedReason || !strings.HasPrefix(c.Message, "Job "+r.Name+":") ||
-		!strings.HasSuffix(c.Message, "="+h0+" --overwrite") {
+		!strings.Contains(c.Message, "kubectl patch terraformplan "+e.cluster().Status.PendingPlanRef.Name+" ") {
 		t.Errorf("ApplyJobSucceeded after the apply was blocked = %+v", c)
 	}
 	if got := e.interrupted(); got != j.Name {
 		t.Errorf("interrupted apply after a blocked apply = %q, want %s", got, j.Name)
 	}
 
-	e.approve(h0)
+	tp := e.approve()
+	if tp.Spec.InputsHash != h0 || tp.Spec.Reason != infrav1.PlanReasonDestructive {
+		t.Errorf("TerraformPlan = %+v, want the destructive plan of %s", tp.Spec, h0)
+	}
 	a := e.reconcileStarts()
-	if !slices.Contains(args(a), "--allow-deletes-hash="+h0) || a.Annotations[shared.AfterInterruptedApplyAnnotation] != j.Name {
+	if !slices.Contains(args(a), "--expect-plan="+blockedPlanHash) || a.Annotations[shared.AfterInterruptedApplyAnnotation] != j.Name {
 		t.Errorf("approved apply: args %v, annotations %v", args(a), a.Annotations)
 	}
 	e.succeed(a)
@@ -404,8 +416,8 @@ func TestInterruptedApply(t *testing.T) {
 	if c := e.applyCondition(); c.Reason != infrav1.ApplySucceededReason || c.Message != "Job "+a.Name {
 		t.Errorf("ApplyJobSucceeded after the approved apply = %+v", c)
 	}
-	if _, ok := e.cluster().Annotations[infrav1.ApproveDestructivePlanAnnotation]; ok {
-		t.Error("the approval was not consumed")
+	if p := e.cluster().Status.PendingPlanRef; p.Name != "" {
+		t.Errorf("status.pendingPlanRef = %+v after the plan was applied", p)
 	}
 	e.reconcileNoApply()
 }
@@ -624,14 +636,7 @@ func TestInterruptedApplyManual(t *testing.T) {
 		t.Errorf("%d JobFailed Warnings while the plan waits for approval, want 1", failed)
 	}
 
-	tp := &infrav1.TerraformPlan{}
-	if err := e.c.Get(t.Context(), client.ObjectKey{Namespace: ns, Name: e.cluster().Status.PendingPlanRef.Name}, tp); err != nil {
-		t.Fatal(err)
-	}
-	tp.Spec.Approved, tp.Spec.ApprovedBy = new(true), "alice"
-	if err := e.c.Update(t.Context(), tp); err != nil {
-		t.Fatal(err)
-	}
+	tp := e.approve()
 	a := e.reconcileStartsOp(jobs.OpApply)
 	if a.Annotations[shared.AfterInterruptedApplyAnnotation] != j.Name || !slices.Contains(args(a), "--expect-plan="+planHash) ||
 		a.Annotations[shared.PlanAnnotation] != tp.Name {

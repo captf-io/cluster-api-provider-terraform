@@ -40,10 +40,11 @@ type Result struct {
 	// from the runtime's final summary line; absent when the step printed
 	// none (a failure, or another op). Encode drops it first.
 	Changes *Changes `json:"changes,omitempty"`
-	// Plan is the plan summary of a plan Job, or of an approved apply
-	// whose plan changed (ErrorKindPlanChanged): what the controller
-	// writes to status.plan. Encode drops its resources before its hash
-	// and counts, which it never drops.
+	// Plan is the plan summary of a plan Job, of an approved apply whose
+	// plan changed (ErrorKindPlanChanged), or of a guarded apply blocked
+	// before a destructive plan (ErrorKindBlocked): what the controller
+	// writes to a TerraformPlan. Encode drops its resources before its
+	// hash and counts, which it never drops.
 	Plan *Plan `json:"plan,omitempty"`
 }
 

@@ -214,8 +214,7 @@ func (in MachinePoolInputs) HashView() any {
 }
 
 // ApprovalViewer is implemented by an inputs kind whose destructive-plan
-// approval (captf.io/approve-destructive-plan) covers less than its
-// inputs: hash.Approval hashes ApprovalView() in place of the inputs
+// approval (an ExportsChange TerraformPlan) covers less than its inputs: hash.Approval hashes ApprovalView() in place of the inputs
 // themselves, so a change outside the view keeps an approval valid.
 type ApprovalViewer interface {
 	// ApprovalView returns the inputs an approval covers.

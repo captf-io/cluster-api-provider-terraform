@@ -49,6 +49,10 @@ type adapter struct {
 	// guard is how an apply of the inputs BuildInputs built last is
 	// guarded (guardExports).
 	guard shared.Guard
+	// approvedExports is the approval hash of the change of the cluster's
+	// exports an approved TerraformPlan approves (ApproveExports); "" when
+	// none does.
+	approvedExports string
 }
 
 var (
@@ -102,7 +106,7 @@ func (a *adapter) Spec() shared.SpecView {
 // Status returns the wrapped TerraformMachinePool's status as a
 // shared.CommonStatus.
 func (a *adapter) Status() shared.CommonStatus {
-	return shared.CommonStatus{WorkspaceStatus: &a.obj.Status.WorkspaceStatus}
+	return shared.CommonStatus{WorkspaceStatus: &a.obj.Status.WorkspaceStatus, PendingPlanRef: &a.obj.Status.PendingPlanRef}
 }
 
 // MembershipConverging reports whether spec.providerIDList and

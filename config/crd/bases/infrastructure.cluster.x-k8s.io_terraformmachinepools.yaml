@@ -1320,6 +1320,21 @@ spec:
                 format: int64
                 minimum: 1
                 type: integer
+              pendingPlanRef:
+                description: |-
+                  pendingPlanRef names the live TerraformPlan of the pool: the plan of
+                  a change of the cluster's exports that waits for an approval, or
+                  whose approved apply has not finished yet. It is omitted when no plan
+                  is live.
+                properties:
+                  name:
+                    description: name of the TerraformPlan.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                type: object
               pendingRefreshes:
                 description: |-
                   pendingRefreshes counts the consecutive health samples (completed

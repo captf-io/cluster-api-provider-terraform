@@ -32,7 +32,6 @@ import (
 	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/jobs"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/metrics"
-	"github.com/captf-io/cluster-api-provider-terraform/internal/state"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/strutil"
 )
 
@@ -71,22 +70,21 @@ const (
 	EventWaitingForMachineOperations = "WaitingForMachineOperations"
 	// EventDestructivePlanBlocked: a TerraformCluster apply, or a
 	// TerraformMachinePool apply of a change of the cluster's exports,
-	// stopped before a plan that deletes or replaces resources; once per
-	// blocked Job, in place of JobFailed. The pool then keeps applying with
-	// the exports of its last successful apply until the change is
-	// approved, unless an earlier apply may have left a change of them
-	// partly applied: it then waits for the approval, as a cluster does.
+	// stopped before a plan that deletes or replaces resources, and the
+	// plan waits for approval as a TerraformPlan (named, with the approve
+	// command); once per blocked Job, in place of JobFailed. The pool then
+	// keeps applying with the exports of its last successful apply until
+	// the change is approved, unless an earlier apply may have left a
+	// change of them partly applied: it then waits for the approval, as a
+	// cluster does.
 	EventDestructivePlanBlocked = "DestructivePlanBlocked"
-	// EventDestructivePlanApprovalConsumed: the approved destructive apply
-	// succeeded and its approval annotation was removed.
-	EventDestructivePlanApprovalConsumed = "DestructivePlanApprovalConsumed"
 	// EventPlanReady: a plan Job planned a TerraformCluster's change under
 	// applyPolicy Manual, and its TerraformPlan waits for approval (counts,
 	// the plan, the approve command), or the plan changes nothing and needs
 	// none; once per plan.
 	EventPlanReady = "PlanReady"
 	// EventPlanApproved: a TerraformPlan of the object was approved (names
-	// the approver), or the apply of an approved destructive plan started.
+	// the approver).
 	EventPlanApproved = "PlanApproved"
 	// EventPlanApplied: the apply of an approved TerraformPlan succeeded;
 	// the plan is Applied.
@@ -229,7 +227,7 @@ const (
 func DocumentedEvents() []string {
 	return []string{
 		EventJobCreated, EventJobSucceeded, EventJobFailed, EventJobInterrupted, EventJobDeadlineExceeded,
-		EventStuckJobDeleted, EventDestructivePlanBlocked, EventDestructivePlanApprovalConsumed,
+		EventStuckJobDeleted, EventDestructivePlanBlocked,
 		EventPlanReady, EventPlanApproved, EventPlanApplied, EventPlanChanged, EventPlanSuperseded,
 		EventWaitingForRunLease, EventWaitingForClusterOperation, EventWaitingForMachineOperations,
 		EventDeletionStarted, EventDestroyed, EventFinalizerRemoved, EventInfrastructureAbandoned, EventPaused, EventResumed, EventProvisioned,
@@ -469,6 +467,11 @@ func transitionFor(prev *metav1.Condition, c metav1.Condition, bk *Bookkeeping) 
 			}
 			return jobOutcome(c, name, bk), true
 		}
+		if c.Reason == infrav1.DestructivePlanBlockedReason {
+			// A plan's wait without a blocked Job (after clusterctl move):
+			// the plan was announced when it was made.
+			return transition{}, false
+		}
 		if c.Type == infrav1.ApplyJobSucceededCondition && c.Status == metav1.ConditionFalse &&
 			(changed || prev.Message != c.Message) {
 			// An apply or destroy that could not start (identity, inputs
@@ -598,15 +601,12 @@ func jobOutcome(c metav1.Condition, name string, bk *Bookkeeping) transition {
 		return transition{corev1.EventTypeNormal, EventJobSucceeded, note}
 	case c.Reason == infrav1.DestructivePlanBlockedReason:
 		note := fmt.Sprintf("Job %s stopped before a plan that deletes or replaces resources; nothing was applied", name)
-		if known {
-			if h := f.job.Annotations[ApprovalHashAnnotation]; h != "" {
-				note += fmt.Sprintf(". The pool guarded the apply for the cluster's exports; approve hash %s (annotation %s) to apply it. "+
-					"%s says what the plan is for, what it would change, and what the pool applies until then",
-					h, infrav1.ApproveDestructivePlanAnnotation, infrav1.ApplyJobSucceededCondition)
-			} else if h := f.job.Annotations[state.InputsHashAnnotation]; h != "" {
-				note += fmt.Sprintf(". Approve inputs hash %s (annotation %s) to apply it; %s says what it would change",
-					h, infrav1.ApproveDestructivePlanAnnotation, infrav1.ApplyJobSucceededCondition)
-			}
+		if known && f.job.Annotations[ApprovalHashAnnotation] != "" {
+			note += ". The pool guarded the apply for the cluster's exports; " + infrav1.ApplyJobSucceededCondition +
+				" says what the plan is for and what the pool applies until it is approved"
+		}
+		if plan := bk.madePlans[name]; known && plan != "" {
+			note += fmt.Sprintf(". TerraformPlan %s waits for approval: %s", plan, planApproveCommand(plan, f.job.Namespace))
 		}
 		return transition{corev1.EventTypeWarning, EventDestructivePlanBlocked, note}
 	case c.Reason == infrav1.JobDeadlineExceededReason || c.Reason == infrav1.DriftJobDeadlineExceededReason:

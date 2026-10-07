@@ -100,12 +100,12 @@ func TestApplyDestroyCondition(t *testing.T) {
 		{"destroy failed", finished{job: ptr(job("j", jobs.OpDestroy, jobs.Failed, t0))}, metav1.ConditionFalse, infrav1.DestroyFailedReason},
 	}
 	for _, tt := range tests {
-		c := applyDestroyCondition(tt.f, state.KindTerraformMachine, machine())
+		c := applyDestroyCondition(tt.f, machine())
 		if c.Status != tt.status || c.Reason != tt.reason {
 			t.Errorf("%s: %s/%s, want %s/%s", tt.name, c.Status, c.Reason, tt.status, tt.reason)
 		}
 	}
-	if c := applyDestroyCondition(finished{job: ptr(job("j", jobs.OpApply, jobs.Failed, t0)), result: stepErr}, state.KindTerraformMachine, machine()); !strings.Contains(c.Message, "step apply failed") {
+	if c := applyDestroyCondition(finished{job: ptr(job("j", jobs.OpApply, jobs.Failed, t0)), result: stepErr}, machine()); !strings.Contains(c.Message, "step apply failed") {
 		t.Errorf("message = %q", c.Message)
 	}
 }

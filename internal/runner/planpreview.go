@@ -27,7 +27,8 @@ import (
 )
 
 // MaxPlanResources caps the "<address> (<action>)" entries a plan summary
-// keeps (status.plan.resources); Plan.Truncated says when there were more.
+// keeps (a TerraformPlan's spec.summary.resources); Plan.Truncated says
+// when there were more.
 const MaxPlanResources = 50
 
 // PlanHashPrefix versions the plan fingerprint, as h1:/h2: version the
@@ -146,7 +147,8 @@ func (c planChange) imports() bool {
 	return len(c.Importing) > 0 && string(c.Importing) != "null"
 }
 
-// changeLabels returns what rc does, as status.plan.resources names it:
+// changeLabels returns what rc does, as spec.summary.resources of a
+// TerraformPlan names it:
 // its action (planAction) unless it is a no-op, then "import" when it
 // imports the resource and "move" when a moved block moves it. A resource
 // imported or moved without other change has only that label; nil means rc

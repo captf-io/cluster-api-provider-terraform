@@ -78,9 +78,8 @@ func Inputs(role contract.Role, image string, inputs any) (string, error) {
 	})
 }
 
-// Approval returns the hash a destructive-plan approval
-// (captf.io/approve-destructive-plan) of role's inputs, rendered with
-// image, must name: Inputs of their ApprovalView() when inputs implements
+// Approval returns the hash the TerraformPlan of a destructive plan of
+// role's inputs, rendered with image, is made for: Inputs of their ApprovalView() when inputs implements
 // contract.ApprovalViewer (a pool's inputs without bootstrap_data), else
 // Inputs of inputs itself, so a cluster's approval hash is its inputs
 // hash. It returns the hash, or any error from Inputs.

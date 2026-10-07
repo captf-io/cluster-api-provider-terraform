@@ -30,7 +30,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-api/util/conditions"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/hash"
@@ -39,17 +38,6 @@ import (
 	"github.com/captf-io/cluster-api-provider-terraform/internal/runner"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/state"
 )
-
-// approvalHashOf returns the hash an approval of job, an apply Job, must
-// name: for a pool apply (ClusterOutputsHashAnnotation) its
-// ApprovalHashAnnotation, "" when it was not guarded; for any other its
-// inputs hash.
-func approvalHashOf(job *batchv1.Job) string {
-	if _, pool := job.Annotations[ClusterOutputsHashAnnotation]; pool {
-		return job.Annotations[ApprovalHashAnnotation]
-	}
-	return job.Annotations[state.InputsHashAnnotation]
-}
 
 // recordExports records, using ctx and d, the cluster exports that f, a
 // newly finished successful apply of k, rendered as k's applied exports
@@ -196,68 +184,13 @@ func runnerStarted(pod *corev1.Pod) bool {
 }
 
 // observeGuard reads, after BuildInputs built the inputs, how an
-// ExportsGuard kind guards their apply into r.guard, and, using ctx,
-// removes the approval of a pending change the guard says is withdrawn
-// or superseded (dropWithdrawnApproval). Other kinds leave r.guard nil.
-// It returns any error from removing the approval.
-func (r *reconciler) observeGuard(ctx context.Context) error {
-	eg, ok := r.k.(ExportsGuard)
-	if !ok {
-		return nil
+// ExportsGuard kind guards their apply into r.guard. Other kinds leave
+// r.guard nil.
+func (r *reconciler) observeGuard() {
+	if eg, ok := r.k.(ExportsGuard); ok {
+		g := eg.ExportsGuard()
+		r.guard = &g
 	}
-	g := eg.ExportsGuard()
-	r.guard = &g
-	return r.dropWithdrawnApproval(ctx)
-}
-
-// dropWithdrawnApproval removes, using ctx, the destructive-plan approval
-// once the exports are no longer those of the change recorded as
-// pending, when the approval names that change: its blocked Job's
-// approval hash, or the one the held condition showed for it since
-// (heldApproval). The change is withdrawn when the exports are those of
-// the last successful apply again (Guard.Settled), or superseded when
-// they moved on to another change (rendered, guarded, in place of it).
-// An approval is for one change; left in place it would approve the
-// change again, with no new look, should the exports return to it. A
-// held pass renders the applied exports in place of the pending ones,
-// which are still the current exports: nothing is withdrawn. Neither is
-// anything when the pool renders the pending exports themselves (their
-// approved apply, or their guarded apply after a change was partly
-// applied): that approval must stay until the apply succeeds. The
-// removal is locked to the resourceVersion the object was read at
-// (removeAnnotation), so an approval written since is not lost. It
-// returns any error from removing the annotation.
-func (r *reconciler) dropWithdrawnApproval(ctx context.Context) error {
-	if r.durable == nil || r.durable.Pending == nil || r.guard.Held || r.durable.Pending.ExportsHash == r.guard.ExportsHash {
-		return nil
-	}
-	p, approved := r.durable.Pending, r.annotation(infrav1.ApproveDestructivePlanAnnotation)
-	if approved == "" || (approved != p.ApprovalHash && approved != heldApproval(conditions.Get(r.obj, infrav1.ApplyJobSucceededCondition), p.Job)) {
-		return nil
-	}
-	if err := r.removeAnnotation(ctx, infrav1.ApproveDestructivePlanAnnotation); err != nil {
-		return err
-	}
-	klog.FromContext(ctx).Info("The cluster's exports are no longer those of the change of them that waited for approval; removed its approval",
-		"Job", p.Job, "approvedHash", approved, "settled", r.guard.Settled)
-	return nil
-}
-
-// heldApproval returns the approval hash c, an ApplyJobSucceeded
-// condition, shows for job's held change (heldCondition), or "" when c is
-// not that condition.
-func heldApproval(c *metav1.Condition, job string) string {
-	if c == nil || c.Reason != infrav1.DestructivePlanBlockedReason || !namesJob(c.Message, job) {
-		return ""
-	}
-	_, rest, ok := strings.Cut(c.Message, "To apply it, approve hash ")
-	// A hash carries its scheme ("h2:…"), so the colon that ends it is
-	// the one before the command.
-	h, _, ok2 := strings.Cut(rest, ": ")
-	if !ok || !ok2 {
-		return ""
-	}
-	return h
 }
 
 // pending returns the change of the cluster's exports that waits for
@@ -286,17 +219,13 @@ func (r *reconciler) guardApprovalHash() string {
 
 // guardRequest fills req, an apply of an ExportsGuard kind, from r.guard:
 // the exports hash it renders, whether they are held, and the approval
-// hash that guards it when it renders a change of them. It returns the
-// hash the approval annotation must name to allow a destructive plan, ""
-// when the apply is not guarded.
-func (r *reconciler) guardRequest(req *JobRequest) string {
+// hash that guards it when it renders a change of them.
+func (r *reconciler) guardRequest(req *JobRequest) {
 	g := r.guard
 	req.ExportsHash, req.HeldExports = g.ExportsHash, g.Held
-	if !g.Guarded {
-		return ""
+	if g.Guarded {
+		req.ApprovalHash = g.ApprovalHash
 	}
-	req.ApprovalHash = g.ApprovalHash
-	return g.ApprovalHash
 }
 
 // annotateExports records on job, a pool apply started for req, the
@@ -367,7 +296,7 @@ func (r *reconciler) applyJobCondition(bk *Bookkeeping) metav1.Condition {
 	case r.guard == nil && !own && !newHeldSuccess(bk, prev):
 		return c
 	}
-	return heldCondition(p, approval, r.k.Kind(), r.obj)
+	return heldCondition(p, r.approveHint(approval))
 }
 
 // newHeldSuccess reports whether bk's newest apply is a held apply
@@ -430,7 +359,7 @@ func (r *reconciler) unheldCondition(bk *Bookkeeping) (metav1.Condition, bool) {
 		return *prev, true
 	}
 	why := unheldWhy(g, appliedExportsHash(r.durable))
-	return poolBlockedCondition(last.Name, r.blockedSummary(bk, last.Name), why+unheldWait, g.ApprovalHash, r.k.Kind(), r.obj), true
+	return poolBlockedCondition(last.Name, r.blockedSummary(bk, last.Name), why+unheldWait, r.approveHint(g.ApprovalHash)), true
 }
 
 // unheldWhy returns what the plan of a pool's blocked apply that cannot
@@ -527,7 +456,7 @@ func (r *reconciler) withdrawnCondition(bk *Bookkeeping) (metav1.Condition, bool
 func (r *reconciler) standingCondition(bk *Bookkeeping, msg string) (metav1.Condition, bool) {
 	c := metav1.Condition{Type: infrav1.ApplyJobSucceededCondition, Status: metav1.ConditionTrue, Reason: infrav1.ApplySucceededReason, Message: msg}
 	if p := bk.priorApply; p != nil && !p.ok {
-		c = applyDestroyCondition(*p, r.k.Kind(), r.obj)
+		c = applyDestroyCondition(*p, r.obj)
 	}
 	prev, name := conditions.Get(r.obj, infrav1.ApplyJobSucceededCondition), jobNamed(c.Message)
 	if prev != nil && prev.Status == c.Status && (prev.Message == c.Message || (name != "" && namesJob(prev.Message, name))) {
@@ -625,26 +554,23 @@ func (r *reconciler) blockedSummary(bk *Bookkeeping, name string) string {
 // heldCondition is ApplyJobSucceeded while p, a change of the cluster's
 // exports, waits for approval of its destructive plan: what the plan
 // would delete or replace, that the pool keeps applying with the exports
-// of its last successful apply, and the command that approves approval,
-// the change's approval hash, on obj, a kind. It returns the condition to
-// set.
-func heldCondition(p *inputs.Pending, approval, kind string, obj client.Object) metav1.Condition {
+// of its last successful apply, and hint, how to approve the change's
+// TerraformPlan (approveHint). It returns the condition to set.
+func heldCondition(p *inputs.Pending, hint string) metav1.Condition {
 	return poolBlockedCondition(p.Job, p.Summary, "The plan is for a change of the cluster's exports (captf_cluster_outputs), and nothing of it was applied. "+
-		"Until it is approved, the pool keeps applying with the exports of its last successful apply.", approval, kind, obj)
+		"Until it is approved, the pool keeps applying with the exports of its last successful apply.", hint)
 }
 
 // poolBlockedCondition is ApplyJobSucceeded for job, a pool apply blocked
 // before a destructive plan: summary, what the plan would delete or
-// replace ("" when unknown), why, what the pool does meanwhile, and the
-// command that approves approval on obj, a kind. It returns the condition
-// to set.
-func poolBlockedCondition(job, summary, why, approval, kind string, obj client.Object) metav1.Condition {
+// replace ("" when unknown), why, what the pool does meanwhile, and hint,
+// how to approve its TerraformPlan. It returns the condition to set.
+func poolBlockedCondition(job, summary, why, hint string) metav1.Condition {
 	if summary == "" {
 		summary = "the plan deletes or replaces resources (the Job's log lists them)"
 	}
 	return metav1.Condition{
 		Type: infrav1.ApplyJobSucceededCondition, Status: metav1.ConditionFalse, Reason: infrav1.DestructivePlanBlockedReason,
-		Message: fmt.Sprintf("Job %s: %s. %s To apply it, approve hash %s: kubectl annotate %s %s -n %s %s=%s --overwrite",
-			job, summary, why, approval, strings.ToLower(kind), obj.GetName(), obj.GetNamespace(), infrav1.ApproveDestructivePlanAnnotation, approval),
+		Message: fmt.Sprintf("Job %s: %s. %s To apply it, %s", job, summary, why, hint),
 	}
 }

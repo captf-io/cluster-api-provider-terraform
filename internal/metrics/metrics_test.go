@@ -117,7 +117,6 @@ func TestRecorderSeries(t *testing.T) {
 	r.ImageInspectError("ImageInspectFailed")
 	r.InputsHashChanged("TerraformCluster")
 	r.RemediationRequest(RemediationRequested)
-	r.ApprovalConsumed("TerraformCluster")
 	r.LeaseWait("TerraformMachine", LeaseWaitClusterOperation)
 	r.StateBackup("TerraformCluster", BackupTaken, 1)
 	r.StateRestore("TerraformMachine", ResultSucceeded)
@@ -313,9 +312,8 @@ func TestDeleteObject(t *testing.T) {
 	}
 }
 
-// TestCountersByKindAndAction proves RemediationRequest, ApprovalConsumed
-// and LeaseWait count by their bounded label values and drop any other
-// value.
+// TestCountersByKindAndAction proves RemediationRequest and LeaseWait
+// count by their bounded label values and drop any other value.
 func TestCountersByKindAndAction(t *testing.T) {
 	t.Parallel()
 	reg := cbmetrics.NewKubeRegistry()
@@ -327,15 +325,11 @@ func TestCountersByKindAndAction(t *testing.T) {
 	r.RemediationRequest(RemediationRequested)
 	r.RemediationRequest(RemediationWithdrawn)
 	r.RemediationRequest("bogus") // not a label value
-	r.ApprovalConsumed("TerraformCluster")
 	r.LeaseWait("TerraformCluster", LeaseWaitMachineOperations)
 	r.LeaseWait("TerraformMachine", LeaseWaitRunLease)
 	r.LeaseWait("TerraformMachine", LeaseWaitRunLease)
 	r.LeaseWait("TerraformMachine", "bogus") // not a label value
 	want := `
-# HELP captf_destructive_plan_approvals_consumed_total [ALPHA] Destructive-plan approvals removed after the approved apply succeeded.
-# TYPE captf_destructive_plan_approvals_consumed_total counter
-captf_destructive_plan_approvals_consumed_total{kind="TerraformCluster"} 1
 # HELP captf_lease_waits_total [ALPHA] ` + spec(LeaseWaitsName).Help + `
 # TYPE captf_lease_waits_total counter
 captf_lease_waits_total{kind="TerraformCluster",reason="machine_operations"} 1
@@ -345,7 +339,7 @@ captf_lease_waits_total{kind="TerraformMachine",reason="run_lease"} 2
 captf_remediation_requests_total{action="requested"} 2
 captf_remediation_requests_total{action="withdrawn"} 1
 `
-	if err := testutil.GatherAndCompare(reg, strings.NewReader(want), RemediationRequestsName, ApprovalsConsumedName, LeaseWaitsName); err != nil {
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(want), RemediationRequestsName, LeaseWaitsName); err != nil {
 		t.Error(err)
 	}
 }
@@ -370,7 +364,6 @@ func TestNilRecorder(t *testing.T) {
 	r.ImageInspectError("x")
 	r.InputsHashChanged("k")
 	r.RemediationRequest(RemediationRequested)
-	r.ApprovalConsumed("k")
 	r.LeaseWait("k", LeaseWaitRunLease)
 	r.StateBackup("k", BackupTaken, 1)
 	r.StateRestore("k", ResultFailed)
@@ -400,7 +393,6 @@ func TestUnregisteredRecorder(t *testing.T) {
 	r.ImageInspectError("x")
 	r.InputsHashChanged("k")
 	r.RemediationRequest(RemediationRequested)
-	r.ApprovalConsumed("k")
 	r.LeaseWait("k", LeaseWaitRunLease)
 	r.StateBackup("k", BackupTaken, 1)
 	r.StateRestore("k", ResultFailed)

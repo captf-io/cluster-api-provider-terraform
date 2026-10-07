@@ -140,8 +140,11 @@ func (f *fakeKind) Spec() SpecView {
 }
 
 // Status returns pointers into f.obj's status fields, with PendingPlanRef
-// set to f.planRef.
+// set to f.planRef, which a cluster kind gets when it has none.
 func (f *fakeKind) Status() CommonStatus {
+	if f.asCluster && f.planRef == nil {
+		f.planRef = &infrav1.PlanReference{}
+	}
 	return CommonStatus{WorkspaceStatus: &f.obj.Status.WorkspaceStatus, UnhealthySamples: &f.obj.Status.UnhealthySamples, PendingPlanRef: f.planRef}
 }
 

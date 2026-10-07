@@ -52,13 +52,23 @@ func heldReconciler(t *testing.T, p *inputs.Pending, prev *metav1.Condition) *re
 	return &reconciler{d: e.d, k: k, obj: k.obj, durable: &inputs.Durable{Pending: p}}
 }
 
+// livePlanOf returns a live ExportsChange TerraformPlan name made for the
+// approval hash approval.
+func livePlanOf(name, approval string) infrav1.TerraformPlan {
+	return infrav1.TerraformPlan{
+		ObjectMeta: metav1.ObjectMeta{Namespace: testNS, Name: name},
+		Spec:       infrav1.TerraformPlanSpec{InputsHash: approval, Reason: infrav1.PlanReasonExportsChange},
+	}
+}
+
 // TestApplyJobConditionHeld: while a change of the cluster's exports waits
 // for approval, ApplyJobSucceeded stays DestructivePlanBlocked over a held
 // apply's success, naming the blocked Job, its resources, the held
-// exports and the command with the approval hash of the current inputs
-// when the pass built them; a pass that built none keeps the condition
-// already reported, and holds nothing it did not report (the change may
-// be withdrawn); another failure, or no pending change, shows through.
+// exports and the command that approves the TerraformPlan of the approval
+// hash of the current inputs when the pass built them (or where to find
+// it); a pass that built none keeps the condition already reported, and
+// holds nothing it did not report (the change may be withdrawn); another
+// failure, or no pending change, shows through.
 func TestApplyJobConditionHeld(t *testing.T) {
 	t.Parallel()
 	succeeded := metav1.Condition{Type: infrav1.ApplyJobSucceededCondition, Status: metav1.ConditionTrue, Reason: infrav1.ApplySucceededReason, Message: "Job a3"}
@@ -68,19 +78,24 @@ func TestApplyJobConditionHeld(t *testing.T) {
 		t.Errorf("a pass without inputs held a change it did not report: %+v", c)
 	}
 	r.guard = &Guard{}
+	r.plans = []infrav1.TerraformPlan{livePlanOf("m1-a", "h2:a")}
 	c := r.applyJobCondition(&Bookkeeping{ApplyJob: succeeded})
 	if c.Status != metav1.ConditionFalse || c.Reason != infrav1.DestructivePlanBlockedReason || !namesJob(c.Message, "a2") ||
 		!strings.Contains(c.Message, blockedSummaryText) || !strings.Contains(c.Message, "keeps applying with the exports of its last successful apply") ||
-		!strings.HasSuffix(c.Message, "kubectl annotate terraformmachine m1 -n team-a captf.io/approve-destructive-plan=h2:a --overwrite") {
+		!strings.HasSuffix(c.Message, "To apply it, approve TerraformPlan m1-a: "+planApproveCommand("m1-a", testNS)) {
 		t.Errorf("held condition = %+v", c)
 	}
 
 	r.guard = &Guard{Held: true, ApprovalHash: "h2:b"}
-	if c := r.applyJobCondition(&Bookkeeping{ApplyJob: succeeded}); !strings.HasSuffix(c.Message, "=h2:b --overwrite") {
+	if c := r.applyJobCondition(&Bookkeeping{ApplyJob: succeeded}); !strings.HasSuffix(c.Message, "kubectl get terraformplans -n team-a -l captf.io/plan-phase=Pending)") {
+		t.Errorf("with the current inputs' approval hash, and no plan of it yet: %s", c.Message)
+	}
+	r.plans = []infrav1.TerraformPlan{livePlanOf("m1-b", "h2:b")}
+	if c := r.applyJobCondition(&Bookkeeping{ApplyJob: succeeded}); !strings.HasSuffix(c.Message, planApproveCommand("m1-b", testNS)) {
 		t.Errorf("with the current inputs' approval hash: %s", c.Message)
 	}
 
-	prev := heldCondition(&heldPending, "h2:b", r.k.Kind(), r.obj)
+	prev := heldCondition(&heldPending, r.approveHint("h2:b"))
 	r = heldReconciler(t, &heldPending, &prev)
 	if c := r.applyJobCondition(&Bookkeeping{ApplyJob: succeeded}); c.Message != prev.Message {
 		t.Errorf("a pass without inputs replaced the reported hash: %s", c.Message)
@@ -307,7 +322,7 @@ func TestApplyJobConditionUnheld(t *testing.T) {
 	c := r.applyJobCondition(bk)
 	if c.Status != metav1.ConditionFalse || c.Reason != infrav1.DestructivePlanBlockedReason || !namesJob(c.Message, "a3") ||
 		!strings.Contains(c.Message, blockedSummaryText) || !strings.Contains(c.Message, "Job a1, an earlier apply of a change of them, failed and may have applied part of it") ||
-		strings.Contains(c.Message, "keeps applying") || !strings.HasSuffix(c.Message, "=h2:b --overwrite") {
+		strings.Contains(c.Message, "keeps applying") || !strings.HasSuffix(c.Message, "kubectl get terraformplans -n team-a -l captf.io/plan-phase=Pending)") {
 		t.Errorf("unheld condition = %+v", c)
 	}
 
@@ -327,27 +342,6 @@ func TestApplyJobConditionUnheld(t *testing.T) {
 	r.guard = &Guard{Held: true, ApprovalHash: "h2:c"}
 	if got := r.applyJobCondition(bk); !strings.Contains(got.Message, "keeps applying") {
 		t.Errorf("held condition = %s", got.Message)
-	}
-}
-
-// TestHeldApproval: the approval hash a held condition shows is read back
-// for its Job only.
-func TestHeldApproval(t *testing.T) {
-	t.Parallel()
-	r := heldReconciler(t, &heldPending, nil)
-	held := heldCondition(&heldPending, "h2:b", r.k.Kind(), r.obj)
-	if got := heldApproval(&held, "a2"); got != "h2:b" {
-		t.Errorf("heldApproval = %q, want h2:b", got)
-	}
-	failed := metav1.Condition{Reason: infrav1.ApplyFailedReason, Message: "Job a2"}
-	for name, c := range map[string]*metav1.Condition{"nil": nil, "another Job": &held, "another reason": &failed} {
-		job := "a2"
-		if name == "another Job" {
-			job = "a3"
-		}
-		if got := heldApproval(c, job); got != "" {
-			t.Errorf("%s: heldApproval = %q, want none", name, got)
-		}
 	}
 }
 
@@ -371,7 +365,7 @@ func TestApplyJobConditionWithdrawn(t *testing.T) {
 	r.guard = &Guard{ExportsHash: "h2:e0", Settled: true}
 	c := r.applyJobCondition(bk)
 	if c.Status != metav1.ConditionTrue || c.Reason != infrav1.ApplySucceededReason || !strings.Contains(c.Message, "Job a3 stopped before was withdrawn") ||
-		strings.Contains(c.Message, infrav1.ApproveDestructivePlanAnnotation) || jobNamed(c.Message) != "" {
+		strings.Contains(c.Message, "kubectl") || jobNamed(c.Message) != "" {
 		t.Errorf("withdrawn condition = %+v", c)
 	}
 	if got := heldReconciler(t, &p, &c).applyJobCondition(bk); got.Message != c.Message {

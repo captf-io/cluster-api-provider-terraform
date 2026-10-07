@@ -61,7 +61,7 @@ func clusterBlockedBookkeeping(current string, remediation bool, prior *finished
 		byName: map[string]finished{"b": {job: &b, blocked: true, bookkept: true}},
 		ApplyJob: metav1.Condition{
 			Type: infrav1.ApplyJobSucceededCondition, Status: metav1.ConditionFalse, Reason: infrav1.DestructivePlanBlockedReason,
-			Message: "Job b: x. Nothing was applied, and no apply of these inputs runs until they are approved.",
+			Message: "Job b: x. Nothing was applied, and no apply of these inputs runs until its plan is approved.",
 		},
 	}
 }
@@ -99,7 +99,7 @@ func TestClusterBlockWithdrawn(t *testing.T) {
 		},
 		{
 			name: "the blocked inputs, still due, stay blocked", bk: clusterBlockedBookkeeping("h1:b", false, nil),
-			wantReason: infrav1.DestructivePlanBlockedReason, wantMessage: "until they are approved",
+			wantReason: infrav1.DestructivePlanBlockedReason, wantMessage: "until its plan is approved",
 		},
 		{
 			name: "a pass that built no inputs keeps the block", bk: clusterBlockedBookkeeping("", false, nil),
@@ -148,7 +148,7 @@ func TestClusterBlockWithdrawn(t *testing.T) {
 			if c.Reason != tt.wantReason || !strings.Contains(c.Message, tt.wantMessage) {
 				t.Fatalf("ApplyJobSucceeded = %+v, want %s with %q", c, tt.wantReason, tt.wantMessage)
 			}
-			if c.Reason != infrav1.DestructivePlanBlockedReason && strings.Contains(c.Message, infrav1.ApproveDestructivePlanAnnotation) {
+			if c.Reason != infrav1.DestructivePlanBlockedReason && strings.Contains(c.Message, "kubectl") {
 				t.Errorf("a withdrawn block still names the approve command: %s", c.Message)
 			}
 		})

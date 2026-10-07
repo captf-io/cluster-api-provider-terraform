@@ -129,8 +129,8 @@ type Spec struct {
 	// (internal/runner.Steps).
 	ForceUnlockID string
 	// AllowDeletesHash is the hash approved for a destructive plan (the
-	// object's captf.io/approve-destructive-plan annotation); only a
-	// guarded apply passes it on (guardsDeletes).
+	// approval hash of a pool's approved ExportsChange TerraformPlan); only
+	// a guarded apply passes it on (guardsDeletes).
 	AllowDeletesHash string
 	// ApprovalHash, when set, guards a TerraformMachinePool apply that
 	// renders a change of the cluster's exports: the runner then stops
@@ -138,9 +138,9 @@ type Spec struct {
 	// (the inputs hash without bootstrap_data), passed as its
 	// --inputs-hash. "" for every other Job.
 	ApprovalHash string
-	// ExpectPlan is the approved plan hash (a TerraformCluster's
-	// captf.io/approve-plan annotation) an apply under applyPolicy Manual
-	// must plan again before it applies; only a cluster apply passes it on.
+	// ExpectPlan is the plan hash of a TerraformCluster's approved
+	// TerraformPlan (Manual or Destructive) the apply must plan again
+	// before it applies; only a cluster apply passes it on.
 	ExpectPlan string
 
 	// Restore is the backup a restore Job pushes; nil for other ops.
@@ -251,7 +251,7 @@ func Build(s Spec, runnerImage string) (*batchv1.Job, []string) {
 	// adopt the state with that hash once the Job succeeded.
 	// A restore Job records the backup's serial and the inputs hash the
 	// backup was taken with, which the controller adopts after it. A plan
-	// Job records the inputs hash it planned, which status.plan names.
+	// Job records the inputs hash it planned, which its TerraformPlan names.
 	var annotations map[string]string
 	if (s.Op == OpApply || s.Op == OpRestore || s.Op == OpPlan) && s.InputsHash != "" {
 		annotations = map[string]string{state.InputsHashAnnotation: s.InputsHash}

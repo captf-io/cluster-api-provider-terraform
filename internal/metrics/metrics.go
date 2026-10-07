@@ -57,7 +57,6 @@ const (
 	ImageInspectName        = "captf_image_inspect_errors_total"
 	HashChangesName         = "captf_inputs_hash_changes_total"
 	RemediationRequestsName = "captf_remediation_requests_total"
-	ApprovalsConsumedName   = "captf_destructive_plan_approvals_consumed_total"
 	LeaseWaitsName          = "captf_lease_waits_total"
 	StateBackupsName        = "captf_state_backups_total"
 	StateRestoresName       = "captf_state_restores_total"
@@ -196,7 +195,6 @@ func Specs() []Spec {
 		{ImageInspectName, "counter", []string{"reason"}, "Registry or image-label failures while resolving template capacity."},
 		{HashChangesName, "counter", []string{"kind"}, "Applies started because the inputs of a mutable kind changed."},
 		{RemediationRequestsName, "counter", []string{"action"}, "cluster.x-k8s.io/remediate-machine annotations set on (requested) or removed from (withdrawn) a Machine."},
-		{ApprovalsConsumedName, "counter", []string{"kind"}, "Destructive-plan approvals removed after the approved apply succeeded."},
 		{LeaseWaitsName, "counter", []string{"kind", "reason"}, "Operations that started waiting for a run lease, once per wait: run_lease (another live Job of the object holds it), cluster_operation (a machine's apply or destroy waits for its TerraformCluster's) or machine_operations (a TerraformCluster's apply or destroy waits for its machines')."},
 		{StateBackupsName, "counter", []string{"kind", "result"}, "State backups: taken (a new state serial copied into captf-state-backup-* Secrets), pruned (a backup beyond --state-backups deleted) or skipped (a new serial not backed up: encrypted, unreadable or oversized state, or a failed copy)."},
 		{StateRestoresName, "counter", []string{"kind", "result"}, "State restores requested with captf.io/restore-state: succeeded or failed (a restore Job finished), or not_found (the annotation names no backup)."},
@@ -260,36 +258,35 @@ var ErrAlreadyRegistered = errors.New("metrics: recorder already registered")
 
 // Recorder holds the series the reconcilers update.
 type Recorder struct {
-	jobsTotal         *cbmetrics.CounterVec
-	jobDuration       *cbmetrics.HistogramVec
-	stepDuration      *cbmetrics.HistogramVec
-	queue             *cbmetrics.HistogramVec
-	jobErrors         *cbmetrics.CounterVec
-	jobAttempts       *cbmetrics.HistogramVec
-	resourcesChanged  *cbmetrics.CounterVec
-	driftResources    *cbmetrics.CounterVec
-	decisions         *cbmetrics.CounterVec
-	stateReadErrors   *cbmetrics.CounterVec
-	outputsInvalid    *cbmetrics.CounterVec
-	driftDetected     *cbmetrics.GaugeVec
-	ready             *cbmetrics.GaugeVec
-	infraHealthy      *cbmetrics.GaugeVec
-	stateResources    *cbmetrics.GaugeVec
-	stateBytes        *cbmetrics.GaugeVec
-	inputsBytes       *cbmetrics.GaugeVec
-	lastSuccess       *cbmetrics.GaugeVec
-	unhealthySamples  *cbmetrics.GaugeVec
-	forceUnlocks      *cbmetrics.CounterVec
-	identityDenied    *cbmetrics.CounterVec
-	imageInspect      *cbmetrics.CounterVec
-	hashChanges       *cbmetrics.CounterVec
-	remediations      *cbmetrics.CounterVec
-	approvalsConsumed *cbmetrics.CounterVec
-	leaseWaits        *cbmetrics.CounterVec
-	stateBackups      *cbmetrics.CounterVec
-	stateRestores     *cbmetrics.CounterVec
-	planApprovals     *cbmetrics.CounterVec
-	active            *ActiveJobs
+	jobsTotal        *cbmetrics.CounterVec
+	jobDuration      *cbmetrics.HistogramVec
+	stepDuration     *cbmetrics.HistogramVec
+	queue            *cbmetrics.HistogramVec
+	jobErrors        *cbmetrics.CounterVec
+	jobAttempts      *cbmetrics.HistogramVec
+	resourcesChanged *cbmetrics.CounterVec
+	driftResources   *cbmetrics.CounterVec
+	decisions        *cbmetrics.CounterVec
+	stateReadErrors  *cbmetrics.CounterVec
+	outputsInvalid   *cbmetrics.CounterVec
+	driftDetected    *cbmetrics.GaugeVec
+	ready            *cbmetrics.GaugeVec
+	infraHealthy     *cbmetrics.GaugeVec
+	stateResources   *cbmetrics.GaugeVec
+	stateBytes       *cbmetrics.GaugeVec
+	inputsBytes      *cbmetrics.GaugeVec
+	lastSuccess      *cbmetrics.GaugeVec
+	unhealthySamples *cbmetrics.GaugeVec
+	forceUnlocks     *cbmetrics.CounterVec
+	identityDenied   *cbmetrics.CounterVec
+	imageInspect     *cbmetrics.CounterVec
+	hashChanges      *cbmetrics.CounterVec
+	remediations     *cbmetrics.CounterVec
+	leaseWaits       *cbmetrics.CounterVec
+	stateBackups     *cbmetrics.CounterVec
+	stateRestores    *cbmetrics.CounterVec
+	planApprovals    *cbmetrics.CounterVec
+	active           *ActiveJobs
 	// registered guards against a second Register: r.active, a component-
 	// base StableCollector, panics if Create runs on it twice.
 	registered bool
@@ -304,33 +301,32 @@ func New() *Recorder {
 		// 1s … 2h: a validate takes a second, an apply up to the deadline.
 		stepDuration: histogram(JobStepDurationName, cbmetrics.ExponentialBucketsRange(1, 7200, 12)),
 		// 300 s, the CAPTFJobQueueSlow threshold, is a boundary.
-		queue:             histogram(JobQueueName, []float64{5, 10, 20, 30, 60, 120, 180, 300, 600, 900, 1800}),
-		jobErrors:         counter(JobErrorsName),
-		jobAttempts:       histogram(JobAttemptsName, cbmetrics.LinearBuckets(1, 1, 10)),
-		resourcesChanged:  counter(ResourcesChangedName),
-		driftResources:    counter(DriftResourcesName),
-		decisions:         counter(DecisionsName),
-		stateReadErrors:   counter(StateReadErrorsName),
-		outputsInvalid:    counter(OutputsInvalidName),
-		driftDetected:     gauge(DriftDetectedName),
-		ready:             gauge(ReadyName),
-		infraHealthy:      gauge(InfraHealthyName),
-		stateResources:    gauge(StateResourcesName),
-		stateBytes:        gauge(StateBytesName),
-		inputsBytes:       gauge(InputsBytesName),
-		lastSuccess:       gauge(LastSuccessName),
-		unhealthySamples:  gauge(UnhealthySamplesName),
-		forceUnlocks:      counter(ForceUnlocksName),
-		identityDenied:    counter(IdentityDeniedName),
-		imageInspect:      counter(ImageInspectName),
-		hashChanges:       counter(HashChangesName),
-		remediations:      counter(RemediationRequestsName),
-		approvalsConsumed: counter(ApprovalsConsumedName),
-		leaseWaits:        counter(LeaseWaitsName),
-		stateBackups:      counter(StateBackupsName),
-		stateRestores:     counter(StateRestoresName),
-		planApprovals:     counter(PlanApprovalsName),
-		active:            &ActiveJobs{desc: activeDesc()},
+		queue:            histogram(JobQueueName, []float64{5, 10, 20, 30, 60, 120, 180, 300, 600, 900, 1800}),
+		jobErrors:        counter(JobErrorsName),
+		jobAttempts:      histogram(JobAttemptsName, cbmetrics.LinearBuckets(1, 1, 10)),
+		resourcesChanged: counter(ResourcesChangedName),
+		driftResources:   counter(DriftResourcesName),
+		decisions:        counter(DecisionsName),
+		stateReadErrors:  counter(StateReadErrorsName),
+		outputsInvalid:   counter(OutputsInvalidName),
+		driftDetected:    gauge(DriftDetectedName),
+		ready:            gauge(ReadyName),
+		infraHealthy:     gauge(InfraHealthyName),
+		stateResources:   gauge(StateResourcesName),
+		stateBytes:       gauge(StateBytesName),
+		inputsBytes:      gauge(InputsBytesName),
+		lastSuccess:      gauge(LastSuccessName),
+		unhealthySamples: gauge(UnhealthySamplesName),
+		forceUnlocks:     counter(ForceUnlocksName),
+		identityDenied:   counter(IdentityDeniedName),
+		imageInspect:     counter(ImageInspectName),
+		hashChanges:      counter(HashChangesName),
+		remediations:     counter(RemediationRequestsName),
+		leaseWaits:       counter(LeaseWaitsName),
+		stateBackups:     counter(StateBackupsName),
+		stateRestores:    counter(StateRestoresName),
+		planApprovals:    counter(PlanApprovalsName),
+		active:           &ActiveJobs{desc: activeDesc()},
 	}
 }
 
@@ -349,7 +345,7 @@ func (r *Recorder) Register(reg cbmetrics.KubeRegistry) error {
 		r.resourcesChanged, r.driftResources, r.decisions, r.stateReadErrors, r.outputsInvalid,
 		r.driftDetected, r.ready, r.infraHealthy, r.stateResources, r.stateBytes, r.inputsBytes,
 		r.lastSuccess, r.unhealthySamples, r.forceUnlocks, r.identityDenied, r.imageInspect,
-		r.hashChanges, r.remediations, r.approvalsConsumed, r.leaseWaits, r.stateBackups, r.stateRestores, r.planApprovals,
+		r.hashChanges, r.remediations, r.leaseWaits, r.stateBackups, r.stateRestores, r.planApprovals,
 	} {
 		if err := reg.Register(c); err != nil {
 			return fmt.Errorf("metrics: register: %w", err)
@@ -606,14 +602,6 @@ func (r *Recorder) InputsHashChanged(kind string) {
 func (r *Recorder) RemediationRequest(action string) {
 	if r != nil && slices.Contains([]string{RemediationRequested, RemediationWithdrawn}, action) {
 		r.remediations.WithLabelValues(action).Inc()
-	}
-}
-
-// ApprovalConsumed records a destructive-plan approval of an object of kind
-// removed after its apply succeeded.
-func (r *Recorder) ApprovalConsumed(kind string) {
-	if r != nil {
-		r.approvalsConsumed.WithLabelValues(kind).Inc()
 	}
 }
 

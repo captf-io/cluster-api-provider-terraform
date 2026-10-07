@@ -34,6 +34,18 @@ import (
 // t0 is the fixed instant every test in this package treats as "now".
 var t0 = time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
 
+// destructivePlan returns the live Destructive plan "d" of inputs, approved
+// when ok.
+func destructivePlan(inputs string, ok bool) *PlanView {
+	return &PlanView{Name: "d", Reason: infrav1.PlanReasonDestructive, InputsHash: inputs, PlanHash: "p2:d", Approved: ok}
+}
+
+// exportsPlan returns the live ExportsChange plan "x" of the approval hash
+// approval, approved when ok.
+func exportsPlan(approval string, ok bool) *PlanView {
+	return &PlanView{Name: "x", Reason: infrav1.PlanReasonExportsChange, InputsHash: approval, PlanHash: "p2:x", Approved: ok}
+}
+
 // at returns a pointer to t0 plus d.
 func at(d time.Duration) *time.Time {
 	t := t0.Add(d)
@@ -166,55 +178,68 @@ func TestDecideOp(t *testing.T) {
 				FailedLimit: 3, RemediationFailures: 3, Failures: map[jobs.Op]int{jobs.OpApply: 3}, LastFailure: map[jobs.Op]time.Time{jobs.OpApply: t0.Add(-time.Minute)}}},
 			Decision{RequeueAfter: 20 * time.Minute, Reason: "UpToDate"}},
 		// A blocked destructive plan: an apply the runner stopped before a
-		// plan that deletes or replaces resources.
-		{"a blocked input change waits for approval, not in a loop", DecideInput{Mutable: true, Now: t0,
+		// plan that deletes or replaces resources, which waits for approval
+		// as a TerraformPlan.
+		{"a blocked input change waits for its plan's approval, not in a loop", DecideInput{Mutable: true, Now: t0, Plan: destructivePlan("h1:b", false),
 			State: StateView{Exists: true, InputsHash: "h1:a", CurrentHash: "h1:b"}, Jobs: JobsView{BlockedHash: "h1:b"}},
-			Decision{RequeueAfter: RetryMax, Reason: ReasonDestructivePlanBlocked}},
-		{"an approval of another hash does not unblock", DecideInput{Mutable: true, Now: t0, ApprovedHash: "h1:a",
+			Decision{RequeueAfter: RetryMax, Reason: ReasonDestructivePlanBlocked, Plan: "d"}},
+		{"the plan waits with no blocked Job left (after a move)", DecideInput{Mutable: true, Now: t0, Plan: destructivePlan("h1:b", false),
+			State: StateView{Exists: true, InputsHash: "h1:a", CurrentHash: "h1:b"}},
+			Decision{RequeueAfter: RetryMax, Reason: ReasonDestructivePlanBlocked, Plan: "d"}},
+		{"the approved plan applies, expecting exactly it", DecideInput{Mutable: true, Now: t0, Plan: destructivePlan("h1:b", true),
 			State: StateView{Exists: true, InputsHash: "h1:a", CurrentHash: "h1:b"}, Jobs: JobsView{BlockedHash: "h1:b"}},
-			Decision{RequeueAfter: RetryMax, Reason: ReasonDestructivePlanBlocked}},
-		{"the matching approval applies", DecideInput{Mutable: true, Now: t0, ApprovedHash: "h1:b",
-			State: StateView{Exists: true, InputsHash: "h1:a", CurrentHash: "h1:b"}, Jobs: JobsView{BlockedHash: "h1:b"}},
-			Decision{Action: ActionJob, Op: jobs.OpApply, Reason: "InputsChanged"}},
-		{"new inputs after a block apply (guarded again by the runner)", DecideInput{Mutable: true, Now: t0, ApprovedHash: "h1:b",
+			Decision{Action: ActionJob, Op: jobs.OpApply, Reason: "InputsChanged", ExpectPlan: "p2:d", Plan: "d"}},
+		{"new inputs after a block apply (guarded again by the runner)", DecideInput{Mutable: true, Now: t0, Plan: destructivePlan("h1:b", true),
 			State: StateView{Exists: true, InputsHash: "h1:a", CurrentHash: "h1:c"}, Jobs: JobsView{BlockedHash: "h1:b"}},
 			Decision{Action: ActionJob, Op: jobs.OpApply, Reason: "InputsChanged"}},
-		{"a blocked remediation waits", DecideInput{Mutable: true, Now: t0, Remediate: true,
+		{"a blocked apply that left no plan runs again RetryMax after the block", DecideInput{Mutable: true, Now: t0,
+			State: StateView{Exists: true, InputsHash: "h1:a", CurrentHash: "h1:b"}, Jobs: JobsView{BlockedHash: "h1:b", BlockedAt: t0.Add(-4 * time.Minute)}},
+			Decision{RequeueAfter: RetryMax - 4*time.Minute, Reason: ReasonDestructivePlanBlocked}},
+		{"and then runs", DecideInput{Mutable: true, Now: t0,
+			State: StateView{Exists: true, InputsHash: "h1:a", CurrentHash: "h1:b"}, Jobs: JobsView{BlockedHash: "h1:b", BlockedAt: t0.Add(-RetryMax)}},
+			Decision{Action: ActionJob, Op: jobs.OpApply, Reason: "InputsChanged"}},
+		{"a blocked remediation waits", DecideInput{Mutable: true, Now: t0, Remediate: true, Plan: destructivePlan("h1:a", false),
 			State: StateView{Exists: true, InputsHash: "h1:a", CurrentHash: "h1:a"}, Jobs: JobsView{FailedLimit: 3, BlockedHash: "h1:a"}},
-			Decision{RequeueAfter: RetryMax, Reason: ReasonDestructivePlanBlocked}},
-		{"an approved remediation applies", DecideInput{Mutable: true, Now: t0, Remediate: true, ApprovedHash: "h1:a",
+			Decision{RequeueAfter: RetryMax, Reason: ReasonDestructivePlanBlocked, Plan: "d"}},
+		{"an approved remediation applies", DecideInput{Mutable: true, Now: t0, Remediate: true, Plan: destructivePlan("h1:a", true),
 			State: StateView{Exists: true, InputsHash: "h1:a", CurrentHash: "h1:a"}, Jobs: JobsView{FailedLimit: 3, BlockedHash: "h1:a"}},
-			Decision{Action: ActionJob, Op: jobs.OpApply, Reason: "DriftRemediation"}},
+			Decision{Action: ActionJob, Op: jobs.OpApply, Reason: "DriftRemediation", ExpectPlan: "p2:d", Plan: "d"}},
 		{"a blocked remediation keeps the drift schedule", DecideInput{Mutable: true, Now: t0, Remediate: true, DriftInterval: 30 * time.Minute, LastDriftCheck: at(-31 * time.Minute),
-			State: StateView{Exists: true, InputsHash: "h1:a", CurrentHash: "h1:a"}, Jobs: JobsView{FailedLimit: 3, BlockedHash: "h1:a"}},
-			Decision{Action: ActionJob, Op: jobs.OpDrift, Reason: "DriftDue"}},
+			Plan: destructivePlan("h1:a", false), State: StateView{Exists: true, InputsHash: "h1:a", CurrentHash: "h1:a"}, Jobs: JobsView{FailedLimit: 3, BlockedHash: "h1:a"}},
+			Decision{Action: ActionJob, Op: jobs.OpDrift, Reason: "DriftDue", Plan: "d"}},
 		{"a blocked remediation requeues at a sooner check", DecideInput{Mutable: true, Now: t0, Remediate: true, DriftInterval: 30 * time.Minute, LastDriftCheck: at(-25 * time.Minute),
-			State: StateView{Exists: true, InputsHash: "h1:a", CurrentHash: "h1:a"}, Jobs: JobsView{FailedLimit: 3, BlockedHash: "h1:a"}},
-			Decision{RequeueAfter: 5 * time.Minute, Reason: ReasonDestructivePlanBlocked}},
+			Plan: destructivePlan("h1:a", false), State: StateView{Exists: true, InputsHash: "h1:a", CurrentHash: "h1:a"}, Jobs: JobsView{FailedLimit: 3, BlockedHash: "h1:a"}},
+			Decision{RequeueAfter: 5 * time.Minute, Reason: ReasonDestructivePlanBlocked, Plan: "d"}},
 		{"a blocked input change pauses a due drift check", DecideInput{Mutable: true, Now: t0, DriftInterval: 30 * time.Minute, LastDriftCheck: at(-31 * time.Minute),
+			Plan: destructivePlan("h1:b", false), State: StateView{Exists: true, InputsHash: "h1:a", CurrentHash: "h1:b"}, Jobs: JobsView{BlockedHash: "h1:b"}},
+			Decision{RequeueAfter: RetryMax, Reason: ReasonDestructivePlanBlocked, Plan: "d"}},
+		{"a pool's plan is made for its approval hash, not the inputs hash", DecideInput{Mutable: true, Now: t0, ApprovalHash: "h2:approval", Plan: exportsPlan("h2:approval", false),
 			State: StateView{Exists: true, InputsHash: "h1:a", CurrentHash: "h1:b"}, Jobs: JobsView{BlockedHash: "h1:b"}},
-			Decision{RequeueAfter: RetryMax, Reason: ReasonDestructivePlanBlocked}},
-		{"a pool's approval names its approval hash, not the inputs hash", DecideInput{Mutable: true, Now: t0, ApprovedHash: "h2:approval", ApprovalHash: "h2:approval",
+			Decision{RequeueAfter: RetryMax, Reason: ReasonDestructivePlanBlocked, Plan: "x"}},
+		{"a pool's approved change allows its deletes under the approval hash", DecideInput{Mutable: true, Now: t0, ApprovalHash: "h2:approval", Plan: exportsPlan("h2:approval", true),
 			State: StateView{Exists: true, InputsHash: "h1:a", CurrentHash: "h1:b"}, Jobs: JobsView{BlockedHash: "h1:b"}},
+			Decision{Action: ActionJob, Op: jobs.OpApply, Reason: "InputsChanged", AllowDeletes: "h2:approval", Plan: "x"}},
+		{"a held pool applies past the pending plan", DecideInput{Mutable: true, Now: t0, Plan: exportsPlan("h2:approval", false),
+			State: StateView{Exists: true, InputsHash: "h1:a", CurrentHash: "h1:held"}, Jobs: JobsView{BlockedHash: "h1:b", BlockedApproval: "h2:approval"}},
 			Decision{Action: ActionJob, Op: jobs.OpApply, Reason: "InputsChanged"}},
-		{"a pool's inputs hash does not approve it", DecideInput{Mutable: true, Now: t0, ApprovedHash: "h1:b", ApprovalHash: "h2:approval",
-			State: StateView{Exists: true, InputsHash: "h1:a", CurrentHash: "h1:b"}, Jobs: JobsView{BlockedHash: "h1:b"}},
-			Decision{RequeueAfter: RetryMax, Reason: ReasonDestructivePlanBlocked}},
 		{"a pool that cannot hold waits on its approval hash across a rotation", DecideInput{Mutable: true, Now: t0, ApprovalHash: "h2:approval", Unheld: true,
-			State: StateView{Exists: true, InputsHash: "h1:a", CurrentHash: "h1:rotated"}, Jobs: JobsView{BlockedHash: "h1:b", BlockedApproval: "h2:approval"}},
-			Decision{RequeueAfter: RetryMax, Reason: ReasonDestructivePlanBlocked}},
+			Plan: exportsPlan("h2:approval", false), State: StateView{Exists: true, InputsHash: "h1:a", CurrentHash: "h1:rotated"},
+			Jobs: JobsView{BlockedHash: "h1:b", BlockedApproval: "h2:approval"}},
+			Decision{RequeueAfter: RetryMax, Reason: ReasonDestructivePlanBlocked, Plan: "x"}},
 		{"a pool's new approval hash applies, guarded again", DecideInput{Mutable: true, Now: t0, ApprovalHash: "h2:rolled", Unheld: true,
-			State: StateView{Exists: true, InputsHash: "h1:a", CurrentHash: "h1:c"}, Jobs: JobsView{BlockedHash: "h1:b", BlockedApproval: "h2:approval"}},
+			Plan: exportsPlan("h2:approval", false), State: StateView{Exists: true, InputsHash: "h1:a", CurrentHash: "h1:c"},
+			Jobs: JobsView{BlockedHash: "h1:b", BlockedApproval: "h2:approval"}},
 			Decision{Action: ActionJob, Op: jobs.OpApply, Reason: "InputsChanged"}},
-		{"a pool's approval of the blocked approval hash applies", DecideInput{Mutable: true, Now: t0, ApprovedHash: "h2:approval", ApprovalHash: "h2:approval", Unheld: true,
-			State: StateView{Exists: true, InputsHash: "h1:a", CurrentHash: "h1:rotated"}, Jobs: JobsView{BlockedHash: "h1:b", BlockedApproval: "h2:approval"}},
-			Decision{Action: ActionJob, Op: jobs.OpApply, Reason: "InputsChanged"}},
+		{"a pool's approved plan applies across a rotation", DecideInput{Mutable: true, Now: t0, ApprovalHash: "h2:approval", Unheld: true,
+			Plan: exportsPlan("h2:approval", true), State: StateView{Exists: true, InputsHash: "h1:a", CurrentHash: "h1:rotated"},
+			Jobs: JobsView{BlockedHash: "h1:b", BlockedApproval: "h2:approval"}},
+			Decision{Action: ActionJob, Op: jobs.OpApply, Reason: "InputsChanged", AllowDeletes: "h2:approval", Plan: "x"}},
 		{"a pool that can hold re-runs a blocked change after a rotation, to hold it again", DecideInput{Mutable: true, Now: t0, ApprovalHash: "h2:approval",
 			State: StateView{Exists: true, InputsHash: "h1:a", CurrentHash: "h1:rotated"}, Jobs: JobsView{BlockedHash: "h1:b", BlockedApproval: "h2:approval"}},
 			Decision{Action: ActionJob, Op: jobs.OpApply, Reason: "InputsChanged"}},
-		{"a blocked apply without state checks nothing", DecideInput{Mutable: true, Now: t0, DriftInterval: 30 * time.Minute,
+		{"a blocked apply without state checks nothing", DecideInput{Mutable: true, Now: t0, DriftInterval: 30 * time.Minute, Plan: destructivePlan("h1:b", false),
 			State: StateView{CurrentHash: "h1:b"}, Jobs: JobsView{BlockedHash: "h1:b"}},
-			Decision{RequeueAfter: RetryMax, Reason: ReasonDestructivePlanBlocked}},
+			Decision{RequeueAfter: RetryMax, Reason: ReasonDestructivePlanBlocked, Plan: "d"}},
 		// Priority: destroy > apply > refresh > drift.
 		{"destroy wins over a pending refresh", DecideInput{Deleting: true, State: StateView{Exists: true, InputsHash: "h1:a", Pending: true}, Now: t0},
 			Decision{Action: ActionJob, Op: jobs.OpDestroy, Reason: "Deleting"}},

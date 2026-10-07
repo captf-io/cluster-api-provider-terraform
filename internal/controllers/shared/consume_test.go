@@ -30,17 +30,9 @@ import (
 	"github.com/captf-io/cluster-api-provider-terraform/internal/state"
 )
 
-// approving returns a machine-mutator that approves the destructive plan
-// of inputs hash h.
-func approving(h string) func(*infrav1.TerraformMachine) {
-	return func(m *infrav1.TerraformMachine) {
-		m.Annotations = map[string]string{infrav1.ApproveDestructivePlanAnnotation: h}
-	}
-}
-
-// userApproves writes the approval h onto the stored machine through c
-// using ctx, as a user would, failing t on error.
-func userApproves(ctx context.Context, t *testing.T, c client.Client, h string) {
+// userRequests writes the restore request n onto the stored machine
+// through c using ctx, as a user would, failing t on error.
+func userRequests(ctx context.Context, t *testing.T, c client.Client, n string) {
 	t.Helper()
 	m := &infrav1.TerraformMachine{}
 	if err := c.Get(ctx, client.ObjectKey{Namespace: testNS, Name: testName}, m); err != nil {
@@ -49,15 +41,15 @@ func userApproves(ctx context.Context, t *testing.T, c client.Client, h string) 
 	if m.Annotations == nil {
 		m.Annotations = map[string]string{}
 	}
-	m.Annotations[infrav1.ApproveDestructivePlanAnnotation] = h
+	m.Annotations[infrav1.RestoreStateAnnotation] = n
 	if err := c.Update(ctx, m); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// TestConsumedAnnotationKeepsNewValue: removing a consumed approval never
-// deletes a value the user wrote since. Written before the removal, it
-// conflicts: the reconcile requeues shortly, the finished Job stays
+// TestConsumedAnnotationKeepsNewValue: removing a consumed restore request
+// never deletes a value the user wrote since. Written before the removal,
+// it conflicts: the reconcile requeues shortly, the finished Job stays
 // unmarked, and the new value stays. Written after the removal, the
 // deferred status patch does not remove it again.
 func TestConsumedAnnotationKeepsNewValue(t *testing.T) {
@@ -69,40 +61,39 @@ func TestConsumedAnnotationKeepsNewValue(t *testing.T) {
 				return c.Patch(ctx, obj, p, opts...)
 			}
 			if before {
-				userApproves(ctx, t, c, "h1:new")
+				userRequests(ctx, t, c, "7")
 				return c.Patch(ctx, obj, p, opts...)
 			}
 			if err := c.Patch(ctx, obj, p, opts...); err != nil {
 				return err
 			}
-			userApproves(ctx, t, c, "h1:new")
+			userRequests(ctx, t, c, "7")
 			return nil
 		}}
-		applied := job("a", jobs.OpApply, jobs.Succeeded, t0)
-		applied.Annotations = map[string]string{state.InputsHashAnnotation: "h1:x"}
-		e := newEnvWith(t, funcs, world(machine(withFinalizer, notPaused, approving("h1:x")), applied.DeepCopy())...)
-		e.runner.jobs = append(e.runner.jobs, applied)
-		e.state.st = &state.State{Serial: 1, InputsHash: "h1:x"}
+		restored := job("r", jobs.OpRestore, jobs.Succeeded, t0)
+		restored.Annotations = map[string]string{jobs.RestoreSerialAnnotation: "5"}
+		e := newEnvWith(t, funcs, world(machine(withFinalizer, notPaused, restoring("5")), restored.DeepCopy())...)
+		e.runner.jobs = append(e.runner.jobs, restored)
+		e.state.st = &state.State{Serial: 5, InputsHash: "h1:x"}
 		k := e.kindFor(t, readyOwner)
 		k.in = machineIn()
 		res, err := Reconcile(t.Context(), e.d, k)
 		if err != nil {
 			t.Fatalf("before %v: %v", before, err)
 		}
-		if got := e.get(t).Annotations[infrav1.ApproveDestructivePlanAnnotation]; got != "h1:new" {
-			t.Errorf("before %v: approval = %q, want the user's h1:new", before, got)
+		if got := e.get(t).Annotations[infrav1.RestoreStateAnnotation]; got != "7" {
+			t.Errorf("before %v: restore request = %q, want the user's 7", before, got)
 		}
 		stored := &batchv1.Job{}
-		if err := e.c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "a"}, stored); err != nil {
+		if err := e.c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "r"}, stored); err != nil {
 			t.Fatal(err)
 		}
 		marked := stored.Annotations[BookkeptAnnotation] == "true"
-		consumed := e.rec.count(EventDestructivePlanApprovalConsumed)
-		if before && (res.RequeueAfter != LagRequeue || marked || consumed != 0) {
-			t.Errorf("conflict: requeue %s, Job marked %v, consumed events %d", res.RequeueAfter, marked, consumed)
+		if before && (res.RequeueAfter != LagRequeue || marked) {
+			t.Errorf("conflict: requeue %s, Job marked %v", res.RequeueAfter, marked)
 		}
-		if !before && (!marked || consumed != 1) {
-			t.Errorf("removed: Job marked %v, consumed events %d", marked, consumed)
+		if !before && !marked {
+			t.Errorf("removed: Job marked %v", marked)
 		}
 	}
 }

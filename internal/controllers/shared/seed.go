@@ -41,8 +41,7 @@ import (
 // (seedExports), records them and builds again, so this pass's guard
 // reads them. bk is this pass's bookkeeping; view is the state as read
 // this pass, whose CurrentHash it sets. It returns the built inputs, the
-// gate (nil when none), and any error from building, hashing, seeding or
-// removing an approval.
+// gate (nil when none), and any error from building, hashing or seeding.
 func (r *reconciler) buildInputs(ctx context.Context, bk *Bookkeeping, view *StateView) (any, *Gate, error) {
 	in, gate, err := r.build(ctx, view)
 	if err != nil || gate != nil {
@@ -56,12 +55,16 @@ func (r *reconciler) buildInputs(ctx context.Context, bk *Bookkeeping, view *Sta
 }
 
 // build builds the kind's inputs using ctx from the owners and the
-// durable Secret, sets DependenciesReady from the gate, and, without a
-// gate, reads how the kind guards them (observeGuard) and sets view's
-// CurrentHash, and the pass's bookkeeping's, for a mutable kind. It
-// returns the built inputs, the gate (nil when none), and any error from
-// building, removing an approval or hashing.
+// durable Secret, an ExportsGuard kind's with the change of the cluster's
+// exports its approved TerraformPlan approves (approvedExports), sets
+// DependenciesReady from the gate, and, without a gate, reads how the kind
+// guards them (observeGuard) and sets view's CurrentHash, and the pass's
+// bookkeeping's, for a mutable kind. It returns the built inputs, the gate
+// (nil when none), and any error from building or hashing.
 func (r *reconciler) build(ctx context.Context, view *StateView) (any, *Gate, error) {
+	if eg, ok := r.k.(ExportsGuard); ok {
+		eg.ApproveExports(r.approvedExports())
+	}
 	in, gate, err := r.k.BuildInputs(ctx, r.owner, r.durable)
 	if err != nil {
 		return nil, nil, err
@@ -71,9 +74,7 @@ func (r *reconciler) build(ctx context.Context, view *StateView) (any, *Gate, er
 		return in, gate, nil
 	}
 	captfconds.SetDependenciesReady(r.obj, metav1.ConditionTrue, infrav1.DependenciesReadyReason, "")
-	if err := r.observeGuard(ctx); err != nil {
-		return nil, nil, err
-	}
+	r.observeGuard()
 	if r.k.Mutable() {
 		if view.CurrentHash, err = r.inputsHash(in); err != nil {
 			return nil, nil, err

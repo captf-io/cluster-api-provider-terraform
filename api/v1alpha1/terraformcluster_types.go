@@ -22,28 +22,6 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 )
 
-// ApproveDestructivePlanAnnotation approves one destructive apply of a
-// TerraformCluster, or of a TerraformMachinePool's change of the cluster's
-// exports. On a TerraformCluster its value is an inputs hash: an apply (or
-// drift remediation) whose plan deletes or replaces resources runs only
-// when this annotation names the hash of the inputs it renders. On a
-// TerraformMachinePool only an apply that renders a change of the
-// cluster's exports (captf_cluster_outputs) is guarded, and its value is
-// the approval hash: the hash of those inputs without bootstrap_data, so
-// it survives the bootstrap provider's rotations. Until it is approved the
-// pool keeps applying with the exports of its last successful apply,
-// unless an earlier guarded apply failed part way, or the pool applied
-// before this version recorded those exports and they are unknown (every
-// apply of the pool is then guarded, and a destructive one waits for
-// approval, as a cluster's does, until an apply succeeds). TerraformMachines are never guarded. Any other change
-// is guarded again, whatever the annotation says, and the controller
-// removes the annotation once an apply of the approved hash succeeded, or,
-// on a pool, once the exports it approved a change of return to the
-// applied ones. Approving needs only patch
-// on the object. ApplyJobSucceeded (DestructivePlanBlocked) gives the exact
-// command.
-const ApproveDestructivePlanAnnotation = "captf.io/approve-destructive-plan"
-
 // ApplyPolicy decides whether a TerraformCluster applies a change on its
 // own or waits until its plan is approved.
 // +kubebuilder:validation:Enum=Automatic;Manual
@@ -108,7 +86,7 @@ type TerraformClusterSpec struct {
 	// applyPolicy decides when a change is applied. Automatic (the default,
 	// applied at reconcile) applies every change of the inputs, and a drift
 	// remediation, as soon as it is seen; only a plan that deletes or
-	// replaces resources waits for captf.io/approve-destructive-plan.
+	// replaces resources becomes a TerraformPlan that waits for approval.
 	// Manual runs a plan Job first, records a plan with changes as a
 	// TerraformPlan and waits until that plan is approved; the apply then
 	// runs only if it plans the same changes again. The first

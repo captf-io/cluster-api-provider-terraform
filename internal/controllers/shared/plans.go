@@ -281,6 +281,39 @@ func (r *reconciler) planView() *PlanView {
 	return &PlanView{Name: p.Name, Reason: p.Spec.Reason, InputsHash: p.Spec.InputsHash, PlanHash: p.Spec.PlanHash, Approved: approved(p)}
 }
 
+// approvedExports returns the inputs hash (the approval hash) of the
+// object's live ExportsChange plan once it is approved, "" otherwise: the
+// change of the cluster's exports it approves is no longer held.
+func (r *reconciler) approvedExports() string {
+	if p := r.livePlan(); p != nil && p.Spec.Reason == infrav1.PlanReasonExportsChange && approved(p) {
+		return p.Spec.InputsHash
+	}
+	return ""
+}
+
+// approveHint returns how to approve the plan made for inputsHash: "approve
+// TerraformPlan <name>: <command>" for the object's live plan of that hash,
+// else where to find it once it exists.
+func (r *reconciler) approveHint(inputsHash string) string {
+	if p := r.livePlan(); p != nil && p.Spec.InputsHash == inputsHash {
+		return fmt.Sprintf("approve TerraformPlan %s: %s", p.Name, planApproveCommand(p.Name, p.Namespace))
+	}
+	return fmt.Sprintf("approve its TerraformPlan (kubectl get terraformplans -n %s -l %s=%s)",
+		r.obj.GetNamespace(), infrav1.PlanPhaseLabel, infrav1.PlanPhasePending)
+}
+
+// blockedWaitCondition is ApplyJobSucceeded while an apply waits for p, a
+// live Destructive or ExportsChange TerraformPlan, and no blocked Job
+// reports it (after clusterctl move, which moves plans and not Jobs): what
+// the plan would change, and the command that approves it.
+func blockedWaitCondition(p *infrav1.TerraformPlan) metav1.Condition {
+	return metav1.Condition{
+		Type: infrav1.ApplyJobSucceededCondition, Status: metav1.ConditionFalse, Reason: infrav1.DestructivePlanBlockedReason,
+		Message: fmt.Sprintf("TerraformPlan %s plans inputs hash %s: %s. Nothing is applied until it is approved: %s",
+			p.Name, p.Spec.InputsHash, planCounts(p.Spec.Summary), planApproveCommand(p.Name, p.Namespace)),
+	}
+}
+
 // setPendingPlanRef points status.pendingPlanRef at the live plan, or
 // clears it when none is live.
 func (r *reconciler) setPendingPlanRef() {
@@ -303,7 +336,11 @@ type madePlan struct {
 // becomes, and whether it becomes a TerraformPlan at all: the plan of a
 // plan Job that changes anything (Manual), or the new plan of an apply that
 // found the approved plan changed, when it applied a Manual plan, or the
-// empty plan, of a TerraformCluster with applyPolicy Manual.
+// empty plan, of a TerraformCluster with applyPolicy Manual (Manual); the
+// plan of an apply the runner blocked before deleting or replacing
+// resources, made for its inputs hash (Destructive), or, for a pool apply
+// guarded for a change of the cluster's exports, for its approval hash
+// (ExportsChange).
 func (r *reconciler) planOf(f *finished) (madePlan, bool) {
 	if f.result == nil || f.result.Plan == nil || f.result.Plan.Hash == "" || f.result.Plan.Hash == runner.EmptyPlanHash {
 		return madePlan{}, false
@@ -317,6 +354,11 @@ func (r *reconciler) planOf(f *finished) (madePlan, bool) {
 		if (src != nil && src.Spec.Reason == infrav1.PlanReasonManual) || (src == nil && r.manualApply()) {
 			return madePlan{reason: infrav1.PlanReasonManual, inputsHash: inputsHash}, true
 		}
+	case op == jobs.OpApply && f.blocked:
+		if a := f.job.Annotations[ApprovalHashAnnotation]; a != "" {
+			return madePlan{reason: infrav1.PlanReasonExportsChange, inputsHash: a}, true
+		}
+		return madePlan{reason: infrav1.PlanReasonDestructive, inputsHash: inputsHash}, true
 	}
 	return madePlan{}, false
 }

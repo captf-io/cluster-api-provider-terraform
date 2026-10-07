@@ -287,7 +287,7 @@ func run(ctx context.Context, o Options) (Result, int) {
 				return o.planChanged(ctx, r, p), ExitFailure
 			}
 			// The approval of the plan covers its deletes and replacements:
-			// the operator saw them in status.plan.
+			// the approver saw them in its TerraformPlan.
 			logger.Info("Applying approved plan", "hash", p.Hash)
 		case o.Op == OpDrift && s.Name == StepShowJSON:
 			d, err := ParseDrift(res.Stdout)

@@ -162,6 +162,13 @@ type TerraformMachinePoolStatus struct {
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=1000
 	Instances []MachinePoolInstance `json:"instances,omitempty"`
+
+	// pendingPlanRef names the live TerraformPlan of the pool: the plan of
+	// a change of the cluster's exports that waits for an approval, or
+	// whose approved apply has not finished yet. It is omitted when no plan
+	// is live.
+	// +optional
+	PendingPlanRef PlanReference `json:"pendingPlanRef,omitempty,omitzero"`
 }
 
 // +kubebuilder:object:root=true

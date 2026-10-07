@@ -35,14 +35,15 @@ func TestInterruptedApplyAfterOlderBlock(t *testing.T) {
 	e := newClusterEnv(t)
 	e.setVersion("v1.37.0")
 	x := e.reconcileStarts()
-	h := x.Annotations[state.InputsHashAnnotation]
 	e.block(x)
 	e.reconcileNoApply()
 	if c := e.applyCondition(); c.Reason != infrav1.DestructivePlanBlockedReason {
 		t.Fatalf("ApplyJobSucceeded after the apply was blocked = %+v", c)
 	}
 
-	e.approve(h)
+	if tp := e.approve(); tp.Spec.InputsHash != x.Annotations[state.InputsHashAnnotation] {
+		t.Fatalf("approved %+v, want the plan of Job %s", tp.Spec, x.Name)
+	}
 	a := e.reconcileStarts()
 	e.deleteJob(a)
 	r := e.reconcileStarts()

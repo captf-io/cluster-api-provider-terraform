@@ -577,7 +577,7 @@ func (bk *Bookkeeping) applyDestroy(ctx context.Context, d Deps, k Kind, done []
 				bk.View.LastApplyFailed = true
 			}
 			if f.blocked {
-				bk.View.BlockedHash = f.job.Annotations[state.InputsHashAnnotation]
+				bk.View.BlockedHash, bk.View.BlockedAt = f.job.Annotations[state.InputsHashAnnotation], jobs.FinishedAt(f.job)
 				bk.View.BlockedApproval = f.job.Annotations[ApprovalHashAnnotation]
 				if !f.bookkept {
 					if err := bk.recordPending(ctx, d, k, f, durable); err != nil {
@@ -622,7 +622,7 @@ func (bk *Bookkeeping) applyDestroy(ctx context.Context, d Deps, k Kind, done []
 		// Its pod was read when it finished; the condition says so already.
 		bk.ApplyJob = *prev
 	case newest != nil:
-		bk.ApplyJob = applyDestroyCondition(*newest, k.Kind(), obj)
+		bk.ApplyJob = applyDestroyCondition(*newest, obj)
 	case prev != nil && leaseWaitEvents[prev.Reason] == "":
 		// No retained Job: keep what was reported (it is never Unknown once
 		// an apply completed). A lease wait is over once bookkeeping runs
@@ -644,16 +644,16 @@ func namesJob(msg, name string) bool {
 	return ok && (rest == "" || strings.HasPrefix(rest, ":"))
 }
 
-// applyDestroyCondition maps f, a finished apply or destroy Job of obj, a
-// kind. A pull failure also ends on the deadline, so it is checked first.
+// applyDestroyCondition maps f, a finished apply or destroy Job of obj. A
+// pull failure also ends on the deadline, so it is checked first.
 // It returns the ApplyJobSucceeded condition to set.
-func applyDestroyCondition(f finished, kind string, obj client.Object) metav1.Condition {
+func applyDestroyCondition(f finished, obj client.Object) metav1.Condition {
 	destroy := jobs.OpOf(f.job) == jobs.OpDestroy
 	c := metav1.Condition{Type: infrav1.ApplyJobSucceededCondition, Message: "Job " + f.job.Name}
 	switch {
 	case f.blocked:
 		c.Status, c.Reason = metav1.ConditionFalse, infrav1.DestructivePlanBlockedReason
-		c.Message += ": " + blockedMessage(f, kind, obj)
+		c.Message += ": " + blockedMessage(f, obj)
 		return c
 	case f.planChanged:
 		c.Status, c.Reason = metav1.ConditionUnknown, infrav1.PlanChangedReason
@@ -680,22 +680,25 @@ func applyDestroyCondition(f finished, kind string, obj client.Object) metav1.Co
 	return c
 }
 
-// blockedMessage explains f, a blocked apply of a kind on obj: what the
-// plan would delete or replace (the runner's summary: addresses and
-// actions only, never values), and the command that approves exactly this
-// Job's hash (approvalHashOf). A pool's blocked apply is reported by
-// heldCondition instead, once its change is pending. A bookkept Job's
-// summary is gone; its condition was set when it finished. It returns the
-// message to report.
-func blockedMessage(f finished, kind string, obj client.Object) string {
+// blockedMessage explains f, a blocked apply of obj: what the plan would
+// delete or replace (the runner's summary: addresses and actions only,
+// never values), and the command that approves the TerraformPlan its plan
+// became (planName). A pool's blocked apply is reported by heldCondition
+// instead, once its change is pending. A bookkept Job's summary is gone;
+// its condition was set when it finished. It returns the message to
+// report.
+func blockedMessage(f finished, obj client.Object) string {
 	summary := "the plan deletes or replaces resources (the Job's log lists them)"
 	if f.result != nil && f.result.Error != nil && f.result.Error.Tail != "" {
 		summary = f.result.Error.Tail
 	}
-	h := approvalHashOf(f.job)
-	return fmt.Sprintf("%s. Nothing was applied, and no apply of these inputs runs until they are approved. "+
-		"To apply it, approve inputs hash %s: kubectl annotate %s %s -n %s %s=%s --overwrite",
-		summary, h, strings.ToLower(kind), obj.GetName(), obj.GetNamespace(), infrav1.ApproveDestructivePlanAnnotation, h)
+	h := madePlanHash(&f)
+	if h == "" {
+		return summary + ". Nothing was applied. The runner reported no plan to approve, so the apply plans again later"
+	}
+	name := planName(obj.GetName(), f.job.Name, h)
+	return fmt.Sprintf("%s. Nothing was applied, and no apply of these inputs runs until its plan is approved. "+
+		"To apply it, approve TerraformPlan %s: %s", summary, name, planApproveCommand(name, obj.GetNamespace()))
 }
 
 // setDriftJob sets obj's DriftJobSucceeded from the newest finished drift

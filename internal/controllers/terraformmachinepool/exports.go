@@ -22,7 +22,6 @@ import (
 
 	"k8s.io/utils/ptr"
 
-	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/contract"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/controllers/shared"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/hash"
@@ -32,6 +31,11 @@ import (
 // ExportsGuard returns how an apply of the inputs the last BuildInputs
 // call built is guarded (guardExports); the zero Guard before any.
 func (a *adapter) ExportsGuard() shared.Guard { return a.guard }
+
+// ApproveExports records approvalHash, the approval hash of the change of
+// the cluster's exports an approved TerraformPlan approves ("" for none),
+// for the next BuildInputs call.
+func (a *adapter) ApproveExports(approvalHash string) { a.approvedExports = approvalHash }
 
 // guardExports decides which cluster exports in, the pool inputs built
 // with the cluster's current exports, renders, and how their apply is
@@ -54,9 +58,13 @@ func (a *adapter) ExportsGuard() shared.Guard { return a.guard }
 //     hash (Guarded, Unrecorded), with nothing to hold, until a
 //     successful apply records its exports.
 //   - the current exports are the pending change, whose guarded apply was
-//     blocked, the approval annotation does not name its approval hash,
-//     the record is there and no change is partly applied: in with the
-//     recorded exports in their place (Held). The pool keeps applying,
+//     blocked for the approval hash the inputs have now, no approved
+//     TerraformPlan names that hash (ApproveExports), the record is there
+//     and no change is partly applied: in with the recorded exports in
+//     their place (Held). An edit of anything but bootstrap_data while
+//     held moves the approval hash off the blocked one, so the change is
+//     guarded again: its plan, made for the old hash, could never be
+//     approved for the new one. The pool keeps applying,
 //     unguarded, everything but that change; refresh and drift render the
 //     same, so the change does not read as drift.
 //   - any other change of the exports (a new one, or the pending one
@@ -103,7 +111,7 @@ func (a *adapter) guardExports(in contract.MachinePoolInputs, durable *inputs.Du
 		return in, shared.Guard{}, fmt.Errorf("approval hash: %w", err)
 	}
 	g.ApprovalHash = approval
-	if p := durable.Pending; p != nil && p.ExportsHash == current && !g.Partial && !g.Unrecorded && a.obj.Annotations[infrav1.ApproveDestructivePlanAnnotation] != approval {
+	if p := durable.Pending; p != nil && p.ExportsHash == current && p.ApprovalHash == approval && !g.Partial && !g.Unrecorded && a.approvedExports != approval {
 		in.ClusterOutputs = slices.Clone(durable.AppliedClusterOutputs)
 		g.ExportsHash, g.Exports, g.Held = applied, in.ClusterOutputs, true
 		return in, g, nil

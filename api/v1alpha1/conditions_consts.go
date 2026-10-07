@@ -198,21 +198,19 @@ const (
 	JobPolicyInvalidReason = "JobPolicyInvalid"
 	// DestructivePlanBlockedReason is the False reason when a
 	// TerraformCluster apply (including a drift remediation) stopped before
-	// a plan that deletes or replaces resources: the
-	// captf.io/approve-destructive-plan annotation does not name the inputs
-	// hash it renders. No apply of that hash runs until it does, or the
-	// inputs change. On a TerraformMachinePool it means an apply of a
-	// change of the cluster's exports stopped so, and the annotation does
-	// not name its approval hash (the inputs hash without bootstrap_data):
-	// the reason stays while the change waits, although the pool keeps
-	// applying everything else with the exports of its last successful
-	// apply, until the change is approved, or the exports change again or
-	// return to the applied ones (the condition then reports the last
-	// successful apply, True). A pool that cannot fall back to those
-	// exports (an earlier guarded apply failed part way, or they are not
-	// recorded, or they are unknown because the pool applied before this
-	// version recorded them) waits for the approval instead, as a cluster
-	// does, and the message says why.
+	// a plan that deletes or replaces resources: the plan waits for its
+	// approval as a TerraformPlan (status.pendingPlanRef), and no apply of
+	// those inputs runs until it is approved, or the inputs change. On a
+	// TerraformMachinePool it means an apply of a change of the cluster's
+	// exports stopped so: the reason stays while the change's TerraformPlan
+	// waits, although the pool keeps applying everything else with the
+	// exports of its last successful apply, until the plan is approved, or
+	// the exports change again or return to the applied ones (the condition
+	// then reports the last successful apply, True). A pool that cannot
+	// fall back to those exports (an earlier guarded apply failed part way,
+	// or they are not recorded, or they are unknown because the pool
+	// applied before this version recorded them) waits for the approval
+	// instead, as a cluster does, and the message says why.
 	DestructivePlanBlockedReason = "DestructivePlanBlocked"
 	// NoApplyYetReason is the Unknown reason before the first apply completes.
 	NoApplyYetReason = "NoApplyYet"

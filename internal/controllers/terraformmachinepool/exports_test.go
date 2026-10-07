@@ -161,7 +161,8 @@ func newPoolEnv(t *testing.T) *holdEnv {
 		p.Status.LastRefresh, p.Status.LastDriftCheck = &now, &now
 	})
 	s := scheme(t)
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(world(tmp)...).WithStatusSubresource(&infrav1.TerraformMachinePool{}).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(world(tmp)...).WithStatusSubresource(&infrav1.TerraformMachinePool{}, &infrav1.TerraformPlan{}).
+		WithIndex(&infrav1.TerraformPlan{}, shared.PlanTargetIndex, shared.PlanTargetIndexer).Build()
 	e := &holdEnv{
 		t: t, c: c, sr: &stateReader{}, runner: &clientRunner{c: c, pods: map[string][]corev1.Pod{}}, rec: &recorder{},
 		clock: testingclock.NewFakePassiveClock(t0), req: ctrl.Request{NamespacedName: client.ObjectKeyFromObject(tmp)},
@@ -255,12 +256,13 @@ func (e *holdEnv) succeed(job *batchv1.Job) {
 }
 
 // block finishes job, an apply, as the runner's guard stops it before a
-// destructive plan.
+// destructive plan, which it reports.
 func (e *holdEnv) block(job *batchv1.Job) {
 	e.t.Helper()
 	e.result(job, runner.Result{
 		Version: runner.ResultVersion, Op: runner.OpApply, Steps: []runner.Step{{Name: "init"}, {Name: "plan", Exit: 2}, {Name: "show-json"}},
 		Error: &runner.Error{Kind: runner.ErrorKindBlocked, Tail: blockedTail},
+		Plan:  &runner.Plan{Hash: "p2:" + job.Name, Replace: 1, Resources: []string{"module.role.aws_autoscaling_group.this (replace)"}},
 	})
 	e.finish(job, batchv1.JobFailed)
 }
@@ -359,11 +361,47 @@ func (e *holdEnv) pool() *infrav1.TerraformMachinePool {
 	return p
 }
 
-// approve sets the approval annotation on the pool to value.
-func (e *holdEnv) approve(value string) {
+// plans returns the pool's TerraformPlans.
+func (e *holdEnv) plans() []infrav1.TerraformPlan {
 	e.t.Helper()
-	p := e.pool()
-	metav1.SetMetaDataAnnotation(&p.ObjectMeta, infrav1.ApproveDestructivePlanAnnotation, value)
+	list := &infrav1.TerraformPlanList{}
+	if err := e.c.List(e.t.Context(), list, client.InNamespace(ns)); err != nil {
+		e.t.Fatal(err)
+	}
+	return list.Items
+}
+
+// livePlan returns the pool's live TerraformPlan made for the approval
+// hash approval, nil when there is none.
+func (e *holdEnv) livePlan(approval string) *infrav1.TerraformPlan {
+	e.t.Helper()
+	for _, p := range e.plans() {
+		if p.Spec.InputsHash == approval && !infrav1.PlanPhase(p.Labels[infrav1.PlanPhaseLabel]).Terminal() {
+			return &p
+		}
+	}
+	return nil
+}
+
+// plan returns the TerraformPlan name.
+func (e *holdEnv) plan(name string) *infrav1.TerraformPlan {
+	e.t.Helper()
+	p := &infrav1.TerraformPlan{}
+	if err := e.c.Get(e.t.Context(), client.ObjectKey{Namespace: ns, Name: name}, p); err != nil {
+		e.t.Fatal(err)
+	}
+	return p
+}
+
+// approve approves, as alice, the pool's live TerraformPlan of the change
+// whose approval hash is approval, failing the test when there is none.
+func (e *holdEnv) approve(approval string) {
+	e.t.Helper()
+	p := e.livePlan(approval)
+	if p == nil {
+		e.t.Fatalf("no live TerraformPlan of approval hash %s: %+v", approval, e.plans())
+	}
+	p.Spec.Approved, p.Spec.ApprovedBy = new(true), "alice"
 	if err := e.c.Update(e.t.Context(), p); err != nil {
 		e.t.Fatal(err)
 	}
@@ -443,18 +481,21 @@ func (e *holdEnv) heldHash(blocked string) string {
 	return e.approveHash(c)
 }
 
-// approveHash returns the hash the approve command in c, a
-// DestructivePlanBlocked ApplyJobSucceeded condition, names, failing the
-// test when c names none.
+// approveHash returns the approval hash of the TerraformPlan the approve
+// command in c, a DestructivePlanBlocked ApplyJobSucceeded condition,
+// names, failing the test when c names none.
 func (e *holdEnv) approveHash(c metav1.Condition) string {
 	e.t.Helper()
-	cmd := "kubectl annotate terraformmachinepool " + e.req.Name + " -n " + ns + " " + infrav1.ApproveDestructivePlanAnnotation + "="
-	_, rest, ok := strings.Cut(c.Message, cmd)
-	h, tail, ok2 := strings.Cut(rest, " ")
-	if !ok || !ok2 || tail != "--overwrite" || h == "" {
+	_, rest, ok := strings.Cut(c.Message, "kubectl patch terraformplan ")
+	name, tail, ok2 := strings.Cut(rest, " ")
+	if !ok || !ok2 || !strings.HasPrefix(tail, "-n "+ns+" --type merge") {
 		e.t.Fatalf("ApplyJobSucceeded names no approve command: %s", c.Message)
 	}
-	return h
+	p := &infrav1.TerraformPlan{}
+	if err := e.c.Get(e.t.Context(), client.ObjectKey{Namespace: ns, Name: name}, p); err != nil {
+		e.t.Fatal(err)
+	}
+	return p.Spec.InputsHash
 }
 
 // exportsHash returns hash.Exports of raw, failing t on error.
@@ -491,13 +532,14 @@ func (e *holdEnv) blockChange(exports string) (*batchv1.Job, string) {
 }
 
 // TestHoldExportsBlockedChange: an exports change whose plan is
-// destructive blocks; the pool then keeps applying bootstrap rotations
-// and a version roll, unguarded, with the held exports and the new
-// bootstrap data, while ApplyJobSucceeded stays DestructivePlanBlocked
-// (one Warning event) with the approval hash, which a rotation does not
-// change; an approval of the inputs hash does not count; the approval of
-// the approval hash applies the change, guarded and allowed, and is
-// consumed.
+// destructive blocks, and its plan becomes an ExportsChange TerraformPlan
+// of its approval hash; the pool then keeps applying bootstrap rotations,
+// unguarded, with the held exports and the new bootstrap data, while
+// ApplyJobSucceeded stays DestructivePlanBlocked (one Warning event)
+// naming that plan, which a rotation does not change. A version roll
+// changes the approval hash: the change is guarded again, and its new
+// block makes a new plan that supersedes the first. The approval of that
+// plan applies the change, guarded and allowed, and the plan is Applied.
 func TestHoldExportsBlockedChange(t *testing.T) {
 	t.Parallel()
 	e := newHoldEnv(t)
@@ -513,6 +555,11 @@ func TestHoldExportsBlockedChange(t *testing.T) {
 	}
 	if n := e.rec.count(shared.EventDestructivePlanBlocked); n != 1 {
 		t.Errorf("%d DestructivePlanBlocked events, want 1", n)
+	}
+	first := e.livePlan(approval)
+	if first == nil || first.Spec.Reason != infrav1.PlanReasonExportsChange || first.Spec.TargetRef.Kind != infrav1.PlanTargetMachinePool ||
+		first.Labels[infrav1.PlanReasonLabel] != string(infrav1.PlanReasonExportsChange) || e.pool().Status.PendingPlanRef.Name != first.Name {
+		t.Fatalf("plan of the blocked change = %+v, pool's pendingPlanRef %+v", first, e.pool().Status.PendingPlanRef)
 	}
 
 	// A rotation applies, unguarded, with the held exports.
@@ -531,38 +578,45 @@ func TestHoldExportsBlockedChange(t *testing.T) {
 		t.Errorf("a held apply's success changed the record: pending %+v, applied %s", d.Pending, d.AppliedClusterOutputs)
 	}
 
-	// A version roll applies with the held exports too; it changes the
-	// approval hash, but reports the blocked Job no second time.
+	// A version roll changes the approval hash: the change is guarded
+	// again, and the plan its block makes supersedes the first.
 	e.setVersion("v1.37.0")
 	h2 := e.reconcileStarts(jobs.OpApply)
-	if in := e.rendered(h2); e.guarded(h2) || !sameExports(t, in.ClusterOutputs, exportsE0) || in.KubernetesVersion == nil || *in.KubernetesVersion != "v1.37.0" {
-		t.Fatalf("version roll while held: guarded %v, exports %s", e.guarded(h2), in.ClusterOutputs)
+	rolled := h2.Annotations[shared.ApprovalHashAnnotation]
+	if in := e.rendered(h2); !e.guarded(h2) || rolled == "" || rolled == approval || !sameExports(t, in.ClusterOutputs, exportsE1) ||
+		in.KubernetesVersion == nil || *in.KubernetesVersion != "v1.37.0" {
+		t.Fatalf("version roll while held: guarded %v, annotations %v, exports %s", e.guarded(h2), h2.Annotations, in.ClusterOutputs)
 	}
-	e.succeed(h2)
+	e.block(h2)
+	// The roll itself then applies with the held exports, as a rotation
+	// does.
+	h3 := e.reconcileStarts(jobs.OpApply)
+	if in := e.rendered(h3); e.guarded(h3) || !sameExports(t, in.ClusterOutputs, exportsE0) || *in.KubernetesVersion != "v1.37.0" {
+		t.Fatalf("version roll while held: guarded %v, exports %s", e.guarded(h3), in.ClusterOutputs)
+	}
+	if got := e.heldHash(h2.Name); got != rolled {
+		t.Errorf("held condition after the roll approves %s, want %s", got, rolled)
+	}
+	if e.livePlan(approval) != nil || e.livePlan(rolled) == nil {
+		t.Errorf("plans after the roll: %+v", e.plans())
+	}
+	if n := e.rec.count(shared.EventDestructivePlanBlocked); n != 2 {
+		t.Errorf("%d DestructivePlanBlocked events, want one per blocked Job", n)
+	}
+	e.succeed(h3)
 	e.reconcileIdle()
-	rolled := e.heldHash(b1.Name)
-	if rolled == approval {
-		t.Error("a version roll kept the approval hash")
-	}
-	if n := e.rec.count(shared.EventDestructivePlanBlocked); n != 1 {
-		t.Errorf("%d DestructivePlanBlocked events, want 1", n)
-	}
 
-	// The inputs hash is not the approval.
-	e.approve(h2.Annotations[state.InputsHashAnnotation])
-	e.reconcileIdle()
-
-	// The approval hash is: the change applies, guarded and allowed.
+	// The approval applies the change, guarded and allowed.
 	e.approve(rolled)
 	a := e.reconcileStarts(jobs.OpApply)
 	if in := e.rendered(a); !e.guarded(a) || e.flag(a, "--inputs-hash") != rolled || e.flag(a, "--allow-deletes-hash") != rolled ||
-		a.Annotations[shared.HeldClusterOutputsAnnotation] != "" || !sameExports(t, in.ClusterOutputs, exportsE1) {
+		a.Annotations[shared.HeldClusterOutputsAnnotation] != "" || a.Annotations[shared.PlanAnnotation] == "" || !sameExports(t, in.ClusterOutputs, exportsE1) {
 		t.Fatalf("approved apply: args %v, annotations %v, exports %s", e.args(a), a.Annotations, in.ClusterOutputs)
 	}
 	e.succeed(a)
 	e.reconcileIdle()
-	if _, ok := e.pool().Annotations[infrav1.ApproveDestructivePlanAnnotation]; ok || e.rec.count(shared.EventDestructivePlanApprovalConsumed) != 1 {
-		t.Errorf("the approval was not consumed: %v", e.rec.reasons)
+	if p := e.plan(a.Annotations[shared.PlanAnnotation]); p.Labels[infrav1.PlanPhaseLabel] != string(infrav1.PlanPhaseApplied) || e.pool().Status.PendingPlanRef.Name != "" {
+		t.Errorf("the approved plan after its apply: %+v, pendingPlanRef %+v", p, e.pool().Status.PendingPlanRef)
 	}
 	if c := e.applyCondition(); c.Status != metav1.ConditionTrue || c.Reason != infrav1.ApplySucceededReason {
 		t.Errorf("ApplyJobSucceeded after the approved apply = %+v", c)
@@ -683,7 +737,7 @@ func TestHoldExportsRevertCondition(t *testing.T) {
 	e.reconcileIdle()
 	c := e.applyCondition()
 	if c.Status != metav1.ConditionTrue || c.Reason != infrav1.ApplySucceededReason || !strings.Contains(c.Message, b1.Name) ||
-		strings.Contains(c.Message, infrav1.ApproveDestructivePlanAnnotation) || strings.HasPrefix(c.Message, "Job ") {
+		strings.Contains(c.Message, "kubectl") || strings.HasPrefix(c.Message, "Job ") {
 		t.Errorf("ApplyJobSucceeded after the revert = %+v", c)
 	}
 	e.reconcileIdle()
@@ -776,25 +830,15 @@ func (e *holdEnv) deleteJob(job *batchv1.Job) {
 	e.clock.SetTime(e.clock.Now().Add(2 * runlease.Grace))
 }
 
-// unapprove removes the approval annotation from the pool.
-func (e *holdEnv) unapprove() {
-	e.t.Helper()
-	p := e.pool()
-	delete(p.Annotations, infrav1.ApproveDestructivePlanAnnotation)
-	if err := e.c.Update(e.t.Context(), p); err != nil {
-		e.t.Fatal(err)
-	}
-}
-
 // TestHoldExportsVanishedApply: an apply of a change of the cluster's
 // exports deleted while it runs may have applied part of it, though no
 // result tells: the change is recorded as partly applied, so the pool
 // never falls back to the held exports unguarded. Exports that revert
 // after an unapproved apply passed the guard are applied guarded; a held
-// change whose approved apply was deleted, and its approval removed,
-// waits for the approval again across a rotation, saying why, and the
-// approval applies it. A deleted held apply rendered the applied exports
-// and records nothing.
+// change whose approved apply was deleted is applied again, guarded under
+// the same approval, which a rotation does not move: its plan stays
+// approved. A deleted held apply rendered the applied exports and records
+// nothing.
 func TestHoldExportsVanishedApply(t *testing.T) {
 	t.Parallel()
 	// partial fails t unless the durable Secret records the change of
@@ -831,7 +875,7 @@ func TestHoldExportsVanishedApply(t *testing.T) {
 			t.Errorf("after the revert succeeded: interrupted apply %q, partial %+v", d.InterruptedApply, d.Partial)
 		}
 	})
-	t.Run("approved, approval removed", func(t *testing.T) {
+	t.Run("approved", func(t *testing.T) {
 		t.Parallel()
 		e := newHoldEnv(t)
 		b1, _ := e.blockChange(exportsE1)
@@ -840,19 +884,17 @@ func TestHoldExportsVanishedApply(t *testing.T) {
 		e.approve(approval)
 		a := e.reconcileStarts(jobs.OpApply)
 		e.deleteJob(a)
-		e.unapprove()
 		e.rotate("#cloud-config\n# rotated\n")
-		e.reconcileIdle()
+		r := e.reconcileStarts(jobs.OpApply)
 		partial(e, a, exportsE1)
 		c := e.applyCondition()
 		if c.Reason != infrav1.ApplyFailedReason || !strings.HasPrefix(c.Message, "Job "+a.Name+": disappeared while it ran") ||
 			!strings.HasSuffix(c.Message, "(it is guarded, and a plan that deletes or replaces resources waits for approval)") {
 			t.Errorf("ApplyJobSucceeded after the approved apply vanished = %+v", c)
 		}
-		e.approve(approval)
-		r := e.reconcileStarts(jobs.OpApply)
-		if !e.guarded(r) || e.flag(r, "--allow-deletes-hash") != approval || !sameExports(t, e.rendered(r).ClusterOutputs, exportsE1) {
-			t.Errorf("approved apply after the approved apply vanished: args %v, annotations %v", e.args(r), r.Annotations)
+		if !e.guarded(r) || e.flag(r, "--allow-deletes-hash") != approval || r.Annotations[shared.PlanAnnotation] != a.Annotations[shared.PlanAnnotation] ||
+			!sameExports(t, e.rendered(r).ClusterOutputs, exportsE1) {
+			t.Errorf("apply after the approved apply vanished: args %v, annotations %v", e.args(r), r.Annotations)
 		}
 	})
 	t.Run("stuck, deleted by the controller", func(t *testing.T) {
@@ -1171,65 +1213,6 @@ func TestHoldExportsWarnsOnceBeforeBookkept(t *testing.T) {
 	}
 }
 
-// TestHoldExportsRevertDropsApproval: an approval of a pending change
-// that is left on the pool when the exports return to the applied ones
-// is removed, whether it names the blocked Job's approval hash or the one
-// the held condition showed after a version roll, so a later return to
-// the change is held again instead of applied with the old approval.
-func TestHoldExportsRevertDropsApproval(t *testing.T) {
-	t.Parallel()
-	for name, roll := range map[string]bool{"blocked hash": false, "rolled hash": true} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			e := newHoldEnv(t)
-			b1, approval := e.blockChange(exportsE1)
-			e.reconcileIdle()
-			if roll {
-				e.setVersion("v1.37.0")
-				h := e.reconcileStarts(jobs.OpApply)
-				e.succeed(h)
-				e.reconcileIdle()
-				approval = e.heldHash(b1.Name)
-			}
-			e.approve(approval)
-			e.setExports(exportsE0)
-			e.reconcileIdle()
-			if a, ok := e.pool().Annotations[infrav1.ApproveDestructivePlanAnnotation]; ok {
-				t.Fatalf("the approval of the withdrawn change stayed: %s", a)
-			}
-			e.setExports(exportsE1)
-			e.reconcileIdle()
-			if got := e.heldHash(b1.Name); got != approval {
-				t.Errorf("held condition after the return approves %s, want %s", got, approval)
-			}
-		})
-	}
-}
-
-// TestHoldExportsSupersededDropsApproval: an approval of a pending change
-// is removed when the exports move on to another change before it
-// applied, so exports that later return to the first change apply it
-// guarded and unapproved, not with the old approval.
-func TestHoldExportsSupersededDropsApproval(t *testing.T) {
-	t.Parallel()
-	e := newHoldEnv(t)
-	b1, approval := e.blockChange(exportsE1)
-	e.reconcileIdle()
-	e.heldHash(b1.Name)
-	e.approve(approval)
-	b2, _ := e.blockChange(exportsE2)
-	if a, ok := e.pool().Annotations[infrav1.ApproveDestructivePlanAnnotation]; ok {
-		t.Fatalf("the approval of the superseded change stayed: %s", a)
-	}
-	e.reconcileIdle()
-	e.heldHash(b2.Name)
-	e.setExports(exportsE1)
-	r := e.reconcileStarts(jobs.OpApply)
-	if !e.guarded(r) || e.flag(r, "--inputs-hash") != approval || e.flag(r, "--allow-deletes-hash") != "" {
-		t.Errorf("return to the superseded change: args %v", e.args(r))
-	}
-}
-
 // TestHoldExportsChecksRenderHeld: while a change is held, refresh and
 // drift checks render the held exports, so the change does not read as
 // drift.
@@ -1331,7 +1314,7 @@ func TestHoldExportsPartialApplyNotReverted(t *testing.T) {
 			c := e.applyCondition()
 			if c.Status != metav1.ConditionFalse || c.Reason != infrav1.DestructivePlanBlockedReason || !strings.HasPrefix(c.Message, "Job "+n.Name+": "+blockedTail) ||
 				!strings.Contains(c.Message, "Job "+a.Name+", an earlier apply of a change of them, failed and may have applied part of it") ||
-				strings.Contains(c.Message, "keeps applying") || !strings.HasSuffix(c.Message, "="+rolled+" --overwrite") {
+				strings.Contains(c.Message, "keeps applying") || e.approveHash(c) != rolled {
 				t.Errorf("ApplyJobSucceeded = %+v, want the partly applied change waiting for %s", c, rolled)
 			}
 
@@ -1424,13 +1407,14 @@ func TestHoldExportsPartialApplyRevertApproved(t *testing.T) {
 				t.Fatalf("approved revert: args %v", e.args(a))
 			}
 			e.reconcileIdle()
-			if got := e.pool().Annotations[infrav1.ApproveDestructivePlanAnnotation]; got != approval {
-				t.Fatalf("the approval was removed while its apply runs: %q", got)
+			name := a.Annotations[shared.PlanAnnotation]
+			if p := e.plan(name); p.Labels[infrav1.PlanPhaseLabel] != string(infrav1.PlanPhaseApproved) {
+				t.Fatalf("the plan while its apply runs: %+v", p.Labels)
 			}
 			e.succeed(a)
 			e.reconcileIdle()
-			if got, ok := e.pool().Annotations[infrav1.ApproveDestructivePlanAnnotation]; ok {
-				t.Errorf("the approval stayed after its apply succeeded: %q", got)
+			if p := e.plan(name); p.Labels[infrav1.PlanPhaseLabel] != string(infrav1.PlanPhaseApplied) {
+				t.Errorf("the plan after its apply succeeded: %+v", p.Labels)
 			}
 			if d := e.durable(); d.Partial != nil || d.Pending != nil || !sameExports(t, d.AppliedClusterOutputs, exportsE0) {
 				t.Errorf("durable after the approved revert: partial %+v, pending %+v, applied %s", d.Partial, d.Pending, d.AppliedClusterOutputs)
@@ -1483,7 +1467,7 @@ func TestHoldExportsUnrecordedPending(t *testing.T) {
 		b, approval := unrecordedBlock(e)
 		c := e.applyCondition()
 		if c.Reason != infrav1.DestructivePlanBlockedReason || !strings.HasPrefix(c.Message, "Job "+b.Name+": "+blockedTail) ||
-			!strings.Contains(c.Message, "are not recorded") || strings.Contains(c.Message, "keeps applying") || !strings.HasSuffix(c.Message, "="+approval+" --overwrite") {
+			!strings.Contains(c.Message, "are not recorded") || strings.Contains(c.Message, "keeps applying") || e.approveHash(c) != approval {
 			t.Errorf("ApplyJobSucceeded = %+v", c)
 		}
 		e.rotate("#cloud-config\n# rotated\n")
@@ -1642,16 +1626,19 @@ func TestHoldExportsUnheldConditionCause(t *testing.T) {
 }
 
 // TestHoldExportsApprovedApplyFailedBeforeApplyStep: an approved apply
-// that fails before its apply step changed nothing, so a version roll
-// holds the change as before, unguarded.
+// that fails before its apply step changed nothing, so it records no
+// partly applied change. A version roll then moves the approval hash off
+// the approved plan's: the change is guarded again, without the approval,
+// not held under an approval its plan was not made for.
 func TestHoldExportsApprovedApplyFailedBeforeApplyStep(t *testing.T) {
 	t.Parallel()
 	e := newHoldEnv(t)
-	e.approveAndFail(exportsE1, runner.StepInit)
+	_, approval := e.approveAndFail(exportsE1, runner.StepInit)
 	e.setVersion("v1.37.0")
 	h := e.reconcileStarts(jobs.OpApply)
-	if e.guarded(h) || h.Annotations[shared.HeldClusterOutputsAnnotation] != "true" || !sameExports(t, e.rendered(h).ClusterOutputs, exportsE0) {
-		t.Errorf("version roll after an approved apply failed at init: guarded %v, annotations %v", e.guarded(h), h.Annotations)
+	if !e.guarded(h) || h.Annotations[shared.HeldClusterOutputsAnnotation] != "" || !sameExports(t, e.rendered(h).ClusterOutputs, exportsE1) ||
+		e.flag(h, "--inputs-hash") == approval || e.flag(h, "--allow-deletes-hash") != "" {
+		t.Errorf("version roll after an approved apply failed at init: args %v, annotations %v", e.args(h), h.Annotations)
 	}
 	if d := e.durable(); d.Partial != nil {
 		t.Errorf("an apply that failed at init recorded a partial change: %+v", d.Partial)

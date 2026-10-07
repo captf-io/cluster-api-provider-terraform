@@ -25,6 +25,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	testingclock "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/cluster-api/util/conditions"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -40,11 +41,23 @@ import (
 // reports.
 const blockedSummaryText = "the plan deletes or replaces 1 resource(s): module.role.lb (replace)"
 
-// blockedResult returns the termination message of a blocked guarded apply.
+// blockedPlan returns the plan a blocked guarded apply reports.
+func blockedPlan() *runner.Plan {
+	return &runner.Plan{Hash: runner.PlanHash([]string{"module.role.lb|delete,create"}), Replace: 1, Resources: []string{"module.role.lb (replace)"}}
+}
+
+// blockedResult returns the termination message of a blocked guarded
+// apply, which reports its plan.
 func blockedResult() string {
+	return blockedResultOf(blockedPlan())
+}
+
+// blockedResultOf returns the termination message of a blocked guarded
+// apply that reports p (nil: no plan).
+func blockedResultOf(p *runner.Plan) string {
 	return string(runner.Encode(runner.Result{
 		Version: runner.ResultVersion, Op: runner.OpApply, Steps: []runner.Step{{Name: "init"}, {Name: "validate"}, {Name: "plan", Exit: 2}, {Name: "show-json"}},
-		Error: &runner.Error{Kind: runner.ErrorKindBlocked, Tail: blockedSummaryText},
+		Error: &runner.Error{Kind: runner.ErrorKindBlocked, Tail: blockedSummaryText}, Plan: p,
 	}))
 }
 
@@ -111,8 +124,9 @@ func (e blockedEnv) syncMarks(t *testing.T) map[string]string {
 }
 
 // kind returns, failing t on error, the fakeKind adapter for e's object,
-// set up as a mutable cluster with a healthy reading and drift as its
-// DriftPolicy (or a disabled policy when drift is nil).
+// set up as a mutable cluster with a healthy reading, drift as its
+// DriftPolicy (or a disabled policy when drift is nil) and e's
+// status.pendingPlanRef.
 func (e blockedEnv) kind(t *testing.T, drift *infrav1.DriftPolicy) *fakeKind {
 	t.Helper()
 	k := e.kindFor(t, readyOwner)
@@ -121,66 +135,22 @@ func (e blockedEnv) kind(t *testing.T, drift *infrav1.DriftPolicy) *fakeKind {
 	if drift == nil {
 		drift = &infrav1.DriftPolicy{IntervalSeconds: new(int32(0))}
 	}
-	k.clusterDrift = drift
+	k.clusterDrift, k.planRef = drift, &e.planRef
 	return k
 }
 
-// approve sets the ApproveDestructivePlanAnnotation on e's stored object to
-// value, failing t on error.
-func (e blockedEnv) approve(t *testing.T, value string) {
+// approveLive approves e's live TerraformPlan as alice, failing t when
+// there is none, and returns its name.
+func (e blockedEnv) approveLive(t *testing.T) string {
 	t.Helper()
-	obj := e.get(t)
-	metav1.SetMetaDataAnnotation(&obj.ObjectMeta, infrav1.ApproveDestructivePlanAnnotation, value)
-	if err := e.c.Update(t.Context(), obj); err != nil {
-		t.Fatal(err)
+	for _, p := range e.plans(t) {
+		if !phaseOf(&p).Terminal() {
+			e.approve(t, p.Name, "alice")
+			return p.Name
+		}
 	}
-}
-
-// TestApprovalConsumed: an approval is for one change. Once an apply of the
-// approved inputs hash has succeeded, the annotation is removed, so it cannot
-// also approve a later destructive drift remediation of the same inputs. An
-// approval for a hash that has not been applied yet stays.
-func TestApprovalConsumed(t *testing.T) {
-	t.Parallel()
-	for _, tt := range []struct {
-		name        string
-		approvedFor string
-		applied     string
-		want        bool // annotation still there
-	}{
-		{name: "approved apply succeeded: removed", approvedFor: "h2:approved", applied: "h2:approved", want: false},
-		{name: "approved hash not applied yet: kept", approvedFor: "h2:next", applied: "h2:approved", want: true},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			approved := func(m *infrav1.TerraformMachine) {
-				metav1.SetMetaDataAnnotation(&m.ObjectMeta, infrav1.ApproveDestructivePlanAnnotation, tt.approvedFor)
-			}
-			e := newEnv(t, world(machine(withFinalizer, notPaused, provisioned, approved))...)
-			e.state.st = &state.State{InputsHash: tt.applied}
-			ok := job("a", jobs.OpApply, jobs.Succeeded, t0.Add(-time.Hour))
-			ok.Annotations = map[string]string{state.InputsHashAnnotation: tt.applied, BookkeptAnnotation: "true"}
-			e.runner.jobs = append(e.runner.jobs, ok)
-			k := e.kindFor(t, readyOwner)
-			k.asCluster, k.mutable, k.in = true, true, machineIn()
-			k.health = &contract.Health{State: contract.HealthRunning, Healthy: true}
-			k.clusterDrift = &infrav1.DriftPolicy{IntervalSeconds: new(int32(0))}
-			if _, err := reconcileOnce(t, e, k); err != nil {
-				t.Fatal(err)
-			}
-			_, kept := e.get(t).Annotations[infrav1.ApproveDestructivePlanAnnotation]
-			if kept != tt.want {
-				t.Errorf("approval annotation kept = %v, want %v", kept, tt.want)
-			}
-			// Once: the next reconcile finds no approval to consume.
-			if _, err := reconcileOnce(t, e, e.kindFor(t, readyOwner)); err != nil {
-				t.Fatal(err)
-			}
-			if n := e.rec.count(EventDestructivePlanApprovalConsumed); (n == 1) == tt.want || n > 1 {
-				t.Errorf("DestructivePlanApprovalConsumed = %d, want %d", n, map[bool]int{true: 0, false: 1}[tt.want])
-			}
-		})
-	}
+	t.Fatal("no live TerraformPlan")
+	return ""
 }
 
 // sourceArgs returns the source container's Args from job, or nil if job
@@ -194,11 +164,12 @@ func sourceArgs(job *batchv1.Job) []string {
 	return nil
 }
 
-// TestDestructivePlanBlocked: a blocked cluster apply sets
-// ApplyJobSucceeded False/DestructivePlanBlocked with the addresses and the
-// exact approve command, emits one Warning, is not retried for the same
-// inputs hash (neither right away nor once the Job is bookkept), and runs
-// with the approval once the annotation names that hash.
+// TestDestructivePlanBlocked: a blocked cluster apply makes a Destructive
+// TerraformPlan of its plan, sets ApplyJobSucceeded
+// False/DestructivePlanBlocked with the addresses and the exact approve
+// command, emits one Warning naming the plan, is not retried for the same
+// inputs hash (neither right away nor once the Job is bookkept), runs
+// expecting exactly that plan once it is approved, and makes it Applied.
 func TestDestructivePlanBlocked(t *testing.T) {
 	t.Parallel()
 	e := newBlockedEnv(t, "h1:old", false)
@@ -212,19 +183,31 @@ func TestDestructivePlanBlocked(t *testing.T) {
 	if requeue != RetryMax {
 		t.Errorf("requeue = %s, want %s", requeue, RetryMax)
 	}
+	bp := blockedPlan()
+	name := planName(testName, "b", bp.Hash)
+	tp := e.plan(t, name)
+	if tp.Spec.Reason != infrav1.PlanReasonDestructive || tp.Spec.InputsHash != e.hash || tp.Spec.PlanHash != bp.Hash ||
+		tp.Labels[infrav1.PlanDestructiveLabel] != "true" || tp.Labels[infrav1.PlanReasonLabel] != string(infrav1.PlanReasonDestructive) ||
+		*tp.Spec.Summary.Replace != 1 {
+		t.Errorf("TerraformPlan = %+v", tp)
+	}
+	checkPlan(t, tp, infrav1.PlanPhasePending, infrav1.PlanPendingReason, infrav1.PlanPendingReason)
 	c := conditions.Get(e.get(t), infrav1.ApplyJobSucceededCondition)
-	cmd := "kubectl annotate terraformcluster " + testName + " -n " + testNS + " captf.io/approve-destructive-plan=" + e.hash + " --overwrite"
+	cmd := planApproveCommand(name, testNS)
 	if c == nil || c.Status != metav1.ConditionFalse || c.Reason != infrav1.DestructivePlanBlockedReason ||
-		!strings.HasPrefix(c.Message, "Job b: "+blockedSummaryText) || !strings.Contains(c.Message, cmd) {
+		!strings.HasPrefix(c.Message, "Job b: "+blockedSummaryText) || !strings.HasSuffix(c.Message, cmd) {
 		t.Fatalf("ApplyJobSucceeded = %+v, want DestructivePlanBlocked naming the addresses and %q", c, cmd)
 	}
-	if n, m := e.rec.count(EventDestructivePlanBlocked), e.rec.count(EventJobFailed); n != 1 || m != 0 {
-		t.Errorf("events: %d DestructivePlanBlocked, %d JobFailed; want 1 and 0", n, m)
+	if got := e.rec.only(EventDestructivePlanBlocked); len(got) != 1 || !strings.Contains(got[0].note, name) || e.rec.count(EventJobFailed) != 0 {
+		t.Errorf("events: DestructivePlanBlocked %+v, %d JobFailed; want one naming %s and none", got, e.rec.count(EventJobFailed), name)
+	}
+	if e.rec.count(EventPlanReady) != 0 {
+		t.Errorf("%d PlanReady for a destructive plan", e.rec.count(EventPlanReady))
 	}
 	if lr := e.get(t).Status.LastRun; lr.Error.Kind != infrav1.RunErrorKindBlocked || lr.Error.Summary != blockedSummaryText {
 		t.Errorf("lastRun.error = %+v", lr.Error)
 	}
-	if got := e.syncMarks(t); got[BlockedAnnotation] != "true" || got[BookkeptAnnotation] != "true" {
+	if got := e.syncMarks(t); got[BlockedAnnotation] != "true" || got[BookkeptAnnotation] != "true" || got[PlanHashAnnotation] != bp.Hash {
 		t.Fatalf("blocked Job annotations = %v", got)
 	}
 
@@ -235,44 +218,52 @@ func TestDestructivePlanBlocked(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if len(e.runner.created) != 0 || e.rec.count(EventDestructivePlanBlocked) != 1 {
-		t.Fatalf("after bookkeeping: created %v, %d events", e.runner.created, e.rec.count(EventDestructivePlanBlocked))
+	if len(e.runner.created) != 0 || e.rec.count(EventDestructivePlanBlocked) != 1 || len(e.plans(t)) != 1 {
+		t.Fatalf("after bookkeeping: created %v, %d events, %d plans", e.runner.created, e.rec.count(EventDestructivePlanBlocked), len(e.plans(t)))
 	}
-	if c := conditions.Get(e.get(t), infrav1.ApplyJobSucceededCondition); !strings.Contains(c.Message, "module.role.lb") {
-		t.Errorf("the bookkept condition lost the addresses: %q", c.Message)
-	}
-
-	// An approval of another hash changes nothing.
-	e.approve(t, "h1:old")
-	if _, err := reconcileOnce(t, e.env, e.kind(t, nil)); err != nil {
-		t.Fatal(err)
-	}
-	if len(e.runner.created) != 0 {
-		t.Fatalf("created %v under an approval of another hash", e.runner.created)
+	if c := conditions.Get(e.get(t), infrav1.ApplyJobSucceededCondition); !strings.Contains(c.Message, "module.role.lb") || !strings.HasSuffix(c.Message, cmd) {
+		t.Errorf("the bookkept condition lost the addresses or the command: %q", c.Message)
 	}
 
-	// The approval of this hash starts the apply, with the approval.
-	e.approve(t, e.hash)
+	// The approval starts the apply of exactly that plan.
+	e.approveLive(t)
 	if _, err := reconcileOnce(t, e.env, e.kind(t, nil)); err != nil {
 		t.Fatal(err)
 	}
 	if len(e.runner.created) != 1 {
 		t.Fatalf("created %v, want one approved apply", e.runner.created)
 	}
-	args := sourceArgs(e.jobNamed(t, e.runner.created[0]))
-	if !slices.Contains(args, "--guard-deletes") || !slices.Contains(args, "--inputs-hash="+e.hash) || !slices.Contains(args, "--allow-deletes-hash="+e.hash) {
+	a := e.jobNamed(t, e.runner.created[0])
+	args := sourceArgs(a)
+	if !slices.Contains(args, "--guard-deletes") || !slices.Contains(args, "--inputs-hash="+e.hash) || !slices.Contains(args, "--expect-plan="+bp.Hash) ||
+		slices.ContainsFunc(args, func(a string) bool { return strings.HasPrefix(a, "--allow-deletes-hash") }) {
 		t.Errorf("approved apply args = %v", args)
+	}
+	if a.Annotations[PlanAnnotation] != name {
+		t.Errorf("approved apply annotations = %v", a.Annotations)
+	}
+	if got := e.rec.only(EventPlanApproved); len(got) != 1 || !strings.Contains(got[0].note, "alice") {
+		t.Errorf("PlanApproved = %+v", got)
+	}
+	e.finishRunner(t, a.Name, jobs.Succeeded, t0, planResult(runner.OpApply, nil, ""))
+	e.state.st.InputsHash = e.hash
+	if _, err := reconcileOnce(t, e.env, e.kind(t, nil)); err != nil {
+		t.Fatal(err)
+	}
+	checkPlan(t, e.plan(t, name), infrav1.PlanPhaseApplied, infrav1.PlanAppliedReason, infrav1.PlanApprovedReason)
+	if e.rec.count(EventPlanApplied) != 1 || len(e.runner.created) != 1 {
+		t.Errorf("%d PlanApplied, created %v", e.rec.count(EventPlanApplied), e.runner.created)
 	}
 }
 
 // TestDestructivePlanNewInputs: once the inputs change, the apply runs
-// again (guarded, without an approval: the old one names another hash).
+// again, guarded, and expects no plan: the blocked one was made for other
+// inputs.
 func TestDestructivePlanNewInputs(t *testing.T) {
 	t.Parallel()
 	e := newBlockedEnv(t, "h1:old", false)
 	// The blocked Job rendered other inputs than the current ones.
 	e.jobNamed(t, "b").Annotations[state.InputsHashAnnotation] = "h1:blocked"
-	e.approve(t, "h1:blocked")
 	if _, err := reconcileOnce(t, e.env, e.kind(t, nil)); err != nil {
 		t.Fatal(err)
 	}
@@ -280,8 +271,147 @@ func TestDestructivePlanNewInputs(t *testing.T) {
 		t.Fatalf("created %v, want the apply of the new inputs", e.runner.created)
 	}
 	args := sourceArgs(e.jobNamed(t, e.runner.created[0]))
-	if !slices.Contains(args, "--guard-deletes") || slices.ContainsFunc(args, func(a string) bool { return strings.HasPrefix(a, "--allow-deletes-hash") }) {
+	if !slices.Contains(args, "--guard-deletes") || slices.ContainsFunc(args, func(a string) bool {
+		return strings.HasPrefix(a, "--allow-deletes-hash") || strings.HasPrefix(a, "--expect-plan")
+	}) {
 		t.Errorf("new-inputs apply args = %v, want guarded and unapproved", args)
+	}
+}
+
+// TestDestructiveWaitsAfterMove: clusterctl move carries the plans, not
+// the Jobs. A pending Destructive plan of the current inputs keeps the
+// apply waiting with no blocked Job left, the condition naming the plan
+// and its command; its approval starts the apply of exactly that plan.
+func TestDestructiveWaitsAfterMove(t *testing.T) {
+	t.Parallel()
+	e := newBlockedEnv(t, "h1:old", false)
+	e.runner.jobs = e.runner.jobs[:1] // the successful apply only
+	tp := &infrav1.TerraformPlan{
+		ObjectMeta: metav1.ObjectMeta{Namespace: testNS, Name: "m1-moved", Labels: map[string]string{infrav1.PlanPhaseLabel: string(infrav1.PlanPhasePending)},
+			OwnerReferences: []metav1.OwnerReference{{APIVersion: infrav1.GroupVersion.String(), Kind: state.KindTerraformCluster, Name: testName, UID: "m1-uid", Controller: new(true)}}},
+		Spec: infrav1.TerraformPlanSpec{TargetRef: infrav1.PlanTargetRef{Kind: infrav1.PlanTargetCluster, Name: testName},
+			PlanHash: "p2:moved", InputsHash: e.hash, Reason: infrav1.PlanReasonDestructive, Summary: infrav1.PlanSummary{Delete: new(int32(2))}},
+	}
+	if err := e.c.Create(t.Context(), tp); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		requeue, err := reconcileOnce(t, e.env, e.kind(t, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(e.runner.created) != 0 || requeue != RetryMax {
+			t.Fatalf("created %v, requeue %s; want the apply to wait for the moved plan", e.runner.created, requeue)
+		}
+	}
+	c := conditions.Get(e.get(t), infrav1.ApplyJobSucceededCondition)
+	if c == nil || c.Reason != infrav1.DestructivePlanBlockedReason || !strings.HasPrefix(c.Message, "TerraformPlan m1-moved ") ||
+		!strings.Contains(c.Message, "2 to delete") || !strings.HasSuffix(c.Message, planApproveCommand("m1-moved", testNS)) {
+		t.Fatalf("ApplyJobSucceeded = %+v", c)
+	}
+	if e.rec.count(EventJobFailed) != 0 || e.rec.count(EventDestructivePlanBlocked) != 0 {
+		t.Errorf("%d JobFailed, %d DestructivePlanBlocked for a moved plan's wait", e.rec.count(EventJobFailed), e.rec.count(EventDestructivePlanBlocked))
+	}
+	if e.planRef.Name != "m1-moved" {
+		t.Errorf("status.pendingPlanRef = %+v", e.planRef)
+	}
+	e.approve(t, "m1-moved", "alice")
+	if _, err := reconcileOnce(t, e.env, e.kind(t, nil)); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.runner.created) != 1 || !slices.Contains(sourceArgs(e.jobNamed(t, e.runner.created[0])), "--expect-plan=p2:moved") {
+		t.Fatalf("created %v, want the approved apply", e.runner.created)
+	}
+}
+
+// TestDestructiveBlockedWithoutPlan: a blocked apply that reported no plan
+// leaves nothing to approve: no TerraformPlan, and the apply runs again,
+// guarded, RetryMax after the block.
+func TestDestructiveBlockedWithoutPlan(t *testing.T) {
+	t.Parallel()
+	e := newBlockedEnv(t, "h1:old", false)
+	e.runner.pods["b"] = []corev1.Pod{*podWith(blockedResultOf(nil), "")}
+	requeue, err := reconcileOnce(t, e.env, e.kind(t, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(e.runner.created) != 0 || len(e.plans(t)) != 0 || requeue != RetryMax-5*time.Minute {
+		t.Fatalf("created %v, %d plans, requeue %s; want a wait of what is left of %s", e.runner.created, len(e.plans(t)), requeue, RetryMax)
+	}
+	if c := conditions.Get(e.get(t), infrav1.ApplyJobSucceededCondition); c == nil || c.Reason != infrav1.DestructivePlanBlockedReason ||
+		!strings.Contains(c.Message, "no plan to approve") {
+		t.Errorf("ApplyJobSucceeded = %+v", c)
+	}
+	clk, ok := e.d.Clock.(*testingclock.FakePassiveClock)
+	if !ok {
+		t.Fatalf("clock is %T", e.d.Clock)
+	}
+	clk.SetTime(t0.Add(RetryMax))
+	if _, err := reconcileOnce(t, e.env, e.kind(t, nil)); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.runner.created) != 1 || slices.ContainsFunc(sourceArgs(e.jobNamed(t, e.runner.created[0])), func(a string) bool { return strings.HasPrefix(a, "--expect-plan") }) {
+		t.Fatalf("created %v, want the guarded apply again", e.runner.created)
+	}
+}
+
+// TestDestructiveApprovedApplyOutcomes: an approved apply that fails keeps
+// its plan Approved, and the retry, after the backoff, expects the same
+// plan; one that finds the plan changed fails the plan, and the next
+// guarded apply runs at once, expecting nothing.
+func TestDestructiveApprovedApplyOutcomes(t *testing.T) {
+	t.Parallel()
+	e := newBlockedEnv(t, "h1:old", false)
+	if _, err := reconcileOnce(t, e.env, e.kind(t, nil)); err != nil {
+		t.Fatal(err)
+	}
+	e.syncMarks(t)
+	name := e.approveLive(t)
+	if _, err := reconcileOnce(t, e.env, e.kind(t, nil)); err != nil {
+		t.Fatal(err)
+	}
+	first := e.runner.created[0]
+	step := "apply"
+	e.finishRunner(t, first, jobs.Failed, t0, string(runner.Encode(runner.Result{Version: runner.ResultVersion, Op: runner.OpApply,
+		Error: &runner.Error{Kind: runner.ErrorKindStep, Step: &step, Tail: "Error: quota"}})))
+	requeue, err := reconcileOnce(t, e.env, e.kind(t, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(e.runner.created) != 1 || requeue != RetryBase {
+		t.Fatalf("created %v, requeue %s; want the backoff", e.runner.created, requeue)
+	}
+	checkPlan(t, e.plan(t, name), infrav1.PlanPhaseApproved, infrav1.PlanApprovedReason, infrav1.PlanApprovedReason)
+	clk, ok := e.d.Clock.(*testingclock.FakePassiveClock)
+	if !ok {
+		t.Fatalf("clock is %T", e.d.Clock)
+	}
+	clk.SetTime(t0.Add(RetryBase))
+	if _, err := reconcileOnce(t, e.env, e.kind(t, nil)); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.runner.created) != 2 {
+		t.Fatalf("created %v, want the retry", e.runner.created)
+	}
+	retry := e.jobNamed(t, e.runner.created[1])
+	if !slices.Contains(sourceArgs(retry), "--expect-plan="+blockedPlan().Hash) || retry.Annotations[PlanAnnotation] != name {
+		t.Errorf("retry args %v, annotations %v", sourceArgs(retry), retry.Annotations)
+	}
+
+	other := &runner.Plan{Hash: runner.PlanHash([]string{"module.role.lb|delete,create", "module.role.sg|delete"}), Replace: 1, Delete: 1}
+	e.finishRunner(t, retry.Name, jobs.Failed, t0.Add(RetryBase+time.Minute), planResult(runner.OpApply, other, runner.ErrorKindPlanChanged))
+	if _, err := reconcileOnce(t, e.env, e.kind(t, nil)); err != nil {
+		t.Fatal(err)
+	}
+	checkPlan(t, e.plan(t, name), infrav1.PlanPhaseFailed, infrav1.PlanFailedReason, infrav1.PlanApprovedReason)
+	if got := e.rec.only(EventPlanChanged); len(got) != 1 || !strings.Contains(got[0].note, "the next apply plans again") {
+		t.Errorf("PlanChanged = %+v", got)
+	}
+	if len(e.plans(t)) != 1 {
+		t.Errorf("%d plans: a changed destructive plan makes none until the guard blocks again", len(e.plans(t)))
+	}
+	if len(e.runner.created) != 3 || slices.ContainsFunc(sourceArgs(e.jobNamed(t, e.runner.created[2])), func(a string) bool { return strings.HasPrefix(a, "--expect-plan") }) {
+		t.Fatalf("created %v, want the guarded apply at once", e.runner.created)
 	}
 }
 
@@ -346,7 +476,7 @@ func TestDestructiveRemediationBlocked(t *testing.T) {
 		!strings.HasPrefix(c.Message, summary) || !strings.Contains(c.Message, "b was blocked") {
 		t.Errorf("DriftDetected = %+v", c)
 	}
-	e.approve(t, e.hash)
+	e.approveLive(t)
 	if _, err := reconcileOnce(t, e.env, e.kind(t, remediate)); err != nil {
 		t.Fatal(err)
 	}
@@ -357,31 +487,39 @@ func TestDestructiveRemediationBlocked(t *testing.T) {
 		t.Errorf("DriftRemediationStarted = %+v", got)
 	}
 	j := e.jobNamed(t, e.runner.created[0])
-	if j.Annotations[RemediationAnnotation] != "true" || !slices.Contains(sourceArgs(j), "--allow-deletes-hash="+e.hash) {
+	if j.Annotations[RemediationAnnotation] != "true" || !slices.Contains(sourceArgs(j), "--expect-plan="+blockedPlan().Hash) {
 		t.Errorf("remediation Job = %v %v", j.Annotations, sourceArgs(j))
 	}
 }
 
 // TestBlockedCondition proves applyDestroyCondition, for a blocked Job,
 // sets ApplyJobSucceeded False/DestructivePlanBlocked with the blocked
-// summary and the exact approve command, and keeps the approve command even
-// when the Job's result is gone (bookkept).
+// summary and the command that approves the TerraformPlan of its plan,
+// keeps the command when the Job's result is gone (bookkept, its plan
+// hash recorded), and says so when the Job reported no plan.
 func TestBlockedCondition(t *testing.T) {
 	t.Parallel()
 	b := job("b", jobs.OpApply, jobs.Failed, t0)
 	b.Annotations = map[string]string{state.InputsHashAnnotation: "h1:x"}
 	m := machine()
-	res := &jobs.Result{Error: &runner.Error{Kind: runner.ErrorKindBlocked, Tail: blockedSummaryText}}
-	c := applyDestroyCondition(finished{job: &b, blocked: true, result: res}, state.KindTerraformCluster, m)
-	want := "Job b: " + blockedSummaryText + ". Nothing was applied, and no apply of these inputs runs until they are approved. " +
-		"To apply it, approve inputs hash h1:x: kubectl annotate terraformcluster m1 -n team-a captf.io/approve-destructive-plan=h1:x --overwrite"
+	res := &jobs.Result{Plan: &runner.Plan{Hash: "p2:x"}, Error: &runner.Error{Kind: runner.ErrorKindBlocked, Tail: blockedSummaryText}}
+	c := applyDestroyCondition(finished{job: &b, blocked: true, result: res}, m)
+	name := planName(testName, "b", "p2:x")
+	want := "Job b: " + blockedSummaryText + ". Nothing was applied, and no apply of these inputs runs until its plan is approved. " +
+		"To apply it, approve TerraformPlan " + name + ": " + planApproveCommand(name, testNS)
 	if c.Status != metav1.ConditionFalse || c.Reason != infrav1.DestructivePlanBlockedReason || c.Message != want || !namesJob(c.Message, "b") {
 		t.Errorf("condition = %+v", c)
 	}
 	// Without its result (bookkept, condition lost) the command remains.
-	c = applyDestroyCondition(finished{job: &b, blocked: true, bookkept: true}, state.KindTerraformCluster, m)
-	if c.Reason != infrav1.DestructivePlanBlockedReason || !strings.Contains(c.Message, "approve-destructive-plan=h1:x --overwrite") {
+	b.Annotations[PlanHashAnnotation] = "p2:x"
+	c = applyDestroyCondition(finished{job: &b, blocked: true, bookkept: true}, m)
+	if c.Reason != infrav1.DestructivePlanBlockedReason || !strings.HasSuffix(c.Message, planApproveCommand(name, testNS)) {
 		t.Errorf("bookkept condition = %+v", c)
+	}
+	delete(b.Annotations, PlanHashAnnotation)
+	c = applyDestroyCondition(finished{job: &b, blocked: true, result: &jobs.Result{Error: res.Error}}, m)
+	if !strings.Contains(c.Message, "no plan to approve") || strings.Contains(c.Message, "kubectl") {
+		t.Errorf("condition without a plan = %+v", c)
 	}
 }
 
@@ -463,15 +601,16 @@ func TestBlockedRetryAfterFailedApply(t *testing.T) {
 			if limit != nil && !slices.Contains(e.runner.deleted, "f") {
 				t.Fatalf("the failed Job was not pruned: deleted %v", e.runner.deleted)
 			}
+			name := planName(testName, retry.Name, blockedPlan().Hash)
 			c := conditions.Get(e.get(t), infrav1.ApplyJobSucceededCondition)
 			if c == nil || c.Reason != infrav1.DestructivePlanBlockedReason || !namesJob(c.Message, retry.Name) ||
-				!strings.HasSuffix(c.Message, "="+e.hash+" --overwrite") {
-				t.Fatalf("ApplyJobSucceeded = %+v, want the blocked retry approving %s", c, e.hash)
+				!strings.HasSuffix(c.Message, planApproveCommand(name, testNS)) {
+				t.Fatalf("ApplyJobSucceeded = %+v, want the blocked retry's plan %s", c, name)
 			}
-			e.approve(t, e.hash)
+			e.approve(t, name, "alice")
 			approved := e.startsApply(t, machineIn())
-			if args := sourceArgs(approved); !slices.Contains(args, "--allow-deletes-hash="+e.hash) {
-				t.Errorf("approved retry args = %v", args)
+			if args := sourceArgs(approved); !slices.Contains(args, "--expect-plan="+blockedPlan().Hash) || approved.Annotations[PlanAnnotation] != name {
+				t.Errorf("approved retry args = %v, annotations %v", args, approved.Annotations)
 			}
 		})
 	}
@@ -499,8 +638,12 @@ func TestBlockedEditAfterFailedApply(t *testing.T) {
 	if _, err := reconcileOnce(t, e.env, e.kind(t, nil)); err != nil {
 		t.Fatal(err)
 	}
+	name := planName(testName, retry.Name, blockedPlan().Hash)
 	if c := conditions.Get(e.get(t), infrav1.ApplyJobSucceededCondition); c == nil || !namesJob(c.Message, retry.Name) ||
-		!strings.HasSuffix(c.Message, "="+e.hash+" --overwrite") {
-		t.Errorf("ApplyJobSucceeded = %+v, want the blocked retry approving %s", c, e.hash)
+		!strings.HasSuffix(c.Message, planApproveCommand(name, testNS)) {
+		t.Errorf("ApplyJobSucceeded = %+v, want the blocked retry's plan %s", c, name)
+	}
+	if p := e.plan(t, name); p.Spec.InputsHash != e.hash || phaseOf(p) != infrav1.PlanPhasePending {
+		t.Errorf("the retry's plan = %+v", p)
 	}
 }

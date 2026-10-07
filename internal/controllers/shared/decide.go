@@ -75,6 +75,11 @@ type Decision struct {
 	// apply waits for, or applies once approved (recorded on its Job as
 	// PlanAnnotation); "" when none.
 	Plan string
+	// AllowDeletes is the approval hash an approved apply of a change of
+	// the cluster's exports may delete and replace resources under
+	// (--allow-deletes-hash): the approved ExportsChange TerraformPlan's
+	// inputs hash; "" for every other decision.
+	AllowDeletes string
 	// PlanFlow is true for every decision of a gated apply (applyPolicy
 	// Manual): its plan Job, the wait for the approval, the approved apply,
 	// or their backoff.
@@ -140,7 +145,9 @@ type JobsView struct {
 	LastApplyFailed bool
 	// BlockedHash is the inputs hash of the newest finished apply Job when
 	// the runner blocked it before a destructive plan; "" otherwise.
+	// BlockedAt is when that Job finished.
 	BlockedHash string
+	BlockedAt   time.Time
 	// BlockedApproval is that blocked Job's approval hash when it is a
 	// pool apply guarded for a change of the cluster's exports
 	// (ApprovalHashAnnotation); "" otherwise.
@@ -192,12 +199,9 @@ type DecideInput struct {
 	// Created is the object's creation time: the drift base when neither a
 	// drift check nor a successful apply is known (after clusterctl move).
 	Created time.Time
-	// ApprovedHash is the object's captf.io/approve-destructive-plan
-	// annotation: the hash approved for a destructive plan.
-	ApprovedHash string
-	// ApprovalHash is the hash an approval of the current inputs must
-	// name when it is not their inputs hash: a pool apply guarded for a
-	// change of the cluster's exports (Guard.ApprovalHash). "" means
+	// ApprovalHash is the hash a TerraformPlan of the current inputs is
+	// made for when it is not their inputs hash: a pool apply guarded for
+	// a change of the cluster's exports (Guard.ApprovalHash). "" means
 	// State.CurrentHash, as for a cluster.
 	ApprovalHash string
 	// Unheld is true when a pool's guarded apply cannot fall back to the
@@ -254,11 +258,16 @@ const ReasonDeletionHeld = "DeletionHeld"
 // → Refresh; health check due → Refresh; drift due → Drift; else requeue
 // at the next deadline. A failed op is retried only after its backoff.
 //
-// An apply whose newest attempt was blocked before a destructive plan does
-// not start again for the same inputs hash until ApprovedHash names it (or
-// ApprovalHash, a pool's): it waits (at most RetryMax,
-// DestructivePlanBlocked) for new inputs or the approval, which re-trigger
-// the reconcile. A blocked remediation (the state's own inputs) keeps the
+// An apply whose plan deletes or replaces resources is blocked by the
+// runner, and its plan becomes a TerraformPlan (Destructive, or a pool's
+// ExportsChange). While that plan, of the current inputs hash (or
+// ApprovalHash, a pool's), is live and not approved, no apply starts: it
+// waits (at most RetryMax, DestructivePlanBlocked) for new inputs or the
+// approval, which re-trigger the reconcile, also when no Job is left
+// (after clusterctl move). Once it is approved, the apply runs with
+// ExpectPlan (Destructive) or AllowDeletes (ExportsChange). A blocked
+// apply that left no plan to approve is tried again RetryMax after the
+// block. A blocked remediation (the state's own inputs) keeps the
 // refresh, health and drift schedule; a blocked input change pauses them,
 // as a backoff does. A pool whose change of the cluster's exports was
 // blocked does not wait: its inputs render the held exports (Guard.Held),
@@ -327,10 +336,12 @@ func decide(in DecideInput) (Decision, string) {
 			return dec, ""
 		}
 		waiting, plan = ReasonPlanAwaitingApproval, dec.Plan
-	case apply != "" && in.applyBlocked():
-		waiting = ReasonDestructivePlanBlocked
 	case apply != "":
-		return in.job(jobs.OpApply, apply), ""
+		dec, wait := in.approvedRetry(apply)
+		if !wait {
+			return dec, ""
+		}
+		waiting, plan = ReasonDestructivePlanBlocked, dec.Plan
 	}
 	if waiting != "" && (!in.State.Exists || in.State.CurrentHash != in.State.InputsHash) {
 		// A waiting input change pauses checks like a backoff: refresh and
@@ -438,23 +449,57 @@ func (in DecideInput) gatedApply(apply string) (Decision, bool) {
 	return dec, false
 }
 
+// approvedRetry decides an apply (reason apply) under applyPolicy
+// Automatic, against the live TerraformPlan of a destructive plan of the
+// same inputs (Destructive, or a pool's ExportsChange, whose inputs hash
+// is the approval hash): wait (true) while it is not approved; once it is,
+// the apply of exactly that plan (ExpectPlan), or of that change with its
+// deletes allowed (AllowDeletes). Without such a plan, an apply whose
+// newest attempt was blocked for the same inputs (applyBlocked) left
+// nothing to approve: it runs again RetryMax after the block, and the
+// guard reports its plan then. Any other apply runs. Applies back off like
+// any op. The decision names the plan it waits for or applies. It returns
+// the Decision and whether the caller must wait instead.
+func (in DecideInput) approvedRetry(apply string) (Decision, bool) {
+	want := cmp.Or(in.ApprovalHash, in.State.CurrentHash)
+	if p := in.Plan; p != nil && want != "" && p.Reason != infrav1.PlanReasonManual && p.InputsHash == want {
+		if !p.Approved {
+			return Decision{Plan: p.Name}, true
+		}
+		dec := in.job(jobs.OpApply, apply)
+		dec.Plan = p.Name
+		switch {
+		case dec.Action != ActionJob:
+		case p.Reason == infrav1.PlanReasonExportsChange:
+			dec.AllowDeletes = p.InputsHash
+		default:
+			dec.ExpectPlan = p.PlanHash
+		}
+		return dec, false
+	}
+	if in.applyBlocked() {
+		if wait := in.Jobs.BlockedAt.Add(RetryMax).Sub(in.Now); wait > 0 {
+			return Decision{RequeueAfter: wait, Reason: ReasonDestructivePlanBlocked}, false
+		}
+	}
+	return in.job(jobs.OpApply, apply), false
+}
+
 // applyBlocked reports whether the apply would render the inputs hash whose
-// newest apply was blocked before a destructive plan, without an approval
-// of it (ApprovalHash, else that inputs hash). Only mutable kinds compute
-// the current hash. The cluster's applies are guarded, and a pool's that
-// render a change of the cluster's exports; a pool whose change is blocked
-// renders the held exports instead, so its current hash moves off the
-// blocked one and it keeps applying. A pool that cannot hold them
-// (Unheld) waits like a cluster, for as long as its approval hash is the
-// blocked one's: a bootstrap rotation moves the inputs hash, not what the
-// approval names, and re-running the blocked plan for it would only block
-// again.
+// newest apply was blocked before a destructive plan. Only mutable kinds
+// compute the current hash. The cluster's applies are guarded, and a
+// pool's that render a change of the cluster's exports; a pool whose
+// change is blocked renders the held exports instead, so its current hash
+// moves off the blocked one and it keeps applying. A pool that cannot
+// hold them (Unheld) is blocked for as long as its approval hash is the
+// blocked one's: a bootstrap rotation moves the inputs hash, not the
+// approval hash.
 func (in DecideInput) applyBlocked() bool {
 	if a := in.Jobs.BlockedApproval; in.Unheld && a != "" && in.ApprovalHash != "" {
-		return a == in.ApprovalHash && in.ApprovedHash != a
+		return a == in.ApprovalHash
 	}
 	b := in.Jobs.BlockedHash
-	return b != "" && in.State.CurrentHash == b && in.ApprovedHash != cmp.Or(in.ApprovalHash, b)
+	return b != "" && in.State.CurrentHash == b
 }
 
 // base is what a periodic check's interval counts from: its own last run,

@@ -197,16 +197,18 @@ func TestTransitionFor(t *testing.T) {
 }
 
 // TestBlockedPoolApplyNote: the Warning of a pool apply guarded for the
-// cluster's exports names its approval hash and does not claim the plan
-// is for the exports: after a change was partly applied, every apply is
-// guarded, a rotation's or version roll's too.
+// cluster's exports names the TerraformPlan its plan became and the
+// command that approves it, and does not claim the plan is for the
+// exports: after a change was partly applied, every apply is guarded, a
+// rotation's or version roll's too.
 func TestBlockedPoolApplyNote(t *testing.T) {
 	t.Parallel()
 	j := job("a2", jobs.OpApply, jobs.Failed, t0)
 	j.Annotations = map[string]string{ApprovalHashAnnotation: "h2:a", ClusterOutputsHashAnnotation: "h2:e"}
-	bk := &Bookkeeping{byName: map[string]finished{"a2": {job: &j, blocked: true}}}
+	bk := &Bookkeeping{byName: map[string]finished{"a2": {job: &j, blocked: true}}, madePlans: map[string]string{"a2": "p1-0123456789"}}
 	tr := jobOutcome(*cond(infrav1.ApplyJobSucceededCondition, metav1.ConditionFalse, infrav1.DestructivePlanBlockedReason, "Job a2: x"), "a2", bk)
-	if !strings.Contains(tr.note, "approve hash h2:a") || strings.Contains(tr.note, "The plan is for the cluster's exports") {
+	if !strings.HasSuffix(tr.note, "TerraformPlan p1-0123456789 waits for approval: "+planApproveCommand("p1-0123456789", testNS)) ||
+		strings.Contains(tr.note, "The plan is for the cluster's exports") {
 		t.Errorf("note = %q", tr.note)
 	}
 }

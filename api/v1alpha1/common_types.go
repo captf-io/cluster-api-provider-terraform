@@ -430,10 +430,9 @@ const (
 	RunErrorKindInterrupted RunErrorKind = "interrupted"
 	// RunErrorKindBlocked means a TerraformCluster apply, or a
 	// TerraformMachinePool apply of a change of the cluster's exports,
-	// stopped before a plan that deletes or replaces resources, because the
-	// captf.io/approve-destructive-plan annotation does not name its hash
-	// (the cluster's inputs hash; the pool's approval hash). Nothing was
-	// changed.
+	// stopped before a plan that deletes or replaces resources that no
+	// approved TerraformPlan covers. Nothing was changed; the plan waits for
+	// its approval as a TerraformPlan.
 	RunErrorKindBlocked RunErrorKind = "blocked"
 	// RunErrorKindPlanChanged means an apply approved for one plan (an
 	// approved TerraformPlan) planned other changes and stopped before

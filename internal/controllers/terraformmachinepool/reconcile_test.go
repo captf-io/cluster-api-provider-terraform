@@ -147,7 +147,8 @@ func TestReconcile(t *testing.T) {
 		p.Status.LastRefresh, p.Status.LastDriftCheck = &now, &now
 	})
 	s := scheme(t)
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(world(tmp)...).WithStatusSubresource(&infrav1.TerraformMachinePool{}).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(world(tmp)...).WithStatusSubresource(&infrav1.TerraformMachinePool{}, &infrav1.TerraformPlan{}).
+		WithIndex(&infrav1.TerraformPlan{}, shared.PlanTargetIndex, shared.PlanTargetIndexer).Build()
 	sr := &stateReader{}
 	sr.set(t, state.KindTerraformCluster, "c1", clusterState(`{}`, `[{"name":"az-1","control_plane":true,"attributes":{}}]`))
 	runner := &fakeRunner{}
@@ -239,7 +240,8 @@ func TestReconcileWritesBackReplicas(t *testing.T) {
 		}
 	}
 	s := scheme(t)
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).WithStatusSubresource(&infrav1.TerraformMachinePool{}).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).WithStatusSubresource(&infrav1.TerraformMachinePool{}, &infrav1.TerraformPlan{}).
+		WithIndex(&infrav1.TerraformPlan{}, shared.PlanTargetIndex, shared.PlanTargetIndexer).Build()
 	sr := &stateReader{}
 	sr.set(t, state.KindTerraformCluster, "c1", clusterState(`{}`, ""))
 	runner := &fakeRunner{}
