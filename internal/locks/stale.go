@@ -58,6 +58,21 @@ type Status struct {
 	HolderPodExists bool
 }
 
+// validLockID reports whether id has the shape of a lock ID Terraform and
+// OpenTofu make (a UUID): 8 to 64 hex digits and dashes, not starting
+// with a dash, so it can never be read as a flag nor bloat the Job.
+func validLockID(id string) bool {
+	if len(id) < 8 || len(id) > 64 || id[0] == '-' {
+		return false
+	}
+	for _, r := range id {
+		if !strings.ContainsRune("0123456789abcdefABCDEF-", r) {
+			return false
+		}
+	}
+	return true
+}
+
 // Stale reports whether the lock is held by a pod that no longer exists.
 func (s Status) Stale() bool {
 	return s.Held && s.Holder != "" && !s.HolderPodExists
@@ -90,6 +105,12 @@ func Check(ctx context.Context, c client.Reader, namespace, suffix string, ours 
 		if i := strings.LastIndex(info.Who, "@"); i >= 0 && ours(info.Who[i+1:]) {
 			st.Holder = info.Who[i+1:]
 		}
+	}
+	if !validLockID(st.LockID) {
+		// The Lease is writable by every module of the namespace: an ID
+		// that is not one the runtimes make (a UUID) never reaches a
+		// force-unlock argument.
+		st.LockID, st.Holder = "", ""
 	}
 	if st.Holder == "" {
 		// Holder unknown or not ours: never considered stale.

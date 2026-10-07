@@ -65,13 +65,13 @@ func TestCheckLockLogs(t *testing.T) {
 		verbosity int
 		want      []string
 	}{
-		{name: "stale at LogFlow", who: "runner@" + deadPod, verbosity: LogFlow, want: []string{"force-unlocks it", `lockID="lock-1"`, `holderPod="` + deadPod + `"`}},
+		{name: "stale at LogFlow", who: "runner@" + deadPod, verbosity: LogFlow, want: []string{"force-unlocks it", `lockID="9f1c0c5e-0000-4000-8000-000000000001"`, `holderPod="` + deadPod + `"`}},
 		{name: "stale is quiet at V0", who: "runner@" + deadPod, verbosity: 0},
-		{name: "foreign at V0", who: "steven@laptop", verbosity: 0, want: []string{"something other than this object's runner", `lockID="lock-1"`, `holder="steven@laptop"`}},
+		{name: "foreign at V0", who: "steven@laptop", verbosity: 0, want: []string{"something other than this object's runner", `lockID="9f1c0c5e-0000-4000-8000-000000000001"`, `holder="steven@laptop"`}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			lease, suffix := lockLease(t, "lock-1", tt.who)
+			lease, suffix := lockLease(t, "9f1c0c5e-0000-4000-8000-000000000001", tt.who)
 			e := newEnv(t, world(machine(withFinalizer, notPaused), lease)...)
 			logger, u := capture(t, tt.verbosity)
 			bk := &Bookkeeping{}
@@ -101,11 +101,11 @@ func TestForeignLockLeaseError(t *testing.T) {
 		},
 	}).Build()
 	logger, u := capture(t, 0)
-	msg := foreignLock(klog.NewContext(t.Context(), logger), c, testNS, "s", "lock-1")
-	if msg != "The state lock lock-1 is held by something other than this object's runner" {
+	msg := foreignLock(klog.NewContext(t.Context(), logger), c, testNS, "s", "9f1c0c5e-0000-4000-8000-000000000001")
+	if msg != "The state lock 9f1c0c5e-0000-4000-8000-000000000001 is held by something other than this object's runner" {
 		t.Errorf("description = %q", msg)
 	}
-	if got := u.GetBuffer().String(); !strings.Contains(got, "apiserver unavailable") || !strings.Contains(got, `lockID="lock-1"`) {
+	if got := u.GetBuffer().String(); !strings.Contains(got, "apiserver unavailable") || !strings.Contains(got, `lockID="9f1c0c5e-0000-4000-8000-000000000001"`) {
 		t.Errorf("log %s lacks the Lease error", got)
 	}
 }

@@ -160,6 +160,20 @@ func TestCheck(t *testing.T) {
 	}
 }
 
+// TestCheckForgedLockID proves a lock ID no runtime makes (one shaped as
+// a flag, or oversized), which a module with the runner's rights on
+// Leases can write, is never stale and never offered for force-unlock,
+// whatever its Who claims.
+func TestCheckForgedLockID(t *testing.T) {
+	t.Parallel()
+	for _, id := range []string{"-help", strings.Repeat("a", 65), "not-hex!"} {
+		st := check(t, lease(lockID, `{"ID":"`+id+`","Who":"runner@`+pod+`"}`))
+		if !st.Held || st.Stale() || st.LockID != "" || st.Holder != "" {
+			t.Errorf("ID %q: Status = %+v, Stale %v; want held, unknown and not stale", id, st, st.Stale())
+		}
+	}
+}
+
 // fixtureDir is the backend fixture directory owned by internal/state; it
 // is shared so the real captures exist once.
 const fixtureDir = "../state/testdata/fixtures"
@@ -264,7 +278,7 @@ func TestCheckErrors(t *testing.T) {
 	boom := errors.New("boom")
 	failGet := func(kind string) client.Client {
 		return fake.NewClientBuilder().WithScheme(clientgoscheme.Scheme).
-			WithObjects(lease(lockID, `{"ID":"x","Who":"u@`+pod+`"}`)).
+			WithObjects(lease(lockID, `{"ID":"`+lockID+`","Who":"u@`+pod+`"}`)).
 			WithInterceptorFuncs(interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
 				if _, isPod := obj.(*corev1.Pod); isPod == (kind == "pod") {
 					return boom

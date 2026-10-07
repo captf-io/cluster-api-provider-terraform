@@ -677,10 +677,10 @@ func TestStateLockedVisible(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	holder := "lock-1"
+	holder := "9f1c0c5e-0000-4000-8000-000000000001"
 	lease := &coordinationv1.Lease{
 		ObjectMeta: metav1.ObjectMeta{Namespace: testNS, Name: state.LeaseName(suffix), Annotations: map[string]string{
-			locks.LockInfoAnnotation: `{"ID":"lock-1","Who":"steven@laptop","Operation":"OperationTypeApply","Created":"2026-09-25T11:00:00Z"}`,
+			locks.LockInfoAnnotation: `{"ID":"9f1c0c5e-0000-4000-8000-000000000001","Who":"steven@laptop","Operation":"OperationTypeApply","Created":"2026-09-25T11:00:00Z"}`,
 		}},
 		Spec: coordinationv1.LeaseSpec{HolderIdentity: &holder},
 	}
