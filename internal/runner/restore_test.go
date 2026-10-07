@@ -197,6 +197,12 @@ func TestManagedAddresses(t *testing.T) {
 	if n := ManagedAddresses([]byte(out)); n != 5 {
 		t.Errorf("ManagedAddresses = %d, want 5", n)
 	}
+	// A line longer than any scanner buffer still counts, and the ones
+	// after it too.
+	long := "aws_instance.x[\"" + strings.Repeat("k", 2<<20) + "\"]\naws_instance.y\n"
+	if n := ManagedAddresses([]byte(long)); n != 2 {
+		t.Errorf("ManagedAddresses with a 2 MiB address = %d, want 2", n)
+	}
 }
 
 // TestStepsRestore checks Steps' restore sequence (init, force-unlock,

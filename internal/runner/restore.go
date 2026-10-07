@@ -17,7 +17,6 @@ limitations under the License.
 package runner
 
 import (
-	"bufio"
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
@@ -93,13 +92,13 @@ func assembleRestore(configDir, workDir string, n, maxBytes int) error {
 
 // ManagedAddresses returns the count of managed resource instances in out,
 // `state list` output: one address per line, data sources (a data. segment
-// after the module path) excluded.
+// after the module path) excluded. out is in memory already, so no line
+// is too long to count: a bufio.Scanner stopped at its buffer's limit, and
+// a state with one long address read as "no managed resources".
 func ManagedAddresses(out []byte) int {
 	n := 0
-	sc := bufio.NewScanner(bytes.NewReader(out))
-	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
-	for sc.Scan() {
-		addr := strings.TrimSpace(sc.Text())
+	for line := range strings.Lines(string(out)) {
+		addr := strings.TrimSpace(line)
 		if addr == "" {
 			continue
 		}
