@@ -1,0 +1,54 @@
+# Copyright 2026 The CAPTF Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Read access to every CAPTF kind, aggregated into the built-in view, edit
+# and admin ClusterRoles (edit and admin include view). Includes
+# terraformplans and the cluster-scoped TerraformClusterIdentity, which a
+# namespaced binding cannot reach.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: viewer-role
+  labels:
+    rbac.authorization.k8s.io/aggregate-to-view: "true"
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"
+    rbac.authorization.k8s.io/aggregate-to-admin: "true"
+rules:
+- apiGroups:
+  - infrastructure.cluster.x-k8s.io
+  resources:
+  - terraformclusters
+  - terraformclustertemplates
+  - terraformmachines
+  - terraformmachinetemplates
+  - terraformmachinepools
+  - terraformmachinepooltemplates
+  - terraformclusteridentities
+  - terraformplans
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - infrastructure.cluster.x-k8s.io
+  resources:
+  - terraformclusters/status
+  - terraformclustertemplates/status
+  - terraformmachines/status
+  - terraformmachinetemplates/status
+  - terraformmachinepools/status
+  - terraformclusteridentities/status
+  - terraformplans/status
+  verbs:
+  - get

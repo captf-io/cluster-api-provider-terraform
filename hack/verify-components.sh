@@ -215,6 +215,26 @@ else:
     want.add(("events.k8s.io", "events", "create"))
     if rule_set(runner) != want:
         fail(f"ClusterRole/captf-runner: rules {sorted(rule_set(runner))}, want {sorted(want)}")
+# User-facing roles: approving a plan (update on terraformplans) is the
+# approver's alone; it must never reach edit or admin by aggregation, and the
+# aggregated editor must not touch plans or identities.
+approver = cluster_roles.get("captf-plan-approver-role")
+editor = cluster_roles.get("captf-editor-role")
+viewer = cluster_roles.get("captf-viewer-role")
+for n, r in (("captf-plan-approver-role", approver), ("captf-editor-role", editor), ("captf-viewer-role", viewer)):
+    if r is None:
+        fail(f"ClusterRole {n} is missing")
+if approver is not None:
+    if any(k.startswith("rbac.authorization.k8s.io/aggregate-to-") for k in labels(approver)):
+        fail("ClusterRole/captf-plan-approver-role: must not aggregate into any built-in role")
+    if ("infrastructure.cluster.x-k8s.io", "terraformplans", "update") not in rule_set(approver):
+        fail("ClusterRole/captf-plan-approver-role: lacks update on terraformplans")
+if editor is not None:
+    if any(res.startswith(("terraformplans", "terraformclusteridentities")) for (_, res, _) in rule_set(editor)):
+        fail("ClusterRole/captf-editor-role: must grant nothing on terraformplans or terraformclusteridentities")
+if viewer is not None:
+    if any(v not in ("get", "list", "watch") for (_, _, v) in rule_set(viewer)):
+        fail("ClusterRole/captf-viewer-role: must be read-only")
 manager = cluster_roles.get("captf-manager-role")
 if manager is None:
     fail("ClusterRole captf-manager-role is missing")

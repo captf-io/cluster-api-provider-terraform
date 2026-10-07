@@ -25,3 +25,8 @@ resources:
 - leader_election_role_binding.yaml
 # The static runner ClusterRole, bound per namespace by the manager.
 - runner_clusterrole.yaml
+# User-facing roles: viewer and editor aggregate into the built-in view,
+# edit and admin; plan-approver deliberately does not.
+- viewer_clusterrole.yaml
+- editor_clusterrole.yaml
+- plan_approver_clusterrole.yaml
