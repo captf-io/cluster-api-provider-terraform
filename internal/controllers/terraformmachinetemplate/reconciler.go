@@ -90,7 +90,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 	defer func() {
 		// The messages quote image labels and registry errors.
 		captfconds.ClampMessages(t)
-		if err := helper.Patch(ctx, t, patch.WithOwnedConditions{Conditions: []string{infrav1.CapacityResolvedCondition, infrav1.VariablesValidCondition}}); err != nil {
+		// A template has no finalizer: one deleted during the pass has no
+		// status left to write.
+		err := helper.Patch(ctx, t, patch.WithOwnedConditions{Conditions: []string{infrav1.CapacityResolvedCondition, infrav1.VariablesValidCondition}})
+		if err = client.IgnoreNotFound(err); err != nil {
 			reterr = kerrors.NewAggregate([]error{reterr, fmt.Errorf("patch: %w", err)})
 		}
 	}()
