@@ -43,14 +43,6 @@ rules:
   - list
   - watch
 - apiGroups:
-  - ""
-  - events.k8s.io
-  resources:
-  - events
-  verbs:
-  - create
-  - patch
-- apiGroups:
   - authentication.k8s.io
   resources:
   - tokenreviews
@@ -111,6 +103,13 @@ rules:
   - list
   - update
   - watch
+- apiGroups:
+  - events.k8s.io
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
 - apiGroups:
   - infrastructure.cluster.x-k8s.io
   resources:

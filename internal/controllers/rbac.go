@@ -47,8 +47,8 @@ package controllers
 // +kubebuilder:rbac:groups=batch,resources=jobs/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list
 
-// Events, legacy core and events.k8s.io/v1.
-// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// Events, through events.k8s.io/v1 only (mgr.GetEventRecorder); the legacy
+// core events API is not used.
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 
 // Secured diagnostics endpoint.
