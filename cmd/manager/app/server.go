@@ -250,30 +250,7 @@ func setup(ctx context.Context, getConfig func() *rest.Config, opts *options.Opt
 		return nil, fmt.Errorf("add variables cache: %w", err)
 	}
 	deps.VariablesCache = varCache
-	if err := (&terraformcluster.Reconciler{Deps: deps}).SetupWithManager(ctx, mgr,
-		controller.Options{MaxConcurrentReconciles: opts.TerraformClusterConcurrency}); err != nil {
-		return nil, err
-	}
-	if err := (&terraformmachine.Reconciler{Deps: deps}).SetupWithManager(ctx, mgr,
-		controller.Options{MaxConcurrentReconciles: opts.TerraformMachineConcurrency}); err != nil {
-		return nil, err
-	}
-	if err := (&terraformmachinetemplate.Reconciler{Deps: deps}).SetupWithManager(mgr,
-		controller.Options{MaxConcurrentReconciles: opts.TerraformMachineTemplateConcurrency}); err != nil {
-		return nil, err
-	}
-	if err := (&terraformmachinepool.Reconciler{Deps: deps}).SetupWithManager(ctx, mgr,
-		controller.Options{MaxConcurrentReconciles: opts.TerraformMachinePoolConcurrency}); err != nil {
-		return nil, err
-	}
-	// Status only (Ready, status.namespaces); the source Secret is re-read
-	// every terraformclusteridentity.DefaultRequeueAfter.
-	if err := (&terraformclusteridentity.Reconciler{
-		Client:      mgr.GetClient(),
-		APIReader:   mgr.GetAPIReader(),
-		WatchFilter: opts.WatchFilter,
-		Recorder:    deps.Recorder,
-	}).SetupWithManager(mgr, controller.Options{}); err != nil {
+	if err := setupReconcilers(ctx, mgr, opts, deps); err != nil {
 		return nil, err
 	}
 	if err := mgr.Add(sweep.New(mgr, opts.SyncPeriod, opts.Namespace)); err != nil {
@@ -288,6 +265,40 @@ func setup(ctx context.Context, getConfig func() *rest.Config, opts *options.Opt
 	}
 
 	return mgr, nil
+}
+
+// setupReconcilers registers every controller with mgr, using ctx to build
+// their watches: the TerraformCluster, TerraformMachine,
+// TerraformMachineTemplate, TerraformMachinePool and
+// TerraformClusterIdentity reconcilers, with deps and the concurrency and
+// watch-filter settings of opts. It is split from setup so a test can
+// start the controllers against a fake cache and see which informers their
+// watches request. It returns the first registration error.
+func setupReconcilers(ctx context.Context, mgr ctrl.Manager, opts *options.Options, deps shared.Deps) error {
+	if err := (&terraformcluster.Reconciler{Deps: deps}).SetupWithManager(ctx, mgr,
+		controller.Options{MaxConcurrentReconciles: opts.TerraformClusterConcurrency}); err != nil {
+		return err
+	}
+	if err := (&terraformmachine.Reconciler{Deps: deps}).SetupWithManager(ctx, mgr,
+		controller.Options{MaxConcurrentReconciles: opts.TerraformMachineConcurrency}); err != nil {
+		return err
+	}
+	if err := (&terraformmachinetemplate.Reconciler{Deps: deps}).SetupWithManager(mgr,
+		controller.Options{MaxConcurrentReconciles: opts.TerraformMachineTemplateConcurrency}); err != nil {
+		return err
+	}
+	if err := (&terraformmachinepool.Reconciler{Deps: deps}).SetupWithManager(ctx, mgr,
+		controller.Options{MaxConcurrentReconciles: opts.TerraformMachinePoolConcurrency}); err != nil {
+		return err
+	}
+	// Status only (Ready, status.namespaces); the source Secret is re-read
+	// every terraformclusteridentity.DefaultRequeueAfter.
+	return (&terraformclusteridentity.Reconciler{
+		Client:      mgr.GetClient(),
+		APIReader:   mgr.GetAPIReader(),
+		WatchFilter: opts.WatchFilter,
+		Recorder:    deps.Recorder,
+	}).SetupWithManager(mgr, controller.Options{})
 }
 
 // newDeps builds the reconcilers' shared dependencies from the started
