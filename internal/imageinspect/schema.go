@@ -18,12 +18,15 @@ package imageinspect
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
 
 	"github.com/captf-io/cluster-api-provider-terraform/internal/varschema"
 )
@@ -154,15 +157,32 @@ func (c *SchemaCache) Schema(ctx context.Context, insp Inspector, namespace, ref
 	}
 	cfg, err := insp.Config(ctx, ref, keychain, DefaultPlatform())
 	if err != nil {
-		c.mu.Lock()
-		if len(c.failed) >= maxSchemaEntries {
-			c.failed = map[string]failure{}
+		if cacheableFailure(ctx, err) {
+			c.mu.Lock()
+			if len(c.failed) >= maxSchemaEntries {
+				c.failed = map[string]failure{}
+			}
+			c.failed[refKey(namespace, ref)] = failure{err: err, expires: c.now().Add(SchemaFailureTTL)}
+			c.mu.Unlock()
 		}
-		c.failed[refKey(namespace, ref)] = failure{err: err, expires: c.now().Add(SchemaFailureTTL)}
-		c.mu.Unlock()
 		return nil, err
 	}
 	return c.Remember(namespace, ref, cfg)
+}
+
+// cacheableFailure reports whether err, from a read of an image config
+// under ctx, is the registry's answer for every reader of the namespace,
+// which SchemaFailureTTL may then repeat. The caller's own deadline or
+// cancellation is not (the admission webhook's 2s budget would otherwise
+// make every controller skip the variables check for a minute), nor is an
+// authorization refusal, which depends on the pull Secrets of the object
+// that read it.
+func cacheableFailure(ctx context.Context, err error) bool {
+	if ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return false
+	}
+	var terr *transport.Error
+	return !errors.As(err, &terr) || (terr.StatusCode != http.StatusUnauthorized && terr.StatusCode != http.StatusForbidden)
 }
 
 // SchemaOf returns the variables schema in cfg's labels: nil with a nil

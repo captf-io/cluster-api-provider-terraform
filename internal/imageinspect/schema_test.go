@@ -19,11 +19,13 @@ package imageinspect
 import (
 	"context"
 	"errors"
+	"net/http"
 	"testing"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
 
 	"github.com/captf-io/cluster-api-provider-terraform/internal/varschema"
 )
@@ -88,6 +90,46 @@ func TestSchemaCache(t *testing.T) {
 	}
 	if c.String() == "" {
 		t.Error("String is empty")
+	}
+}
+
+// TestSchemaCacheTransientFailures: the caller's own deadline or
+// cancellation and an authorization refusal are not remembered, so the
+// next reader (the controllers after the webhook's short budget, an
+// object with the right pull Secret) reads the registry again; a registry
+// answer that holds for every reader, a missing image, is.
+func TestSchemaCacheTransientFailures(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name   string
+		ctx    func() context.Context
+		err    error
+		cached bool
+	}{
+		{"deadline", context.Background, context.DeadlineExceeded, false},
+		{"caller canceled", func() context.Context {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			return ctx
+		}, errors.New("request canceled"), false},
+		{"unauthorized", context.Background, &transport.Error{StatusCode: http.StatusUnauthorized}, false},
+		{"forbidden", context.Background, &transport.Error{StatusCode: http.StatusForbidden}, false},
+		{"not found", context.Background, &transport.Error{StatusCode: http.StatusNotFound}, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			c := NewSchemaCache()
+			insp := &countingInspector{err: tt.err}
+			if _, err := c.Schema(tt.ctx(), insp, "ns", "img:v1", nil); err == nil {
+				t.Fatal("no error")
+			}
+			if _, err := c.Schema(context.Background(), insp, "ns", "img:v1", nil); err == nil {
+				t.Fatal("no error on the second read")
+			}
+			if read := insp.calls == 2; read == tt.cached {
+				t.Errorf("registry calls = %d, want the failure cached %v", insp.calls, tt.cached)
+			}
+		})
 	}
 }
 
