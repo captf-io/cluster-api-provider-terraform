@@ -671,9 +671,9 @@ func (bk *Bookkeeping) applyDestroy(ctx context.Context, d Deps, k Kind, done []
 	switch {
 	case newest != nil && newest.bookkept && prev != nil && namesJob(prev.Message, newest.job.Name):
 		// Its pod was read when it finished; the condition says so already.
-		bk.ApplyJob = *prev
+		bk.ApplyJob = deletingBlocked(*prev, obj)
 	case newest != nil:
-		bk.ApplyJob = applyDestroyCondition(*newest, obj)
+		bk.ApplyJob = deletingBlocked(applyDestroyCondition(*newest, obj), obj)
 	case prev != nil && leaseWaitEvents[prev.Reason] == "":
 		// No retained Job: keep what was reported (it is never Unknown once
 		// an apply completed). A lease wait is over once bookkeeping runs
@@ -731,6 +731,35 @@ func applyDestroyCondition(f finished, obj client.Object) metav1.Condition {
 			c.Message += ": " + rs[0]
 		}
 	}
+	return c
+}
+
+// deletingBlocked returns c, the ApplyJobSucceeded condition of a blocked
+// apply or of an approved apply that found its plan changed, unchanged
+// unless obj is being deleted: the destroy needs no approval, so the
+// approve command is replaced by saying so, as the pool's deletingCondition
+// does. Its reason stays.
+func deletingBlocked(c metav1.Condition, obj client.Object) metav1.Condition {
+	if obj.GetDeletionTimestamp().IsZero() {
+		return c
+	}
+	var lead string
+	var found bool
+	switch c.Reason {
+	case infrav1.DestructivePlanBlockedReason:
+		lead, _, found = strings.Cut(c.Message, ". Nothing was applied")
+		lead += ". Nothing of it was applied"
+	case infrav1.PlanChangedReason:
+		// The approve text follows the Job's own message once a plan waits.
+		lead, _, _ = strings.Cut(c.Message, ". TerraformPlan ")
+		found = true
+	default:
+		return c
+	}
+	if !found {
+		return c
+	}
+	c.Message = lead + ". The object is being deleted, so no apply runs and its plan needs no approval"
 	return c
 }
 

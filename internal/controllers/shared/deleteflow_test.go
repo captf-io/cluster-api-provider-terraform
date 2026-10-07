@@ -18,6 +18,7 @@ package shared
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -202,9 +203,9 @@ func TestReconcileDeleteAwaitingApproval(t *testing.T) {
 
 // TestReconcileDeleteBlockedCondition: once a deletion starts the destroy of
 // an object whose destructive apply was blocked, ApplyJobSucceeded no
-// longer tells the user that no apply runs until the plan is approved.
+// longer tells the user to approve the plan; it says the object is being
+// deleted, keeping the DestructivePlanBlocked reason and the addresses.
 func TestReconcileDeleteBlockedCondition(t *testing.T) {
-	t.Skip("bug: ApplyJobSucceeded keeps DestructivePlanBlocked (\"approve TerraformPlan X to apply it\") while the delete's destroy Job runs; applyDestroyCondition reports the newest finished apply and the running destroy replaces it only when it finishes")
 	t.Parallel()
 	e := newBlockedEnv(t, "h1:old", false)
 	if _, err := reconcileOnce(t, e.env, e.kind(t, nil)); err != nil {
@@ -214,7 +215,48 @@ func TestReconcileDeleteBlockedCondition(t *testing.T) {
 	if _, err := reconcileOnce(t, e.env, e.kind(t, nil)); err != nil {
 		t.Fatal(err)
 	}
-	if c := conditions.Get(e.get(t), infrav1.ApplyJobSucceededCondition); c != nil && c.Reason == infrav1.DestructivePlanBlockedReason {
-		t.Errorf("ApplyJobSucceeded = %+v, want no approval wait while the destroy runs", c)
+	c := conditions.Get(e.get(t), infrav1.ApplyJobSucceededCondition)
+	switch {
+	case c == nil || c.Reason != infrav1.DestructivePlanBlockedReason:
+		t.Errorf("ApplyJobSucceeded = %+v, want DestructivePlanBlocked kept", c)
+	case strings.Contains(c.Message, "kubectl") || strings.Contains(c.Message, "To apply it"):
+		t.Errorf("message = %q, still tells the user to approve", c.Message)
+	case !strings.Contains(c.Message, "module.role.lb") || !strings.Contains(c.Message, "being deleted"):
+		t.Errorf("message = %q, want the addresses and the deletion", c.Message)
+	}
+}
+
+// TestReconcileDeletePlanChangedCondition: an approved apply that found its
+// plan changed leaves PlanChanged with the approve command of the new plan;
+// once the object is deleted the condition keeps its reason and Job but no
+// longer tells the user to approve.
+func TestReconcileDeletePlanChangedCondition(t *testing.T) {
+	t.Parallel()
+	e := newPlanEnv(t, "h1:old")
+	e.reconcile(t, nil)
+	planJob := e.newest(t)
+	p1 := &runner.Plan{Hash: runner.PlanHash([]string{"module.role.lb|update"}), Update: 1, Resources: []string{"module.role.lb (update)"}}
+	e.finishRunner(t, planJob, jobs.Succeeded, t0.Add(-30*time.Minute), planResult(runner.OpPlan, p1, ""))
+	e.reconcile(t, nil)
+	e.approve(t, e.plans(t)[0].Name, "alice")
+	e.reconcile(t, nil)
+	apply := e.newest(t)
+	p2 := &runner.Plan{Hash: runner.PlanHash([]string{"module.role.sg|delete"}), Delete: 1, Resources: []string{"module.role.sg (delete)"}}
+	e.finishRunner(t, apply, jobs.Failed, t0.Add(-20*time.Minute), planResult(runner.OpApply, p2, runner.ErrorKindPlanChanged))
+	e.reconcile(t, nil)
+	if c := planApplyReason(t, e); c == nil || c.Reason != infrav1.PlanChangedReason || !strings.Contains(c.Message, "kubectl") {
+		t.Fatalf("ApplyJobSucceeded = %+v, want PlanChanged with the approve command", c)
+	}
+
+	e.deleteObject(t)
+	e.reconcile(t, nil)
+	c := planApplyReason(t, e)
+	switch {
+	case c == nil || c.Reason != infrav1.PlanChangedReason:
+		t.Errorf("ApplyJobSucceeded = %+v, want PlanChanged kept", c)
+	case strings.Contains(c.Message, "kubectl") || strings.Contains(c.Message, "approved: "):
+		t.Errorf("message = %q, still tells the user to approve", c.Message)
+	case !strings.HasPrefix(c.Message, "Job "+apply+": ") || !strings.Contains(c.Message, "being deleted"):
+		t.Errorf("message = %q, want Job %s and the deletion", c.Message, apply)
 	}
 }
