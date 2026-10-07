@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -184,5 +185,64 @@ func TestFallbackTotalDeadline(t *testing.T) {
 	}
 	if insp.deadlines[0].After(before.Add(Timeout + time.Second)) {
 		t.Errorf("deadline %s is later than one Timeout from the start", insp.deadlines[0])
+	}
+}
+
+// proxiedTransport returns a guarded transport, for allowPrivate, that sends
+// every request to proxyURL, resolving destination names through hosts.
+func proxiedTransport(allowPrivate bool, proxyURL string, hosts map[string]string) http.RoundTripper {
+	u, _ := url.Parse(proxyURL)
+	return newTransport(allowPrivate,
+		func(req *http.Request) (*url.URL, error) {
+			if req.URL.Hostname() == "direct.example" { // as NO_PROXY would
+				return nil, nil
+			}
+			return u, nil
+		},
+		func(_ context.Context, host string) ([]netip.Addr, error) {
+			a, ok := hosts[host]
+			if !ok {
+				return nil, errors.New("no such host")
+			}
+			return []netip.Addr{netip.MustParseAddr(a)}, nil
+		})
+}
+
+// TestTransportProxy proves that behind a proxy the destination is checked
+// before the hand-off: a name resolving to a private address is denied and
+// never reaches the proxy, a public one goes through the proxy even though
+// the proxy itself is on loopback, allowPrivate lifts the check, and a
+// request the proxy function excludes (NO_PROXY) is dialed directly under
+// the dial-time check.
+func TestTransportProxy(t *testing.T) {
+	t.Parallel()
+	var viaProxy atomic.Int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		viaProxy.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(proxy.Close)
+	hosts := map[string]string{"public.example": "8.8.8.8", "internal.example": "10.1.2.3", "direct.example": "127.0.0.1"}
+	get := func(rt http.RoundTripper, host string) error {
+		req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+host+"/v2/", http.NoBody)
+		resp, err := rt.RoundTrip(req)
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+		return err
+	}
+	rt := proxiedTransport(false, proxy.URL, hosts)
+	if err := get(rt, "internal.example"); !errors.Is(err, ErrEgressDenied) || viaProxy.Load() != 0 {
+		t.Errorf("private destination: err = %v, proxy hits = %d", err, viaProxy.Load())
+	}
+	if err := get(rt, "public.example"); err != nil || viaProxy.Load() != 1 {
+		t.Errorf("public destination: err = %v, proxy hits = %d", err, viaProxy.Load())
+	}
+	if err := get(proxiedTransport(true, proxy.URL, hosts), "internal.example"); err != nil || viaProxy.Load() != 2 {
+		t.Errorf("allow-private: err = %v, proxy hits = %d", err, viaProxy.Load())
+	}
+	// Excluded from the proxy: a direct dial to loopback, refused at dial time.
+	if err := get(rt, "direct.example"); err == nil || viaProxy.Load() != 2 {
+		t.Errorf("NO_PROXY destination: err = %v, proxy hits = %d", err, viaProxy.Load())
 	}
 }
