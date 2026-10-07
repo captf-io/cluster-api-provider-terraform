@@ -295,6 +295,7 @@ func setupReconcilers(ctx context.Context, mgr ctrl.Manager, opts *options.Optio
 	// every terraformclusteridentity.DefaultRequeueAfter.
 	return (&terraformclusteridentity.Reconciler{
 		Client:      mgr.GetClient(),
+		Cache:       mgr.GetCache(),
 		APIReader:   mgr.GetAPIReader(),
 		WatchFilter: opts.WatchFilter,
 		Recorder:    deps.Recorder,

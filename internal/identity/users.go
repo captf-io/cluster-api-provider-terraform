@@ -86,6 +86,17 @@ func FirstUser(ctx context.Context, reader client.Reader, name string) (client.O
 	return users[0], nil
 }
 
+// UsedInNamespace reports whether a TerraformCluster, TerraformMachine or
+// TerraformMachinePool in namespace ns uses the identity name, as Users
+// defines use, reading through reader with ctx. Every List is scoped to
+// ns, so reader may be the manager's cache: a machine's or pool's
+// TerraformCluster and CAPI Cluster are in its own namespace. It returns
+// an error from a failed list.
+func UsedInNamespace(ctx context.Context, reader client.Reader, name, ns string) (bool, error) {
+	users, err := findUsers(ctx, reader, name, true, client.InNamespace(ns))
+	return len(users) > 0, err
+}
+
 // Users returns every TerraformCluster, TerraformMachine and
 // TerraformMachinePool that uses the identity name, as FirstUser defines
 // use, bounded by ctx and read through reader. A machine or pool counts
@@ -100,14 +111,14 @@ func Users(ctx context.Context, reader client.Reader, name string) ([]client.Obj
 	return findUsers(ctx, reader, name, false)
 }
 
-// findUsers implements FirstUser (firstOnly) and Users, listing through
-// reader with ctx and looking for users of the identity name. With
-// firstOnly it stops at the first. It returns the users found, or an error
-// from a failed list.
-func findUsers(ctx context.Context, reader client.Reader, name string, firstOnly bool) ([]client.Object, error) {
+// findUsers implements FirstUser (firstOnly), Users and UsedInNamespace,
+// listing through reader with ctx and opts and looking for users of the
+// identity name. With firstOnly it stops at the first. It returns the
+// users found, or an error from a failed list.
+func findUsers(ctx context.Context, reader client.Reader, name string, firstOnly bool, opts ...client.ListOption) ([]client.Object, error) {
 	var out []client.Object
 	clusters := &infrav1.TerraformClusterList{}
-	if err := reader.List(ctx, clusters); err != nil {
+	if err := reader.List(ctx, clusters, opts...); err != nil {
 		return nil, fmt.Errorf("identity: list TerraformClusters: %w", err)
 	}
 	for i := range clusters.Items {
@@ -119,15 +130,15 @@ func findUsers(ctx context.Context, reader client.Reader, name string, firstOnly
 		}
 	}
 	machines := &infrav1.TerraformMachineList{}
-	if err := reader.List(ctx, machines); err != nil {
+	if err := reader.List(ctx, machines, opts...); err != nil {
 		return nil, fmt.Errorf("identity: list TerraformMachines: %w", err)
 	}
 	pools := &infrav1.TerraformMachinePoolList{}
-	if err := reader.List(ctx, pools); err != nil {
+	if err := reader.List(ctx, pools, opts...); err != nil {
 		return nil, fmt.Errorf("identity: list TerraformMachinePools: %w", err)
 	}
 	ix := IndexClusters(clusters.Items)
-	byRef, err := indexByInfrastructureRef(ctx, reader, clusters.Items)
+	byRef, err := indexByInfrastructureRef(ctx, reader, clusters.Items, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -162,12 +173,12 @@ func findUsers(ctx context.Context, reader client.Reader, name string, firstOnly
 
 // indexByInfrastructureRef maps each CAPI Cluster, by namespace and name, to
 // the TerraformCluster in tcs that its spec.infrastructureRef names,
-// reading Clusters through reader with ctx. It returns a ClusterIndex keyed
+// reading Clusters through reader with ctx and opts. It returns a ClusterIndex keyed
 // like IndexClusters, nil when CAPI Clusters cannot be listed at all (CRD
 // absent or type unregistered), and an error from any other failed list.
-func indexByInfrastructureRef(ctx context.Context, reader client.Reader, tcs []infrav1.TerraformCluster) (ClusterIndex, error) {
+func indexByInfrastructureRef(ctx context.Context, reader client.Reader, tcs []infrav1.TerraformCluster, opts ...client.ListOption) (ClusterIndex, error) {
 	list := &clusterv1.ClusterList{}
-	if err := reader.List(ctx, list); err != nil {
+	if err := reader.List(ctx, list, opts...); err != nil {
 		if meta.IsNoMatchError(err) || runtime.IsNotRegisteredError(err) {
 			return nil, nil
 		}

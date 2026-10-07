@@ -24,6 +24,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
+	"github.com/captf-io/cluster-api-provider-terraform/internal/identity"
+	"github.com/captf-io/cluster-api-provider-terraform/internal/inputs"
+	"github.com/captf-io/cluster-api-provider-terraform/internal/manager"
 )
 
 // IdentityIndex indexes TerraformClusters, TerraformMachines and
@@ -103,9 +106,27 @@ func PoolVariablesSourceIndexer(o client.Object) []string {
 	return VariablesSourceKeys(mp.Spec.VariablesFrom)
 }
 
+// MirrorIdentityIndex indexes the metadata of credential mirror Secrets
+// (manager.SecretMeta) by the identity they mirror, for the identity
+// controller's status.namespaces.
+const MirrorIdentityIndex = "captf.mirrorIdentity"
+
+// MirrorIdentityIndexer returns the identity o mirrors: the
+// inputs.IdentityAnnotation value of a Secret labeled
+// identity.MirroredLabel=true; nothing for any other object. The mirror's
+// name is left for the reader to check.
+func MirrorIdentityIndexer(o client.Object) []string {
+	name := o.GetAnnotations()[inputs.IdentityAnnotation]
+	if o.GetLabels()[identity.MirroredLabel] != "true" || name == "" {
+		return nil
+	}
+	return []string{name}
+}
+
 // SetupIndexes registers the field indexes on mgr, using ctx; call it
 // before the controllers start. Templates are not indexed: they run
-// nothing. It returns any error registering an index.
+// nothing. Indexing a type starts its informer, so a Secret index must be
+// on manager.SecretMeta: a typed one would cache every payload. It returns any error registering an index.
 func SetupIndexes(ctx context.Context, mgr ctrl.Manager) error {
 	for _, ix := range []struct {
 		obj   client.Object
@@ -119,6 +140,8 @@ func SetupIndexes(ctx context.Context, mgr ctrl.Manager) error {
 		{&infrav1.TerraformMachinePool{}, IdentityIndex, PoolIdentityIndexer},
 		{&infrav1.TerraformMachinePool{}, VariablesSourceIndex, PoolVariablesSourceIndexer},
 		{&infrav1.TerraformPlan{}, PlanTargetIndex, PlanTargetIndexer},
+		// Metadata only: the informer the managed-Secret watches share.
+		{manager.SecretMeta(), MirrorIdentityIndex, MirrorIdentityIndexer},
 	} {
 		if err := mgr.GetFieldIndexer().IndexField(ctx, ix.obj, ix.field, ix.fn); err != nil {
 			return fmt.Errorf("index %T by %s: %w", ix.obj, ix.field, err)

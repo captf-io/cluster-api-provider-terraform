@@ -27,8 +27,9 @@ limitations under the License.
 // scope), sets Ready to SecretFound or SecretNotFound accordingly, and
 // requeues periodically (Reconciler.RequeueAfter, defaulting to
 // DefaultRequeueAfter) so a Secret created or deleted out of band is
-// noticed without a watch. Reconciler.SetupWithManager also watches
-// credential mirror Secrets and maps a changed mirror back to its identity
-// with MirrorToIdentity, so status.namespaces stays current as mirrors
-// come and go.
+// noticed without a watch. Reconciler.SetupWithManager also watches the
+// metadata of credential mirror Secrets and maps a changed mirror back to
+// its identity with MirrorToIdentity, so status.namespaces stays current
+// as mirrors come and go. The mirrors and the objects using the identity
+// are read from the manager's cache (Reconciler.Cache), never listed live.
 package terraformclusteridentity

@@ -41,6 +41,7 @@ import (
 	"github.com/captf-io/cluster-api-provider-terraform/internal/controllers/shared"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/identity"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/inputs"
+	"github.com/captf-io/cluster-api-provider-terraform/internal/manager"
 )
 
 // idName is the name of the TerraformClusterIdentity every test fixture
@@ -77,15 +78,17 @@ func sourceSecret() *corev1.Secret {
 	return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "captf-system", Name: "creds"}}
 }
 
-// mirror returns a credential mirror Secret in namespace ns for the
-// identity named idn.
-func mirror(ns, idn string) *corev1.Secret {
-	return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+// mirror returns the metadata of a credential mirror Secret in namespace
+// ns for the identity named idn, as the manager's cache holds it.
+func mirror(ns, idn string) *metav1.PartialObjectMetadata {
+	m := manager.SecretMeta()
+	m.ObjectMeta = metav1.ObjectMeta{
 		Namespace:   ns,
 		Name:        identity.MirrorName(idn),
 		Labels:      map[string]string{identity.MirroredLabel: "true"},
 		Annotations: map[string]string{inputs.IdentityAnnotation: idn},
-	}}
+	}
+	return m
 }
 
 // user returns a TerraformMachine in namespace ns that uses the identity
@@ -97,44 +100,70 @@ func user(ns string) *infrav1.TerraformMachine {
 	}
 }
 
+// errLiveList is what the live readers of an env return for any List: the
+// mirrors and users must be read from the cache.
+var errLiveList = errors.New("live List: mirrors and users must come from the cache")
+
+// failList is an interceptor that fails every List with errLiveList.
+var failList = interceptor.Funcs{
+	List: func(context.Context, client.WithWatch, client.ObjectList, ...client.ListOption) error {
+		return errLiveList
+	},
+}
+
+// newCache builds the fake manager cache of an env: objs (mirrors and the
+// identity's users) with the MirrorIdentityIndex the manager registers on
+// the mirrors' metadata. The fake client stores only typed objects, so a
+// mirror's metadata is stored as a Secret without data; the reconciler
+// still lists it as metadata. t fails the test on setup error. It
+// returns the built client.
+func newCache(t *testing.T, objs ...client.Object) client.Client {
+	t.Helper()
+	typed := make([]client.Object, 0, len(objs))
+	for _, o := range objs {
+		if m, ok := o.(*metav1.PartialObjectMetadata); ok {
+			o = &corev1.Secret{ObjectMeta: *m.ObjectMeta.DeepCopy()}
+		}
+		typed = append(typed, o)
+	}
+	return fake.NewClientBuilder().WithScheme(scheme(t)).WithObjects(typed...).
+		WithIndex(manager.SecretMeta(), shared.MirrorIdentityIndex, shared.MirrorIdentityIndexer).Build()
+}
+
 // env is a Reconciler wired to fake clients, for a test to reconcile
 // against and inspect.
 type env struct {
 	r       *Reconciler
 	c       client.Client
+	cache   client.Client
 	patches *atomic.Int32
 }
 
-// newEnv builds an env with objs (plus a fixed testIdentity) in the main
-// client and source, if non-nil, in the API reader only, so Ready can only
-// be True if the source was read through it; t fails the test on setup
-// error. It returns the built env.
+// newEnv builds an env with objs (mirrors and users) in the cache only,
+// a fixed testIdentity in the main client, and source, if non-nil, in the
+// API reader only, so Ready can only be True if the source was read
+// through it. Both live readers fail every List, so status.namespaces can
+// only come from the cache. t fails the test on setup error. It returns
+// the built env.
 func newEnv(t *testing.T, source *corev1.Secret, objs ...client.Object) env {
 	t.Helper()
 	s := scheme(t)
 	patches := &atomic.Int32{}
+	funcs := failList
+	funcs.SubResourcePatch = func(ctx context.Context, c client.Client, sub string, o client.Object, p client.Patch, opts ...client.SubResourcePatchOption) error {
+		patches.Add(1)
+		return c.SubResource(sub).Patch(ctx, o, p, opts...)
+	}
 	c := fake.NewClientBuilder().WithScheme(s).
-		WithObjects(append([]client.Object{testIdentity()}, objs...)...).
+		WithObjects(testIdentity()).
 		WithStatusSubresource(&infrav1.TerraformClusterIdentity{}).
-		WithInterceptorFuncs(interceptor.Funcs{
-			SubResourcePatch: func(ctx context.Context, c client.Client, sub string, o client.Object, p client.Patch, opts ...client.SubResourcePatchOption) error {
-				patches.Add(1)
-				return c.SubResource(sub).Patch(ctx, o, p, opts...)
-			},
-		}).Build()
-	rb := fake.NewClientBuilder().WithScheme(s)
+		WithInterceptorFuncs(funcs).Build()
+	rb := fake.NewClientBuilder().WithScheme(s).WithInterceptorFuncs(failList)
 	if source != nil {
 		rb = rb.WithObjects(source)
 	}
-	for _, o := range objs {
-		// The reader finds the identity's users, so it holds those objects.
-		if _, ok := o.(*corev1.Secret); !ok {
-			if oc, ok := o.DeepCopyObject().(client.Object); ok {
-				rb = rb.WithObjects(oc)
-			}
-		}
-	}
-	return env{r: &Reconciler{Client: c, APIReader: rb.Build(), RequeueAfter: time.Minute}, c: c, patches: patches}
+	cache := newCache(t, objs...)
+	return env{r: &Reconciler{Client: c, Cache: cache, APIReader: rb.Build(), RequeueAfter: time.Minute}, c: c, cache: cache, patches: patches}
 }
 
 // reconcile runs one Reconcile of e's fixed identity, failing t on error,
@@ -165,7 +194,8 @@ func TestReconcileSecretFound(t *testing.T) {
 		mirror("team-b", idName), mirror("team-a", idName), mirror("team-c", "other"), deleting,
 		user("team-a"), user("team-b"), user("team-c"), user("team-z"),
 		// Not a mirror: labeled wrong.
-		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "team-d", Name: "x", Annotations: map[string]string{inputs.IdentityAnnotation: idName}}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "team-d", Name: identity.MirrorName(idName), Annotations: map[string]string{inputs.IdentityAnnotation: idName}}},
+		user("team-d"),
 	)
 	res, got := e.reconcile(t)
 	if res.RequeueAfter != time.Minute {
@@ -198,7 +228,7 @@ func TestReconcileMigratesSourceOwnerRef(t *testing.T) {
 	}}
 	c := fake.NewClientBuilder().WithScheme(scheme(t)).WithObjects(testIdentity(), src).
 		WithStatusSubresource(&infrav1.TerraformClusterIdentity{}).Build()
-	r := &Reconciler{Client: c, APIReader: c}
+	r := &Reconciler{Client: c, Cache: newCache(t), APIReader: c}
 	if _, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKey{Name: idName}}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
@@ -327,7 +357,7 @@ func TestReconcileMirrorRemoved(t *testing.T) {
 	if _, got := e.reconcile(t); !slices.Equal(got.Status.Namespaces, []string{"team-a"}) {
 		t.Fatalf("namespaces = %v", got.Status.Namespaces)
 	}
-	if err := e.c.Delete(t.Context(), m); err != nil {
+	if err := e.cache.Delete(t.Context(), m); err != nil {
 		t.Fatal(err)
 	}
 	if _, got := e.reconcile(t); len(got.Status.Namespaces) != 0 {

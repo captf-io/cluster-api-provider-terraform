@@ -58,10 +58,15 @@ const DefaultRequeueAfter = 5 * time.Minute
 
 // Reconciler sets a TerraformClusterIdentity's status.
 type Reconciler struct {
-	// Client reads identities and lists mirror Secrets by label (the
-	// manager's default client reads Secrets live; manager.UncachedObjects),
-	// and writes status.
+	// Client reads identities, updates the source Secret's ownerRefs and
+	// writes status.
 	Client client.Client
+	// Cache lists mirror Secrets as metadata (shared.MirrorIdentityIndex)
+	// and the identity's users in their namespaces: the manager's cache
+	// (mgr.GetCache()), so a mirror event costs no API request. The
+	// default client cannot serve these lists: it reads Secrets live, even
+	// as metadata (manager.UncachedObjects).
+	Cache client.Reader
 	// APIReader reads the source Secret. It must be uncached: the Secret is
 	// unlabeled and usually outside the manager's cache scope.
 	APIReader client.Reader
@@ -79,8 +84,10 @@ type Reconciler struct {
 // SetupWithManager registers the controller with mgr, applying opts to the
 // underlying controller: identities (spec changes) and the metadata of
 // mirror Secrets, mapped to their identity through
-// inputs.IdentityAnnotation. It returns an error if the controller could
-// not be built.
+// inputs.IdentityAnnotation. Every mirror event passes, ownerRef changes
+// included: they change which namespaces use the identity, and the queue
+// collapses a burst into one reconcile per identity. It returns an error
+// if the controller could not be built.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager, opts controller.Options) error {
 	err := ctrl.NewControllerManagedBy(mgr).
 		For(&infrav1.TerraformClusterIdentity{}, builder.WithPredicates(
@@ -205,35 +212,32 @@ func (r *Reconciler) emitReady(id *infrav1.TerraformClusterIdentity, prev *metav
 // identity named name, using ctx for the reads. A namespace counts only when
 // it holds the Secret named identity.MirrorName(name), labeled and annotated
 // as a mirror of name, and an object in it uses the identity
-// (identity.Users); the delete webhook refuses deletion on this list, so a
-// Secret anyone can create must not be able to pin it. Annotations cannot be
-// selected on, so every mirror is listed and filtered. It returns that
-// namespace list, or an error from a read.
+// (identity.UsedInNamespace); the delete webhook refuses deletion on this
+// list, so a Secret anyone can create must not be able to pin it. Both
+// reads go through r.Cache: the mirrors' metadata by MirrorIdentityIndex,
+// then the users of each mirror's namespace. It returns that namespace
+// list, or an error from a read.
 func (r *Reconciler) mirrorNamespaces(ctx context.Context, name string) ([]string, error) {
-	secrets := &corev1.SecretList{}
-	if err := r.Client.List(ctx, secrets, client.MatchingLabels{identity.MirroredLabel: "true"}); err != nil {
+	secrets := &metav1.PartialObjectMetadataList{}
+	secrets.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("SecretList"))
+	if err := r.Cache.List(ctx, secrets, client.MatchingFields{shared.MirrorIdentityIndex: name}); err != nil {
 		return nil, fmt.Errorf("terraformclusteridentity: list mirrors: %w", err)
 	}
 	mirrorName := identity.MirrorName(name)
 	var out []string
 	for i := range secrets.Items {
 		s := &secrets.Items[i]
-		if s.Name == mirrorName && s.Annotations[inputs.IdentityAnnotation] == name && s.DeletionTimestamp.IsZero() {
+		if s.Name != mirrorName || s.Annotations[inputs.IdentityAnnotation] != name || !s.DeletionTimestamp.IsZero() {
+			continue
+		}
+		used, err := identity.UsedInNamespace(ctx, r.Cache, name, s.Namespace)
+		if err != nil {
+			return nil, fmt.Errorf("terraformclusteridentity: find users of %s in %s: %w", name, s.Namespace, err)
+		}
+		if used {
 			out = append(out, s.Namespace)
 		}
 	}
-	if len(out) == 0 {
-		return nil, nil
-	}
-	users, err := identity.Users(ctx, r.APIReader, name)
-	if err != nil {
-		return nil, fmt.Errorf("terraformclusteridentity: find users of %s: %w", name, err)
-	}
-	using := make(map[string]bool, len(users))
-	for _, u := range users {
-		using[u.GetNamespace()] = true
-	}
-	out = slices.DeleteFunc(out, func(ns string) bool { return !using[ns] })
 	slices.Sort(out)
 	return slices.Compact(out), nil
 }

@@ -136,3 +136,22 @@ func TestIdentitySpecChanged(t *testing.T) {
 		t.Error("create or delete is dropped")
 	}
 }
+
+// TestMirrorIdentityIndexer proves MirrorIdentityIndexer keys a mirror's
+// metadata by the identity it mirrors, and indexes nothing for a Secret
+// that lacks the mirror label or the identity annotation.
+func TestMirrorIdentityIndexer(t *testing.T) {
+	t.Parallel()
+	if got := MirrorIdentityIndexer(testMirror()); !slices.Equal(got, []string{"fleet"}) {
+		t.Errorf("mirror = %v, want [fleet]", got)
+	}
+	unlabeled := testMirror()
+	delete(unlabeled.Labels, identity.MirroredLabel)
+	unannotated := testMirror()
+	unannotated.Annotations = nil
+	for name, o := range map[string]*metav1.PartialObjectMetadata{"unlabeled": unlabeled, "unannotated": unannotated} {
+		if got := MirrorIdentityIndexer(o); got != nil {
+			t.Errorf("%s = %v, want none", name, got)
+		}
+	}
+}
