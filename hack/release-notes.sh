@@ -20,7 +20,7 @@
 #   summary   the pre-alpha status, the API version, the module contract
 #             (internal/contract) and the Cluster API contract
 #             (metadata.yaml), all read at the tag
-#   Install   the clusterctl provider config and `clusterctl init`
+#   Install   `clusterctl init` with the hosted captf.io/clusterctl.yaml
 #   Images    both images with :VERSION and their digests
 #   Verify    cosign and `gh attestation verify`
 #   Changes   the commit subjects since the previous tag, without merge
@@ -106,21 +106,13 @@ printf '%s release of Cluster API Provider Terraform: the `infrastructure.cluste
 cat <<EOF
 ### Install
 
-Register the provider with \`clusterctl\` (CAPTF is not a built-in provider), then initialize it:
-
-\`\`\`yaml
-# clusterctl.yaml
-providers:
-- name: terraform
-  type: InfrastructureProvider
-  url: https://github.com/${repo}/releases/${version}/infrastructure-components.yaml
-\`\`\`
+CAPTF is not a built-in \`clusterctl\` provider: register it with the hosted config, [captf.io/clusterctl.yaml](https://captf.io/clusterctl.yaml), and initialize this release:
 
 \`\`\`sh
-clusterctl init --config clusterctl.yaml --infrastructure terraform:${version}
+clusterctl init --config https://captf.io/clusterctl.yaml --infrastructure terraform:${version}
 \`\`\`
 
-See the [installation guide](https://captf.io/docs/operator-guide/installation.html) for the prerequisites and what the install creates.
+See the [installation guide](https://captf.io/docs/operator-guide/installation/) for the prerequisites, what the install creates, and how to use your own \`clusterctl\` config instead.
 
 ### Images
 

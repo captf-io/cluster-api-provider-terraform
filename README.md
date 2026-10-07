@@ -43,13 +43,15 @@ what is implemented.
 ## Using it
 
 ```sh
-CLUSTER_TOPOLOGY=true clusterctl init --config clusterctl.yaml --infrastructure terraform
+CLUSTER_TOPOLOGY=true clusterctl init --config https://captf.io/clusterctl.yaml --infrastructure terraform
 clusterctl generate yaml --from templates/identity.yaml | kubectl apply -f -
 tfcapi-lint module . --role machine --strict
-clusterctl generate cluster my-cluster --infrastructure terraform --target-namespace team-a | kubectl apply -f -
+clusterctl generate cluster my-cluster --config https://captf.io/clusterctl.yaml \
+  --infrastructure terraform --target-namespace team-a | kubectl apply -f -
 ```
 
-The [quick start](https://captf.io/docs/getting-started/quick-start.html)
+CAPTF is not a built-in `clusterctl` provider; [captf.io/clusterctl.yaml](https://captf.io/clusterctl.yaml)
+registers it. The [quick start](https://captf.io/docs/getting-started/quick-start.html)
 walks through each step, including building and pushing module images.
 
 ## Images
