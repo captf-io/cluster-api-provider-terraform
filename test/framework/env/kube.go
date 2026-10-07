@@ -172,11 +172,10 @@ func (k *kube) ManagerImage(ctx context.Context) (string, error) {
 
 // managerPatch returns the strategic merge patch that sets the manager
 // container's image and its CAPTF_MANAGER_IMAGE variable to ref (both
-// lists merge by name, so nothing else changes), and runs one replica: the
-// default install runs two, but the suites assert one manager pod and its
-// stable identity and leader Lease.
+// lists merge by name, so nothing else changes). It leaves the replica
+// count alone, so the suites test the default install's two replicas.
 func managerPatch(ref string) ([]byte, error) {
-	patch := map[string]any{"spec": map[string]any{"replicas": 1, "template": map[string]any{"spec": map[string]any{
+	patch := map[string]any{"spec": map[string]any{"template": map[string]any{"spec": map[string]any{
 		"containers": []any{map[string]any{
 			"name":  managerContainer,
 			"image": ref,
