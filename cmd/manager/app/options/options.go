@@ -89,6 +89,9 @@ type Options struct {
 	TerraformMachineConcurrency         int
 	TerraformMachineTemplateConcurrency int
 	TerraformMachinePoolConcurrency     int
+	// TerraformClusterIdentityConcurrency is how many identities reconcile
+	// at once: each reads its source Secret live.
+	TerraformClusterIdentityConcurrency int
 
 	WebhookPort     int
 	WebhookCertDir  string
@@ -178,6 +181,8 @@ func (o *Options) Flags() cliflag.NamedFlagSets {
 		"Number of TerraformMachineTemplates to process simultaneously")
 	generic.IntVar(&o.TerraformMachinePoolConcurrency, "terraformmachinepool-concurrency", 10,
 		"Number of TerraformMachinePools to process simultaneously")
+	generic.IntVar(&o.TerraformClusterIdentityConcurrency, "terraformclusteridentity-concurrency", 4,
+		"Number of TerraformClusterIdentities to process simultaneously")
 	generic.StringVar(&o.HealthAddr, "health-addr", ":9440", "The address the health endpoint binds to.")
 	generic.StringVar(&o.ProfilerAddress, "profiler-address", "",
 		"Bind address to expose the pprof profiler (e.g. localhost:6060)")
@@ -261,6 +266,7 @@ func (o *Options) Validate() error {
 		"terraformmachine-concurrency":         o.TerraformMachineConcurrency,
 		"terraformmachinetemplate-concurrency": o.TerraformMachineTemplateConcurrency,
 		"terraformmachinepool-concurrency":     o.TerraformMachinePoolConcurrency,
+		"terraformclusteridentity-concurrency": o.TerraformClusterIdentityConcurrency,
 	} {
 		if v < 1 {
 			errs = append(errs, fmt.Errorf("--%s must be at least 1, got %d", name, v))

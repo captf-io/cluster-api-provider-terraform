@@ -302,7 +302,7 @@ func setupReconcilers(ctx context.Context, mgr ctrl.Manager, opts *options.Optio
 		APIReader:   mgr.GetAPIReader(),
 		WatchFilter: opts.WatchFilter,
 		Recorder:    deps.Recorder,
-	}).SetupWithManager(mgr, controller.Options{})
+	}).SetupWithManager(mgr, controller.Options{MaxConcurrentReconciles: opts.TerraformClusterIdentityConcurrency})
 }
 
 // newDeps builds the reconcilers' shared dependencies from the started

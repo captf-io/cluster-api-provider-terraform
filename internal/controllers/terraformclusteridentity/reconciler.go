@@ -62,6 +62,9 @@ const DefaultRequeueAfter = 5 * time.Minute
 // start no Job until Ready is True.
 const NotReadyRequeueAfter = 30 * time.Second
 
+// SourceReadTimeout bounds the live read of an identity's source Secret.
+const SourceReadTimeout = 15 * time.Second
+
 // Reconciler sets a TerraformClusterIdentity's status.
 type Reconciler struct {
 	// Client reads identities, updates the source Secret's ownerRefs and
@@ -148,7 +151,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		Reason:             infrav1.SecretFoundReason,
 		ObservedGeneration: id.Generation,
 	}
-	src, err := identity.SourceSecret(ctx, r.APIReader, id)
+	// A live read: bounded, so an API server that stalls holds a worker for
+	// SourceReadTimeout at most, not until the manager's context ends.
+	readCtx, cancel := context.WithTimeout(ctx, SourceReadTimeout)
+	src, err := identity.SourceSecret(readCtx, r.APIReader, id)
+	cancel()
 	switch {
 	case errors.Is(err, identity.ErrSecretNotFound):
 		ready.Status, ready.Reason, ready.Message = metav1.ConditionFalse, infrav1.SecretNotFoundReason, err.Error()
