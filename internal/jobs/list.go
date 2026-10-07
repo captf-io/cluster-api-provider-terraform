@@ -27,6 +27,7 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
@@ -39,8 +40,8 @@ type Runner interface {
 	// Create sets owner as job's controller and creates it using ctx. It
 	// returns a non-nil error when either step fails.
 	Create(ctx context.Context, owner client.Object, job *batchv1.Job) error
-	// List returns the Jobs of owner whose owner-kind label is ownerKind,
-	// read using ctx.
+	// List returns the Jobs of owner whose owner-kind label is ownerKind
+	// and whose controller is owner (by UID), read using ctx.
 	List(ctx context.Context, owner client.Object, ownerKind string) ([]batchv1.Job, error)
 	// Delete deletes job using ctx, and its pods in the background. It
 	// returns a non-nil error only when deleting job itself fails.
@@ -74,8 +75,11 @@ func (r *clientRunner) Create(ctx context.Context, owner client.Object, job *bat
 	return nil
 }
 
-// List returns the Jobs of owner whose owner-kind label is ownerKind, read
-// through r.c using ctx.
+// List returns the Jobs of owner whose owner-kind label is ownerKind and
+// whose controller is owner, read through r.c using ctx. The labels carry
+// only the owner's name, so a Job of an earlier object of that name, its
+// garbage collection still pending, matches them too: counting it would
+// give the new object that object's attempts, backoff and outcomes.
 func (r *clientRunner) List(ctx context.Context, owner client.Object, ownerKind string) ([]batchv1.Job, error) {
 	var list batchv1.JobList
 	if err := r.c.List(ctx, &list, client.InNamespace(owner.GetNamespace()), client.MatchingLabels{
@@ -84,7 +88,7 @@ func (r *clientRunner) List(ctx context.Context, owner client.Object, ownerKind 
 	}); err != nil {
 		return nil, fmt.Errorf("jobs: list: %w", err)
 	}
-	return list.Items, nil
+	return slices.DeleteFunc(list.Items, func(j batchv1.Job) bool { return !metav1.IsControlledBy(&j, owner) }), nil
 }
 
 // Delete deletes job through r.c using ctx, with background propagation for
