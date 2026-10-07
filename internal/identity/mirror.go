@@ -30,6 +30,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
@@ -135,7 +136,10 @@ func EnsureMirror(ctx context.Context, c client.Client, apiReader client.Reader,
 
 	m := &corev1.Secret{}
 	err = c.Get(ctx, key, m)
+	// The first attempt below syncs what this read returned.
+	first := m
 	if apierrors.IsNotFound(err) {
+		first = nil
 		m = newMirror(key, id.Name, hash, src.Data, ref)
 		err = c.Create(ctx, m)
 		if err == nil {
@@ -146,21 +150,58 @@ func EnsureMirror(ctx context.Context, c client.Client, apiReader client.Reader,
 			return nil, MirrorResult{}, fmt.Errorf("identity: create mirror %s: %w", key, err)
 		}
 		// Another reconcile created it first; update that one.
-		m = &corev1.Secret{}
-		err = c.Get(ctx, key, m)
-	}
-	if err != nil {
+	} else if err != nil {
 		return nil, MirrorResult{}, fmt.Errorf("identity: get mirror %s: %w", key, err)
 	}
-	if m.Labels[MirroredLabel] != "true" || m.Annotations[inputs.IdentityAnnotation] != id.Name {
+	// Every object of the namespace that uses the identity adds its own
+	// ownerRef to the one mirror, so concurrent updates conflict: each is
+	// retried on a fresh read rather than failing the pass.
+	var out *corev1.Secret
+	var res MirrorResult
+	err = retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		cur := first
+		first = nil
+		if cur == nil {
+			cur = &corev1.Secret{}
+			if err := c.Get(ctx, key, cur); err != nil {
+				return err
+			}
+		}
+		updated, r, err := syncMirror(ctx, c, cur, id.Name, hash, src.Data, ref)
+		if err != nil {
+			return err
+		}
+		out, res = updated, r
+		return nil
+	})
+	switch {
+	case errors.Is(err, ErrMirrorConflict):
+		return nil, MirrorResult{}, err
+	case err != nil:
+		return nil, MirrorResult{}, fmt.Errorf("identity: update mirror %s: %w", key, err)
+	}
+	return out, res, nil
+}
+
+// syncMirror makes m, the mirror as just read, match the source of
+// identity (its data, of SourceHash hash) and carry ref, with one Update
+// through c using ctx when anything differs. The data is compared by its
+// own hash, not the SourceHashAnnotation: any pod with the runner's
+// Secret rights can rewrite a mirror's data and leave the annotation, and
+// every Job of the namespace would then run with those credentials until
+// the source changed. It returns the mirror, what it changed, an error
+// wrapping ErrMirrorConflict when m is not a mirror of identity, or the
+// Update's error unwrapped, so a conflict is retried.
+func syncMirror(ctx context.Context, c client.Client, m *corev1.Secret, identity, hash string, data map[string][]byte, ref metav1.OwnerReference) (*corev1.Secret, MirrorResult, error) {
+	key := client.ObjectKeyFromObject(m)
+	if m.Labels[MirroredLabel] != "true" || m.Annotations[inputs.IdentityAnnotation] != identity {
 		return nil, MirrorResult{}, fmt.Errorf("%w: %s", ErrMirrorConflict, key)
 	}
-
 	changed, dataRewritten := false, false
 	hadOwner := slices.ContainsFunc(m.OwnerReferences, func(r metav1.OwnerReference) bool { return r.UID == ref.UID })
-	if m.Annotations[SourceHashAnnotation] != hash {
+	if m.Annotations[SourceHashAnnotation] != hash || SourceHash(m.Data) != hash {
 		dataRewritten = true
-		m.Data = maps.Clone(src.Data)
+		m.Data = maps.Clone(data)
 		m.Annotations[SourceHashAnnotation] = hash
 		changed = true
 	}
@@ -178,9 +219,9 @@ func EnsureMirror(ctx context.Context, c client.Client, apiReader client.Reader,
 		return m, res, nil
 	}
 	if err := c.Update(ctx, m); err != nil {
-		return nil, MirrorResult{}, fmt.Errorf("identity: update mirror %s: %w", key, err)
+		return nil, MirrorResult{}, err
 	}
-	klog.FromContext(ctx).Info("Updated credential mirror", "secret", key, "identity", id.Name,
+	klog.FromContext(ctx).Info("Updated credential mirror", "secret", key, "identity", identity,
 		"ownerAdded", res.OwnerRepaired || !hadOwner, "ownerRepaired", res.OwnerRepaired, "dataRewritten", dataRewritten)
 	return m, res, nil
 }

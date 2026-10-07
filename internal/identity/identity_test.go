@@ -446,6 +446,59 @@ func TestEnsureMirrorLifecycle(t *testing.T) {
 	}
 }
 
+// TestEnsureMirrorRepairsTamperedData proves a mirror whose data was
+// rewritten, with its source-hash annotation left as it was, gets the
+// source's data back: the data, not the annotation, is compared.
+func TestEnsureMirrorRepairsTamperedData(t *testing.T) {
+	t.Parallel()
+	data := map[string][]byte{"k": []byte("real")}
+	e := newMirrorEnv(t, source(data))
+	owner := machine("m1", "uid-1")
+	if _, _, err := EnsureMirror(t.Context(), e.c, e.reader, testIdentity(nil), tenant, owner); err != nil {
+		t.Fatal(err)
+	}
+	m := e.mirror(t)
+	m.Data = map[string][]byte{"k": []byte("attacker")}
+	if err := e.c.Update(t.Context(), m); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := EnsureMirror(t.Context(), e.c, e.reader, testIdentity(nil), tenant, owner); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.mirror(t).Data["k"]; string(got) != "real" {
+		t.Errorf("mirror data = %q, want the source's back", got)
+	}
+}
+
+// TestEnsureMirrorRetriesConflict proves an update that conflicts with
+// another user's (each adds its ownerRef to the one mirror) is retried on
+// a fresh read instead of failing.
+func TestEnsureMirrorRetriesConflict(t *testing.T) {
+	t.Parallel()
+	s := newScheme(t)
+	var conflicts atomic.Int32
+	c := fake.NewClientBuilder().WithScheme(s).WithInterceptorFuncs(interceptor.Funcs{
+		Update: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.UpdateOption) error {
+			if conflicts.Add(1) == 1 {
+				return apierrors.NewConflict(corev1.Resource("secrets"), o.GetName(), errors.New("changed"))
+			}
+			return c.Update(ctx, o, opts...)
+		},
+	}).Build()
+	reader := fake.NewClientBuilder().WithScheme(s).WithObjects(source(map[string][]byte{"k": []byte("v")})).Build()
+	id := testIdentity(nil)
+	if _, _, err := EnsureMirror(t.Context(), c, reader, id, tenant, machine("m1", "uid-1")); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := EnsureMirror(t.Context(), c, reader, id, tenant, machine("m2", "uid-2")); err != nil {
+		t.Fatalf("a conflicting update failed: %v", err)
+	}
+	m := &corev1.Secret{}
+	if err := c.Get(t.Context(), client.ObjectKey{Namespace: tenant, Name: MirrorName(idName)}, m); err != nil || len(m.OwnerReferences) != 2 || conflicts.Load() != 2 {
+		t.Errorf("ownerRefs %v, updates %d, %v; want both owners after one retry", m.OwnerReferences, conflicts.Load(), err)
+	}
+}
+
 // TestEnsureMirrorEmptySource proves EnsureMirror creates a mirror with no
 // data, and the hash of empty data, when the source Secret's data is nil.
 func TestEnsureMirrorEmptySource(t *testing.T) {
