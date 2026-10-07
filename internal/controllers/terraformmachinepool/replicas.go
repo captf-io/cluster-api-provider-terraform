@@ -38,6 +38,14 @@ import (
 // ever removes. CAPI treats any value but "false" as set.
 const ReplicasManagedByValue = "captf"
 
+// ReplicasWrittenAnnotation records, on an autoscaled pool's MachinePool,
+// the spec.replicas CAPTF last wrote back. A spec.replicas that differs
+// from it was written by someone else since (the Cluster Autoscaler, a
+// kubectl scale), which the write-back reverts: the module's autoscaling
+// owns the replicas while the autoscaler annotations are set, and a
+// ReplicasOverridden Warning says so.
+const ReplicasWrittenAnnotation = "captf.io/replicas-written"
+
 // foreignReplicasOwner returns the cluster.x-k8s.io/replicas-managed-by
 // value of mp and true when it names a controller other than CAPTF: any
 // value but "false", ReplicasManagedByValue and the absent annotation.
@@ -89,7 +97,7 @@ func syncReplicas(ctx context.Context, d shared.Deps, mp *clusterv1.MachinePool,
 	current, annotated := mp.Annotations[clusterv1.ReplicasManagedByAnnotation]
 	after := mp.DeepCopy()
 	autoscaling, _, _ := ParseAutoscaling(mp)
-	var written bool
+	var written, overridden bool
 	_, isForeign := foreignReplicasOwner(mp)
 	switch {
 	case autoscaling.Enabled && isForeign:
@@ -106,14 +114,22 @@ func syncReplicas(ctx context.Context, d shared.Deps, mp *clusterv1.MachinePool,
 		if tmp.Status.Replicas != nil {
 			observed := min(max(*tmp.Status.Replicas, autoscaling.Min), autoscaling.Max)
 			if mp.Spec.Replicas == nil || *mp.Spec.Replicas != observed {
+				last, ok := mp.Annotations[ReplicasWrittenAnnotation]
+				overridden = ok && mp.Spec.Replicas != nil && last != strconv.Itoa(int(*mp.Spec.Replicas))
 				after.Spec.Replicas = new(observed)
 				written = true
+				if after.Annotations == nil {
+					after.Annotations = map[string]string{}
+				}
+				after.Annotations[ReplicasWrittenAnnotation] = strconv.Itoa(int(observed))
 			}
 		}
 	case annotated && current == ReplicasManagedByValue:
 		delete(after.Annotations, clusterv1.ReplicasManagedByAnnotation)
+		delete(after.Annotations, ReplicasWrittenAnnotation)
 	}
-	if current == after.Annotations[clusterv1.ReplicasManagedByAnnotation] && !written {
+	if current == after.Annotations[clusterv1.ReplicasManagedByAnnotation] && !written &&
+		mp.Annotations[ReplicasWrittenAnnotation] == after.Annotations[ReplicasWrittenAnnotation] {
 		return nil
 	}
 	if err := d.Client.Patch(ctx, after, client.MergeFromWithOptions(mp, client.MergeFromWithOptimisticLock{}), client.FieldOwner(shared.FieldOwner)); err != nil {
@@ -130,6 +146,12 @@ func syncReplicas(ctx context.Context, d shared.Deps, mp *clusterv1.MachinePool,
 		logger.V(shared.LogFlow).Info("Wrote the observed replicas back", "from", replicasText(mp.Spec.Replicas), "to", *after.Spec.Replicas)
 		d.Emit(tmp, corev1.EventTypeNormal, shared.EventReplicasWrittenBack, "WriteBackReplicas",
 			"MachinePool spec.replicas %s → %d", replicasText(mp.Spec.Replicas), *after.Spec.Replicas)
+		if overridden {
+			d.Emit(tmp, corev1.EventTypeWarning, shared.EventReplicasOverridden, "WriteBackReplicas",
+				"MachinePool spec.replicas was set to %s by another writer (the Cluster Autoscaler, a manual scale); reverted to %d, what the module observes: "+
+					"with the autoscaler min/max annotations the module's autoscaling owns the replicas. To scale the MachinePool another way, remove those annotations",
+				replicasText(mp.Spec.Replicas), *after.Spec.Replicas)
+		}
 	}
 	mp.Annotations, mp.Spec.Replicas, mp.ResourceVersion = after.Annotations, after.Spec.Replicas, after.ResourceVersion
 	return nil

@@ -248,6 +248,10 @@ const (
 	// EventReplicasManagedExternally: valid autoscaler annotations but a
 	// foreign replicas-managed-by owner; spec.replicas is not written back.
 	EventReplicasManagedExternally = "ReplicasManagedExternally"
+	// EventReplicasOverridden: the write-back reverted a spec.replicas
+	// another writer (the Cluster Autoscaler, a manual scale) set since
+	// CAPTF last wrote it.
+	EventReplicasOverridden = "ReplicasOverridden"
 	// EventExternallyManagedReleased: a deleting object that carries the
 	// managed-by annotation lost only this provider's finalizer; its
 	// state and infrastructure are left to the external manager.
@@ -274,7 +278,7 @@ func DocumentedEvents() []string {
 		EventStateLost, EventStateLocked, EventStateUnreadable, EventOutputsInvalid,
 		EventStateBackedUp, EventStateRestored, EventStateRestoreFailed,
 		EventDriftDetected, EventDriftResolved, EventDriftRemediationStarted, EventInstanceHealthy, EventInstanceUnhealthy,
-		EventRemediationRequested, EventRemediationWithdrawn, EventReplicasWrittenBack, EventReplicasManagedExternally,
+		EventRemediationRequested, EventRemediationWithdrawn, EventReplicasWrittenBack, EventReplicasManagedExternally, EventReplicasOverridden,
 		EventExternallyManagedReleased, EventForegroundDeletionConverted,
 		EventIdentityNotAllowed, EventIdentitySecretFound, EventIdentitySecretNotFound, EventMirrorCreated, EventMirrorRemoved,
 		EventOwnerReferencesRepaired, EventCapacityResolved, EventImageInspectFailed, EventConditionChanged,

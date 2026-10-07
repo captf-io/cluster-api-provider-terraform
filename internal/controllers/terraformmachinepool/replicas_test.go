@@ -64,6 +64,51 @@ func observed(n int32) func(*infrav1.TerraformMachinePool) {
 	return func(p *infrav1.TerraformMachinePool) { p.Status.Replicas = new(n) }
 }
 
+// TestSyncReplicasOverridden proves a spec.replicas another writer set
+// since CAPTF last wrote one (the Cluster Autoscaler scaling up) is
+// reverted to what the module observes with a ReplicasOverridden Warning,
+// while CAPTF's own write-back, the first or one following the module,
+// raises none.
+func TestSyncReplicasOverridden(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name    string
+		mp      *clusterv1.MachinePool
+		warning bool
+	}{
+		{"scaled by another writer", testMP(autoscaled, managedBy(ReplicasManagedByValue), specReplicas(4), func(mp *clusterv1.MachinePool) {
+			mp.Annotations[ReplicasWrittenAnnotation] = "3"
+		}), true},
+		{"the module scaled", testMP(autoscaled, managedBy(ReplicasManagedByValue), specReplicas(2), func(mp *clusterv1.MachinePool) {
+			mp.Annotations[ReplicasWrittenAnnotation] = "2"
+		}), false},
+		{"first write-back", testMP(autoscaled, specReplicas(2)), false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			c := fake.NewClientBuilder().WithScheme(scheme(t)).WithObjects(tt.mp).Build()
+			rec := &recorder{}
+			mp := &clusterv1.MachinePool{}
+			if err := c.Get(t.Context(), client.ObjectKeyFromObject(tt.mp), mp); err != nil {
+				t.Fatal(err)
+			}
+			if err := SyncReplicas(t.Context(), shared.Deps{Client: c, Recorder: rec}, mp, testTMP(observed(3))); err != nil {
+				t.Fatal(err)
+			}
+			got := &clusterv1.MachinePool{}
+			if err := c.Get(t.Context(), client.ObjectKeyFromObject(tt.mp), got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Spec.Replicas == nil || *got.Spec.Replicas != 3 || got.Annotations[ReplicasWrittenAnnotation] != "3" {
+				t.Errorf("spec.replicas %v, written %q; want 3 and 3", got.Spec.Replicas, got.Annotations[ReplicasWrittenAnnotation])
+			}
+			if n := rec.count(shared.EventReplicasOverridden); (n == 1) != tt.warning || n > 1 {
+				t.Errorf("ReplicasOverridden events = %d, want warning %v", n, tt.warning)
+			}
+		})
+	}
+}
+
 // TestSyncReplicas proves SyncReplicas annotates an autoscaled pool's
 // MachinePool and writes the observed replicas, clamped to the autoscaler bounds, back in one patch, with
 // an event only when replicas changed; removes only its own annotation
