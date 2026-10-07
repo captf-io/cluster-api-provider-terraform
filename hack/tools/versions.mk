@@ -31,6 +31,11 @@ GORELEASER_VER := v2.17.1
 GOIMPORTS_VER := v0.48.0
 # gotestsum wraps `go test` for JUnit output and CI-friendly formatting.
 GOTESTSUM_VER := v1.13.0
+# setup-envtest is versioned with controller-runtime (v0.24.x); the Kubernetes
+# release is the newest 1.36 asset in its index (kube-apiserver and etcd for
+# the envtest tier).
+SETUP_ENVTEST_VER := v0.24.1
+ENVTEST_K8S_VERSION := 1.36.2
 
 # clusterctl cannot be `go install`ed (CAPI's go.mod carries replace
 # directives), so the release binary is downloaded and checked against the

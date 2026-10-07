@@ -30,10 +30,11 @@ Copyright 2026 The CAPTF Authors.
 # tree NAME: create an empty, well-tiered tree and print its path.
 tree() {
 	local t="${work}/$1"
-	mkdir -p "${t}/test/e2e/suite" "${t}/test/env/lifecycle" "${t}/internal/x" "${t}/hack/tools/src" "${t}/bin"
+	mkdir -p "${t}/test/e2e/suite" "${t}/test/env/lifecycle" "${t}/internal/x" "${t}/internal/envtest" "${t}/hack/tools/src" "${t}/bin"
 	printf '//go:build e2e\n\n%s\n\npackage lifecycle\n' "${license}" >"${t}/test/env/lifecycle/a_test.go"
 	printf '%s\n\n//go:build e2e\n\npackage suite\n' "${license}" >"${t}/test/e2e/suite/b_test.go"
 	printf '%s\n\npackage x\n' "${license}" >"${t}/internal/x/x.go"
+	printf '%s\n\n//go:build envtest\n\npackage envtest\n' "${license}" >"${t}/internal/envtest/c_test.go"
 	# Ignored locations may carry anything.
 	printf '//go:build e2e\n\npackage src\n' >"${t}/hack/tools/src/s.go"
 	printf '//go:build e2e\n\npackage bin\n' >"${t}/bin/b.go"
@@ -84,5 +85,25 @@ expect "legacy +build e2e outside" fail "${t}"
 t="$(tree lookalike)"
 printf '//go:build e2etest\n\npackage x\n' >"${t}/internal/x/v.go"
 expect "a different tag that starts with e2e" pass "${t}"
+
+t="$(tree untagged-envtest)"
+printf '%s\n\npackage envtest\n' "${license}" >"${t}/internal/envtest/d_test.go"
+expect "untagged envtest file" fail "${t}"
+
+t="$(tree stray-envtest)"
+printf '//go:build envtest\n\npackage x\n' >"${t}/internal/x/e_test.go"
+expect "envtest tag outside internal/envtest" fail "${t}"
+
+t="$(tree envtest-in-e2e)"
+printf '//go:build envtest\n\npackage suite\n' >"${t}/test/e2e/suite/f_test.go"
+expect "envtest tag in an e2e directory" fail "${t}"
+
+t="$(tree e2e-in-envtest)"
+printf '//go:build e2e\n\npackage envtest\n' >"${t}/internal/envtest/g_test.go"
+expect "e2e tag in the envtest directory" fail "${t}"
+
+t="$(tree envtest-expr)"
+printf '//go:build linux && !envtest\n\npackage x\n' >"${t}/internal/x/h.go"
+expect "envtest in a build expression outside" fail "${t}"
 
 exit "${status}"

@@ -70,10 +70,11 @@ PROMTOOL := $(TOOLS_BIN)/promtool-$(PROMTOOL_VER)
 GORELEASER := $(TOOLS_BIN)/goreleaser-$(GORELEASER_VER)
 GOIMPORTS := $(TOOLS_BIN)/goimports-$(GOIMPORTS_VER)
 GOTESTSUM := $(TOOLS_BIN)/gotestsum-$(GOTESTSUM_VER)
+SETUP_ENVTEST := $(TOOLS_BIN)/setup-envtest-$(SETUP_ENVTEST_VER)
 
 TOOLS := $(CONTROLLER_GEN) $(KUSTOMIZE) $(GOLANGCI_LINT) \
 	$(GOLANGCI_LINT_KAL) $(CLUSTERCTL) $(GORELEASER) $(GOIMPORTS) $(PROMTOOL) \
-	$(GOTESTSUM)
+	$(GOTESTSUM) $(SETUP_ENVTEST)
 
 # clusterctl cannot be `go install`ed (CAPI's go.mod carries replace
 # directives), so the release binary is downloaded and checked against the
@@ -153,14 +154,18 @@ fmt: $(GOIMPORTS) ## Format Go code (gofmt -s, goimports -local).
 	"$(GOIMPORTS)" -local github.com/captf-io/cluster-api-provider-terraform -w $(GO_FILES)
 
 .PHONY: vet
-vet: ## Run go vet in every module, then on the test module's e2e-tagged code.
+vet: ## Run go vet in every module, then on the envtest-tagged and e2e-tagged code.
 	@$(call for-each-module,go vet ./...)
+	@echo "vet: internal/envtest (-tags envtest)"
+	@go vet -tags envtest ./internal/envtest/...
 	@echo "vet: test (-tags e2e)"
 	@cd test && go vet -tags e2e ./...
 
 .PHONY: lint
-lint: $(GOLANGCI_LINT) $(GOLANGCI_LINT_KAL) ## Run golangci-lint (.golangci.yml) in every module and on the test module's e2e-tagged code, then kube-api-linter on api/.
+lint: $(GOLANGCI_LINT) $(GOLANGCI_LINT_KAL) ## Run golangci-lint (.golangci.yml) in every module and on the envtest-tagged and e2e-tagged code, then kube-api-linter on api/.
 	@$(call for-each-module,"$(GOLANGCI_LINT)" run -c "$(ROOT_DIR)/.golangci.yml" $(GOLANGCI_LINT_EXTRA_ARGS) ./...)
+	@echo "lint: internal/envtest (--build-tags envtest)"
+	@"$(GOLANGCI_LINT)" run -c "$(ROOT_DIR)/.golangci.yml" --build-tags envtest $(GOLANGCI_LINT_EXTRA_ARGS) ./internal/envtest/...
 	@echo "lint: test (--build-tags e2e)"
 	@cd test && "$(GOLANGCI_LINT)" run -c "$(ROOT_DIR)/.golangci.yml" --build-tags e2e $(GOLANGCI_LINT_EXTRA_ARGS) ./...
 	@$(MAKE) --no-print-directory lint-api
@@ -194,6 +199,21 @@ test-cover: $(GOTESTSUM) ## Run unit tests with -race and coverage in every modu
 .PHONY: cover-check
 cover-check: ## Check per-package coverage against hack/coverage-floors.txt (after test-cover).
 	@go run ./hack/covercheck -floors hack/coverage-floors.txt $(if $(GITHUB_STEP_SUMMARY),-summary "$$GITHUB_STEP_SUMMARY") bin/cover-*.out
+
+##@ Envtest
+
+# The envtest tier (internal/envtest, build tag envtest) runs the CRDs' CEL
+# rules, the admission webhooks and the engine's write paths against a real
+# kube-apiserver and etcd, with no kubelet and no controllers (setup-envtest
+# downloads the binaries for ENVTEST_K8S_VERSION into bin/envtest, which a
+# cache can keep). The module imports internal/ packages, so it lives in the
+# root module; the test/ module never imports the product.
+ENVTEST_BIN_DIR ?= $(ROOT_DIR)/bin/envtest
+
+.PHONY: test-envtest
+test-envtest: $(SETUP_ENVTEST) ## Run the envtest tier against a real kube-apiserver (-race, build tag envtest).
+	KUBEBUILDER_ASSETS="$$("$(SETUP_ENVTEST)" use -p path --bin-dir "$(ENVTEST_BIN_DIR)" "$(ENVTEST_K8S_VERSION)")" \
+		go test -race -count=1 -timeout 10m -tags envtest ./internal/envtest/...
 
 ##@ Test environment
 
@@ -459,7 +479,7 @@ release-github: release-notes ## Create the GitHub release for VERSION from out/
 verify: verify-modules verify-schemas verify-components verify-metadata verify-version verify-gen check-licenses check-headers verify-templates verify-godoc verify-test-tiers verify-action promtool-check promtool-test verify-local-repository ## Run all verifications.
 
 .PHONY: verify-test-tiers
-verify-test-tiers: ## Check that e2e code carries the e2e build tag and stays in test/e2e/ and test/env/lifecycle/.
+verify-test-tiers: ## Check that e2e and envtest code carry their build tags and stay in their directories (test/e2e/, test/env/lifecycle/, internal/envtest/).
 	@hack/verify-test-tiers_test.sh >/dev/null
 	@hack/verify-test-tiers.sh
 
@@ -578,6 +598,9 @@ $(GOIMPORTS):
 
 $(GOTESTSUM):
 	$(call go-install-tool,$@,gotest.tools/gotestsum,$(GOTESTSUM_VER),gotestsum)
+
+$(SETUP_ENVTEST):
+	$(call go-install-tool,$@,sigs.k8s.io/controller-runtime/tools/setup-envtest,$(SETUP_ENVTEST_VER),setup-envtest)
 
 # golangci-lint with the kube-api-linter module plugin. This performs the
 # steps of `golangci-lint custom` (plugins.go import, go get, tidy, build)
