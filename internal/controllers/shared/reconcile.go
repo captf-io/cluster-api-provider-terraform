@@ -301,6 +301,9 @@ func (r *reconciler) bookkeep(ctx context.Context) (*Bookkeeping, error) {
 	if bk.MarkedApplied && r.durable != nil {
 		r.durable.AppliedMark = true
 	}
+	if bk.UnpullableCleared && r.durable != nil {
+		r.durable.Unpullable = nil
+	}
 	if a := r.durable.LastAttempt(); a != nil && (bk.MayHaveAppliedSet || bk.MayHaveAppliedCleared) {
 		a.MayHaveApplied = bk.MayHaveAppliedSet
 	}
@@ -464,10 +467,19 @@ func (r *reconciler) run(ctx context.Context) (ctrl.Result, error) {
 		if err != nil {
 			return ctrl.Result{}, err
 		}
+		var applyCond *metav1.Condition
+		if !deleted {
+			// A non-apply Job whose module image cannot be pulled starts
+			// again on the next image it may run.
+			if deleted, applyCond, err = r.pullStuck(ctx, bk.Active); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
 		if deleted {
 			// It never started: nothing vanished (recordVanishedApply).
-			// DeleteStuckJob cleared status.activeJob on the API server
-			// before the delete; the pass's conditions still follow.
+			// DeleteStuckJob and pullStuck clear status.activeJob on the
+			// API server before the delete; the pass's conditions still
+			// follow.
 			bk.Active, r.st.ActiveJob = nil, infrav1.ActiveJob{}
 			return r.finish(bk, nil, ctrl.Result{RequeueAfter: time.Second})
 		}
@@ -477,7 +489,7 @@ func (r *reconciler) run(ctx context.Context) (ctrl.Result, error) {
 		if jobs.OpOf(bk.Active) == jobs.OpApply && !r.provisioned() {
 			captfconds.SetInfrastructureHealthy(r.obj, nil, captfconds.HealthApplyStarted)
 		}
-		return r.finish(bk, nil, ctrl.Result{RequeueAfter: ActiveJobRequeue})
+		return r.finish(bk, applyCond, ctrl.Result{RequeueAfter: ActiveJobRequeue})
 	}
 
 	// No Job is active, unless the Job cache lags behind the one
@@ -731,7 +743,10 @@ func (r *reconciler) startOp(ctx context.Context, bk *Bookkeeping, dec Decision,
 		Why:            dec.Reason,
 	}
 	if a := r.durable.AppliedOrAttempt(); a != nil {
-		req.PinnedDigest = a.Digest
+		req.PinnedDigest, req.RecordImage = a.Digest, a.Image
+	}
+	if r.durable != nil {
+		req.Unpullable = r.durable.Unpullable
 	}
 
 	files, rec, ok, err := r.files(ctx, op, in, view.InputsHash)
@@ -752,8 +767,8 @@ func (r *reconciler) startOp(ctx context.Context, bk *Bookkeeping, dec Decision,
 	}
 	if rec != nil {
 		// The digest that ran the files: the applied record's, none for an
-		// attempt that never succeeded.
-		req.PinnedDigest = rec.Digest
+		// attempt that never succeeded; then the image it ran.
+		req.PinnedDigest, req.RecordImage = rec.Digest, rec.Image
 	}
 	req.Files = files
 	switch op {

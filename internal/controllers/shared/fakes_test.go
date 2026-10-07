@@ -194,7 +194,8 @@ type fakeRunner struct {
 }
 
 // Create stores job (after running r.onCreate on it) and records its name
-// in r.created, assigning it a fake UID, or returns r.createErr when set.
+// in r.created, assigning it a fake UID and, unless set, t0 as its
+// creation time, or returns r.createErr when set.
 func (r *fakeRunner) Create(_ context.Context, _ client.Object, job *batchv1.Job) error {
 	if r.onCreate != nil {
 		r.onCreate(job)
@@ -206,6 +207,10 @@ func (r *fakeRunner) Create(_ context.Context, _ client.Object, job *batchv1.Job
 	}
 	r.uid++
 	job.UID = types.UID(fmt.Sprintf("job-uid-%d", r.uid))
+	if job.CreationTimestamp.IsZero() {
+		// As the API server sets it: the Job is new at t0.
+		job.CreationTimestamp = metav1.NewTime(t0)
+	}
 	r.jobs = append(r.jobs, *job.DeepCopy())
 	r.created = append(r.created, job.Name)
 	return nil

@@ -286,7 +286,10 @@ func (r *reconciler) startRestore(ctx context.Context, bk *Bookkeeping, dec Deci
 		Restore:   &jobs.Restore{Serial: b.Serial, Secrets: b.Secrets, ManagedResources: b.ManagedResources},
 	}
 	if a := r.durable.AppliedOrAttempt(); a != nil {
-		req.PinnedDigest = a.Digest
+		req.PinnedDigest, req.RecordImage = a.Digest, a.Image
+	}
+	if r.durable != nil {
+		req.Unpullable = r.durable.Unpullable
 	}
 	wait, err := r.takeLeases(ctx, req, JobName(r.k, req))
 	if err != nil {

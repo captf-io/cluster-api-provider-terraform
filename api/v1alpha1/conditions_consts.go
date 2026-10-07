@@ -196,7 +196,11 @@ const (
 	// image-layout error (missing /captf/module or a non-executable command).
 	ImageInvalidReason = "ImageInvalid"
 	// ImagePullFailedReason is the False reason when the pod stayed in
-	// ErrImagePull/ImagePullBackOff past activeDeadlineSeconds.
+	// ErrImagePull/ImagePullBackOff past activeDeadlineSeconds. A destroy
+	// (here), refresh or drift check (DriftJobSucceeded) or restore
+	// (RestoreJobSucceeded) sets it while its Job still runs, once its
+	// module image could not be pulled and no other image is left to fall
+	// back to.
 	ImagePullFailedReason = "ImagePullFailed"
 	// InputsTooLargeReason is the False reason when the rendered root module
 	// and variables exceed the size a Secret can carry, so no Job starts.
@@ -748,7 +752,7 @@ func ConditionReasons() map[string]map[metav1.ConditionStatus][]string {
 		},
 		RestoreJobSucceededCondition: {
 			metav1.ConditionTrue:    {StateRestoredReason},
-			metav1.ConditionFalse:   {RestoreFailedReason, RestoreBackupNotFoundReason},
+			metav1.ConditionFalse:   {RestoreFailedReason, RestoreBackupNotFoundReason, ImagePullFailedReason},
 			metav1.ConditionUnknown: {WaitingForRunLeaseReason, WaitingForClusterOperationReason, WaitingForMachineOperationsReason, WaitingForJobSlotReason},
 		},
 		OutputsValidCondition: {
@@ -763,7 +767,7 @@ func ConditionReasons() map[string]map[metav1.ConditionStatus][]string {
 		},
 		DriftJobSucceededCondition: {
 			metav1.ConditionTrue:    {DriftCheckedReason},
-			metav1.ConditionFalse:   {DriftJobFailedReason, DriftJobDeadlineExceededReason},
+			metav1.ConditionFalse:   {DriftJobFailedReason, DriftJobDeadlineExceededReason, ImagePullFailedReason},
 			metav1.ConditionUnknown: {DriftNotCheckedReason, DriftJobRunningReason, WaitingForRunLeaseReason, WaitingForJobSlotReason, DurableInputsMissingReason},
 		},
 		DriftDetectedCondition: {

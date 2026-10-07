@@ -59,6 +59,11 @@ const (
 	// EventStuckJobDeleted: a Job that could never start (its per-run
 	// Secret is missing) was deleted to be started again.
 	EventStuckJobDeleted = "StuckJobDeleted"
+	// EventImagePullFallback: a destroy, refresh, drift or restore Job
+	// could not pull its image (the pinned digest, say, garbage collected
+	// by the registry) past PullFailureGrace, so it was deleted and the
+	// operation starts again on the next image it may run.
+	EventImagePullFallback = "ImagePullFallback"
 	// EventWaitingForRunLease: an operation waits because another live Job
 	// holds the object's run lease.
 	EventWaitingForRunLease = "WaitingForRunLease"
@@ -254,7 +259,7 @@ const (
 func DocumentedEvents() []string {
 	return []string{
 		EventJobCreated, EventJobSucceeded, EventJobFailed, EventJobInterrupted, EventJobDeadlineExceeded,
-		EventStuckJobDeleted, EventDestructivePlanBlocked,
+		EventStuckJobDeleted, EventImagePullFallback, EventDestructivePlanBlocked,
 		EventPlanReady, EventPlanApproved, EventPlanApplied, EventPlanChanged, EventPlanSuperseded,
 		EventWaitingForRunLease, EventWaitingForClusterOperation, EventWaitingForMachineOperations, EventWaitingForJobSlot,
 		EventDeletionStarted, EventDestroyed, EventFinalizerRemoved,

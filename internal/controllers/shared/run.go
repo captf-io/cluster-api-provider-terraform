@@ -19,8 +19,10 @@ package shared
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -43,21 +45,64 @@ import (
 	"github.com/captf-io/cluster-api-provider-terraform/internal/state"
 )
 
-// ChooseImage picks the image reference a Job for op runs ("Digest
-// pinning"): Apply, and the plan Job that plans it, run specRef, the spec
-// reference, as written (a new image is an input change); every other
-// operation runs pinned, the repo@digest, when one is recorded.
-// digestUnknown is true when a non-apply operation falls back to the spec
-// reference (DigestUnknown). It returns the image reference to run and
-// digestUnknown.
-func ChooseImage(op jobs.Op, specRef, pinned string) (ref string, digestUnknown bool) {
+// ImageCandidates returns the image references a Job for op may run, the
+// preferred first ("Digest pinning"). Apply, and the plan Job that plans
+// it, run source, the spec reference as written (a new image is an input
+// change), and nothing else. Every other operation prefers pinned, the
+// repo@digest of the record it runs, then recorded, the image reference
+// that record ran, then source, the image the operation runs without a
+// record (jobSource), then spec, spec.source.image: each later one is a
+// fallback for when the earlier ones cannot be pulled (ChooseImage).
+// Empty and repeated references are left out.
+func ImageCandidates(op jobs.Op, source, pinned, recorded, spec string) []string {
 	if op == jobs.OpApply || op == jobs.OpPlan {
-		return specRef, false
+		return []string{source}
 	}
-	if pinned != "" {
-		return pinned, false
+	var out []string
+	for _, ref := range []string{pinned, recorded, source, spec} {
+		if ref != "" && !slices.Contains(out, ref) {
+			out = append(out, ref)
+		}
 	}
-	return specRef, true
+	return out
+}
+
+// ChooseImage picks, from candidates (ImageCandidates), the image
+// reference a Job for op runs: the first one not in unpullable, the
+// references an earlier Job could not pull (inputs.Durable.Unpullable),
+// else the last one. Apply and plan ignore unpullable: their image is
+// the spec's, which only the operator can fix. It returns the reference
+// and fallback, true when it is not the first candidate.
+func ChooseImage(op jobs.Op, candidates, unpullable []string) (ref string, fallback bool) {
+	switch {
+	case len(candidates) == 0:
+		return "", false
+	case op == jobs.OpApply || op == jobs.OpPlan:
+		return candidates[0], false
+	}
+	for i, c := range candidates {
+		if !slices.Contains(unpullable, c) {
+			return c, i > 0
+		}
+	}
+	return candidates[len(candidates)-1], len(candidates) > 1
+}
+
+// imageFallbacks returns the candidates after ref that are not in
+// unpullable: the images a Job running ref falls back to, in order, when
+// ref cannot be pulled (ImageFallbacksAnnotation).
+func imageFallbacks(candidates, unpullable []string, ref string) []string {
+	i := slices.Index(candidates, ref)
+	if i < 0 {
+		return nil
+	}
+	var out []string
+	for _, c := range candidates[i+1:] {
+		if !slices.Contains(unpullable, c) {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // JobRequest is one Job to start.
@@ -73,6 +118,12 @@ type JobRequest struct {
 	// PinnedDigest is the repo@digest of the record the Job runs (the
 	// applied one, or the one destroy picked), if any.
 	PinnedDigest string
+	// RecordImage is the image reference that record ran, the fallback
+	// when PinnedDigest cannot be pulled (ImageCandidates); "" when none.
+	RecordImage string
+	// Unpullable lists the image references earlier Jobs could not pull
+	// (inputs.Durable.Unpullable), which ChooseImage passes over.
+	Unpullable []string
 	// Identity names the identity whose mirror the Job mounts, or the
 	// namespace-local Secret it mounts when IdentityKind is Secret.
 	Identity string
@@ -259,8 +310,9 @@ func startJob(ctx context.Context, d Deps, k Kind, req JobRequest) (job *batchv1
 	if err := pauseHandshake(ctx, d, obj, req.ClusterName); err != nil {
 		return nil, false, err
 	}
-	ref, digestUnknown := ChooseImage(req.Op, req.Source.Image, req.PinnedDigest)
-	if digestUnknown {
+	candidates := ImageCandidates(req.Op, req.Source.Image, req.PinnedDigest, req.RecordImage, k.Spec().Source.Image)
+	ref, fallback := ChooseImage(req.Op, candidates, req.Unpullable)
+	if req.Op != jobs.OpApply && req.Op != jobs.OpPlan && req.PinnedDigest == "" {
 		d.Emit(obj, corev1.EventTypeWarning, EventDigestUnknown, "Run", "No image digest is pinned; %s runs %s", req.Op, ref)
 	}
 
@@ -321,6 +373,13 @@ func startJob(ctx context.Context, d Deps, k Kind, req JobRequest) (job *batchv1
 		metav1.SetMetaDataAnnotation(&job.ObjectMeta, PlanAnnotation, req.Plan)
 	}
 	annotateExports(job, req)
+	if fb := imageFallbacks(candidates, req.Unpullable, ref); len(fb) > 0 && req.Op != jobs.OpApply && req.Op != jobs.OpPlan {
+		raw, err := json.Marshal(fb)
+		if err != nil {
+			return nil, false, fmt.Errorf("encode image fallbacks: %w", err)
+		}
+		metav1.SetMetaDataAnnotation(&job.ObjectMeta, ImageFallbacksAnnotation, string(raw))
+	}
 	if err := ensureFreshLeases(ctx, d, k, req, job.Name); err != nil {
 		return nil, false, err
 	}
@@ -383,6 +442,9 @@ func startJob(ctx context.Context, d Deps, k Kind, req JobRequest) (job *batchv1
 	}
 	if req.Plan != "" && req.Op == jobs.OpApply {
 		note += "; it applies the approved TerraformPlan " + req.Plan
+	}
+	if fallback {
+		note += fmt.Sprintf("; it falls back to this image, as an earlier Job could not pull %s", candidates[0])
 	}
 	d.EmitRelated(obj, job, corev1.EventTypeNormal, EventJobCreated, "Run", "%s", note)
 	return job, true, nil

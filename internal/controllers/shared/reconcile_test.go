@@ -231,23 +231,6 @@ func TestSetLastRun(t *testing.T) {
 	}
 }
 
-// TestChooseImage proves ChooseImage runs an apply on the spec image, a
-// destroy on the pinned digest, and reports a drift Job's image unknown
-// when there is no pin.
-func TestChooseImage(t *testing.T) {
-	t.Parallel()
-	pinned := "registry.example/mod@sha256:abc"
-	if ref, unknown := ChooseImage(jobs.OpApply, "mod:1", pinned); ref != "mod:1" || unknown {
-		t.Errorf("apply runs %s", ref)
-	}
-	if ref, unknown := ChooseImage(jobs.OpDestroy, "mod:1", pinned); ref != pinned || unknown {
-		t.Errorf("destroy runs %s", ref)
-	}
-	if ref, unknown := ChooseImage(jobs.OpDrift, "mod:1", ""); ref != "mod:1" || !unknown {
-		t.Errorf("drift without pin runs %s (unknown=%v)", ref, unknown)
-	}
-}
-
 // --- Reconcile --------------------------------------------------------------
 
 // systemNS is the namespace the fake identity's credentials Secret lives

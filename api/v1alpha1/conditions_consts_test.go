@@ -199,14 +199,15 @@ func TestEveryReasonConstantIsInTheTable(t *testing.T) {
 // SecretNotFound and CredentialsIncomplete by IdentityAllowed and the
 // identity's own Ready, the lease and Job-slot waits by the Job conditions
 // (the op that waits: the restore condition shares them with
-// ApplyJobSucceeded), and a TerraformPlan's Pending and Approved by its
+// ApplyJobSucceeded), as is ImagePullFailed (the op whose module image
+// cannot be pulled), and a TerraformPlan's Pending and Approved by its
 // Ready and Approved conditions.
 func TestReasonsBelongToOneType(t *testing.T) {
 	t.Parallel()
 	shared := map[string]bool{
 		DriftNotCheckedReason: true, SecretNotFoundReason: true, CredentialsIncompleteReason: true, WaitingForRunLeaseReason: true,
 		WaitingForClusterOperationReason: true, WaitingForMachineOperationsReason: true, WaitingForJobSlotReason: true,
-		PlanPendingReason: true, PlanApprovedReason: true,
+		PlanPendingReason: true, PlanApprovedReason: true, ImagePullFailedReason: true,
 	}
 	types := map[string]map[string]bool{}
 	for typ, byStatus := range ConditionReasons() {

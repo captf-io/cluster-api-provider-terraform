@@ -116,6 +116,12 @@ const (
 	// the record, and its outcome is newer than the disappearance. A
 	// success that does not carry it started before, and clears nothing.
 	AfterInterruptedApplyAnnotation = "captf.io/after-interrupted-apply"
+	// ImageFallbacksAnnotation lists, on a destroy, refresh, drift or
+	// restore Job, the images it falls back to, in order, should its own
+	// image not pull (a JSON array; ImageCandidates less the ones known
+	// unpullable). Absent when it runs the last one: pullStuck then
+	// reports the failure instead of deleting the Job.
+	ImageFallbacksAnnotation = "captf.io/image-fallbacks"
 )
 
 // Bookkeeping is the result of Bookkeep.
@@ -158,6 +164,10 @@ type Bookkeeping struct {
 	// as one whose Job may have changed resources (inputs.SetMayHaveApplied)
 	// this pass; MayHaveAppliedCleared when a restore removed that mark.
 	MayHaveAppliedSet, MayHaveAppliedCleared bool
+	// UnpullableCleared is true when bookkeeping removed the list of
+	// unpullable images (inputs.ClearUnpullable) after a promotion this
+	// pass.
+	UnpullableCleared bool
 	// MarkedApplied is true when bookkeeping set the applied marker
 	// (inputs.MarkApplied) on the durable Secret this pass.
 	MarkedApplied bool
@@ -782,7 +792,9 @@ func setDriftJob(obj Object, done []finished) {
 // digest. A record that is f's already costs nothing, so a promotion
 // that crashed before the per-run Secret was deleted is not repeated.
 // Neither source holding f's inputs leaves the applied record as it is,
-// with a Warning (AppliedInputsUnknown). It sets bk.Promoted, and returns
+// with a Warning (AppliedInputsUnknown). A promotion, or a record that is
+// f's already, clears the images earlier Jobs could not pull
+// (clearUnpullable): only a re-pin does. It sets bk.Promoted, and returns
 // any error reading the per-run Secret or writing the record: then
 // nothing is deleted, and the next pass promotes again.
 func (bk *Bookkeeping) promote(ctx context.Context, d Deps, k Kind, f *finished, durable *inputs.Durable) error {
@@ -791,7 +803,7 @@ func (bk *Bookkeeping) promote(ctx context.Context, d Deps, k Kind, f *finished,
 		prev = durable.Applied
 	}
 	if prev != nil && prev.Job == f.job.Name {
-		return nil
+		return bk.clearUnpullable(ctx, d, k, durable)
 	}
 	logger := klog.LoggerWithValues(klog.FromContext(ctx), "Job", klog.KObj(f.job))
 	rec, err := inputs.ReadRun(ctx, d.APIReader, f.job)
@@ -822,6 +834,9 @@ func (bk *Bookkeeping) promote(ctx context.Context, d Deps, k Kind, f *finished,
 		return err
 	}
 	bk.Promoted = rec
+	if err := bk.clearUnpullable(ctx, d, k, durable); err != nil {
+		return err
+	}
 	logger.V(LogFlow).Info("Promoted the apply's inputs to the applied record", "inputsHash", rec.InputsHash, "digest", rec.Digest)
 	switch {
 	case rec.Digest == "":
@@ -830,6 +845,28 @@ func (bk *Bookkeeping) promote(ctx context.Context, d Deps, k Kind, f *finished,
 	case prev == nil || prev.Digest != rec.Digest:
 		d.EmitRelated(k.Object(), f.job, corev1.EventTypeNormal, EventDigestPinned, "Pin", "Job %s ran %s; later operations run this digest", f.job.Name, rec.Digest)
 	}
+	return nil
+}
+
+// clearUnpullable removes, using ctx and d, k's list of images non-apply
+// Jobs could not pull (inputs.ClearUnpullable) once a successful apply
+// was promoted: its digest is the one they run next, and the images
+// before it no longer matter. durable is the inputs records as read this
+// pass; no list costs no call. It sets bk.UnpullableCleared, and returns
+// any error from the patch.
+func (bk *Bookkeeping) clearUnpullable(ctx context.Context, d Deps, k Kind, durable *inputs.Durable) error {
+	if durable == nil || len(durable.Unpullable) == 0 {
+		return nil
+	}
+	err := inputs.ClearUnpullable(ctx, d.Client, k.Object())
+	switch {
+	case errors.Is(err, inputs.ErrNotFound):
+		return nil
+	case err != nil:
+		return err
+	}
+	bk.UnpullableCleared = true
+	klog.FromContext(ctx).V(LogFlow).Info("A successful apply pinned its image; the images earlier Jobs could not pull are forgotten", "unpullable", durable.Unpullable)
 	return nil
 }
 
