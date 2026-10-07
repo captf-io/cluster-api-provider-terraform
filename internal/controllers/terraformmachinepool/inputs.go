@@ -43,9 +43,8 @@ import (
 // spec.replicas while a foreign controller owns the replicas), else
 // still spec.replicas for the first apply, clamped into
 // [Autoscaling.Min, Autoscaling.Max] so a render never asks the cloud for
-// an out-of-range desired count (the write-back that patches spec.replicas
-// from the raw observed value is unaffected by this clamp). It returns the
-// built inputs.
+// an out-of-range desired count (SyncReplicas clamps its write-back of the
+// observed value to the same bounds). It returns the built inputs.
 func MachinePoolInputs(cluster *clusterv1.Cluster, mp *clusterv1.MachinePool, tmp *infrav1.TerraformMachinePool,
 	exports json.RawMessage, clusterFDs []string, bootstrap *corev1.Secret,
 ) contract.MachinePoolInputs {
