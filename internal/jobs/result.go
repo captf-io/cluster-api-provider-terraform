@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/captf-io/cluster-api-provider-terraform/internal/runner"
@@ -175,4 +176,33 @@ func PullFailed(pod *corev1.Pod) bool {
 		}
 	}
 	return false
+}
+
+// SourcePullFailed reports whether the source container of pod, the
+// module image, is waiting because its image cannot be pulled, and with
+// which waiting reason (one of ErrImagePull, ImagePullBackOff,
+// InvalidImageName). An init container stuck pulling the runner image
+// does not count: no other module image would fix it. It returns the
+// reason and true, or "" and false.
+func SourcePullFailed(pod *corev1.Pod) (reason string, ok bool) {
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.Name != SourceContainer {
+			continue
+		}
+		if w := cs.State.Waiting; w != nil && slices.Contains(pullFailureReasons, w.Reason) {
+			return w.Reason, true
+		}
+	}
+	return "", false
+}
+
+// SourceImage returns the image job's source container runs, as its pod
+// template gives it; "" when it has none.
+func SourceImage(job *batchv1.Job) string {
+	for _, c := range job.Spec.Template.Spec.Containers {
+		if c.Name == SourceContainer {
+			return c.Image
+		}
+	}
+	return ""
 }
