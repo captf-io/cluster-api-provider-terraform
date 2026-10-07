@@ -64,6 +64,13 @@ func (r *reconciler) inputsApplied(bk *Bookkeeping) *metav1.Condition {
 		return cond(metav1.ConditionFalse, infrav1.ApplyRunningReason, "Job "+a.Name)
 	}
 	if !r.facts.read {
+		// No apply runs any more, but the state was not read (held: lost,
+		// unreadable, unconfirmed or retained): ApplyRunning would name a
+		// finished Job for as long as the hold lasts.
+		if prev, ok := r.before[infrav1.InputsAppliedCondition]; ok && prev.Reason == infrav1.ApplyRunningReason {
+			return cond(metav1.ConditionUnknown, infrav1.InputsUnavailableReason,
+				"The state was not read ("+stateReadableReason(r.obj)+"), so whether the inputs are applied is unknown")
+		}
 		return nil
 	}
 	v := r.facts.view

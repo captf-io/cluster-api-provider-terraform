@@ -112,6 +112,10 @@ func TestLockedApplyWithoutPodIsHeld(t *testing.T) {
 	if len(e.runner.created) != 1 {
 		t.Errorf("created %v, want no second apply", e.runner.created)
 	}
+	// The Job is over: InputsApplied no longer says it runs.
+	if c := conditions.Get(e.get(t), infrav1.InputsAppliedCondition); c == nil || c.Reason == infrav1.ApplyRunningReason || c.Status != metav1.ConditionUnknown {
+		t.Errorf("InputsApplied = %+v, want Unknown once no apply runs", c)
+	}
 }
 
 // TestFailedApplyStepWithoutStateIsHeld proves a first apply that failed
