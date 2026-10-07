@@ -43,15 +43,14 @@ import (
 var errMirrorConflict = errors.New("credential mirror changed")
 
 // Cleanup runs after a successful destroy, or on deletion with no state,
-// using ctx and the shared dependencies d: it deletes the state
-// Secrets named by suffix and the Lease, the durable inputs Secret, the
-// plan key Secret, the
-// object's run and cluster write leases, drops the object from the
-// credential mirror named identityName's owners (deleting the mirror with
-// its last owner) and removes the finalizer from k's object; the caller
-// persists that with its patch. It never runs while a state Secret may
-// still describe live resources: only after the destroy Job succeeded. It
-// returns any error from those deletes.
+// using ctx and the shared dependencies d: it deletes the state Secrets
+// named by suffix and the Lease and the durable inputs Secret, then
+// releases k's object (release: its plan key, run and write leases, its
+// place among the owners of the credential mirror named identityName, and
+// its finalizer; the caller persists the finalizer removal with its
+// patch). It never runs while a state Secret may still describe live
+// resources: only after the destroy Job succeeded. It returns any error
+// from those deletes.
 func Cleanup(ctx context.Context, d Deps, k Kind, suffix, identityName string) error {
 	obj := k.Object()
 	logger := klog.FromContext(ctx)
@@ -71,6 +70,23 @@ func Cleanup(ctx context.Context, d Deps, k Kind, suffix, identityName string) e
 	if err := inputs.Delete(ctx, d.Client, obj); err != nil {
 		return err
 	}
+	logger.Info("Deleted the object's state",
+		"object", klog.KObj(obj), "stateSecrets", states, "stateBackups", backups,
+		"durableInputs", inputs.Name(kindShort(k), obj.GetName()), "abandoned", abandonedUID(obj))
+	return release(ctx, d, k, identityName)
+}
+
+// release is the tail of every finalizer removal, using ctx and the shared
+// dependencies d: it deletes k's object's plan key Secret and its run and
+// cluster write leases, drops the object from the owners of the
+// credential mirror named identityName (deleting the mirror with its last
+// owner), and removes the finalizer from the object; the caller persists
+// that with its patch. It never touches the state, its backups or the
+// durable inputs. It returns any error from those steps, wrapping
+// errMirrorConflict when the mirror changed under the owner removal.
+func release(ctx context.Context, d Deps, k Kind, identityName string) error {
+	obj := k.Object()
+	logger := klog.FromContext(ctx)
 	// The plan fingerprint key: owner-referenced, but removed here so it
 	// does not outlive a finished destroy waiting on garbage collection.
 	short, err := state.KindShort(k.Kind())
@@ -85,10 +101,8 @@ func Cleanup(ctx context.Context, d Deps, k Kind, suffix, identityName string) e
 	if err := runlease.DeleteOwned(ctx, d.Client, d.APIReader, obj.GetNamespace(), k.Kind(), obj.GetName()); err != nil {
 		return err
 	}
-	logger.Info("Deleted the object's state and run data",
-		"object", klog.KObj(obj), "stateSecrets", states, "stateBackups", backups,
-		"durableInputs", inputs.Name(short, obj.GetName()), "planKey", plankey.Name(short, obj.GetName()),
-		"leases", "run and cluster write leases", "abandoned", abandonedUID(obj))
+	logger.Info("Deleted the object's run data",
+		"object", klog.KObj(obj), "planKey", plankey.Name(short, obj.GetName()), "leases", "run and cluster write leases")
 	if identityName != "" {
 		mirror := &corev1.Secret{}
 		key := client.ObjectKey{Namespace: obj.GetNamespace(), Name: identity.MirrorName(identityName)}
