@@ -34,6 +34,7 @@ import (
 	"sigs.k8s.io/cluster-api/util/conditions"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/contract"
@@ -128,7 +129,16 @@ type planEnv struct {
 // successful older apply, and each mut applied to the machine.
 func newPlanEnv(t *testing.T, stateHash string, mut ...func(*infrav1.TerraformMachine)) planEnv {
 	t.Helper()
-	e := newEnv(t, world(machine(append([]func(*infrav1.TerraformMachine){withFinalizer, notPaused, provisioned}, mut...)...))...)
+	return newPlanEnvWith(t, interceptor.Funcs{}, stateHash, mut...)
+}
+
+// newPlanEnvWith is newPlanEnv with funcs as the fake client's
+// interceptors: it builds, using t, the planEnv with state at stateHash (or
+// the current hash if empty) and each mut applied to the machine, and
+// returns it.
+func newPlanEnvWith(t *testing.T, funcs interceptor.Funcs, stateHash string, mut ...func(*infrav1.TerraformMachine)) planEnv {
+	t.Helper()
+	e := newEnvWith(t, funcs, world(machine(append([]func(*infrav1.TerraformMachine){withFinalizer, notPaused, provisioned}, mut...)...))...)
 	e.d.ClusterOperationGate = true
 	var reg cbmetrics.KubeRegistry
 	e.d.Metrics, reg = recorder(t)
