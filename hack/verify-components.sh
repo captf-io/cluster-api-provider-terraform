@@ -76,6 +76,8 @@ CLUSTER_SCOPED = {
     "ClusterRole",
     "ClusterRoleBinding",
     "ValidatingWebhookConfiguration",
+    "ValidatingAdmissionPolicy",
+    "ValidatingAdmissionPolicyBinding",
     "MutatingWebhookConfiguration",
 }
 

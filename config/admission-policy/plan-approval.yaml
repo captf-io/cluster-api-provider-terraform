@@ -1,0 +1,48 @@
+# Copyright 2026 The CAPTF Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Plan approval authorship, evaluated by the API server itself. The
+# TerraformPlan webhook enforces the same and more, but it runs in the
+# manager: when the manager is down and its ValidatingWebhookConfiguration
+# is removed, which is the usual remedy, this policy still stops a user
+# who may update plans from approving one in someone else's name.
+# The CRD's CEL rules make the approval set-once; the requester is not
+# visible to CEL, only to an admission policy.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: plan-approval
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups: ["infrastructure.cluster.x-k8s.io"]
+      apiVersions: ["v1alpha1"]
+      operations: ["UPDATE"]
+      resources: ["terraformplans"]
+  validations:
+  - expression: >-
+      !(has(object.spec.approved) && object.spec.approved) ||
+      (has(oldObject.spec.approved) && oldObject.spec.approved) ||
+      (has(object.spec.approvedBy) && object.spec.approvedBy == request.userInfo.username)
+    message: "approving a TerraformPlan must record who approves it: set spec.approvedBy to your own username"
+    reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: plan-approval
+spec:
+  policyName: plan-approval
+  validationActions: ["Deny"]

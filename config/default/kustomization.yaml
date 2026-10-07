@@ -32,6 +32,21 @@ resources:
 - ../manager
 - ../webhook
 - ../certmanager
+- ../admission-policy
+
+# Admission policies are cluster-scoped, which this kustomize does not
+# know of them: take back the namespace it gives every object. A
+# transformer, so it runs after the namespace is set.
+transformers:
+- |-
+  apiVersion: builtin
+  kind: PatchTransformer
+  metadata:
+    name: cluster-scoped-admission-policies
+  target:
+    group: admissionregistration.k8s.io
+    kind: ValidatingAdmissionPolicy|ValidatingAdmissionPolicyBinding
+  patch: '[{"op": "remove", "path": "/metadata/namespace"}]'
 
 patches:
 # Mount the webhook serving certificate.
@@ -44,6 +59,17 @@ images:
   newTag: dev
 
 replacements:
+# The admission policy binding names its policy, which namePrefix renames.
+- source:
+    kind: ValidatingAdmissionPolicy
+    name: plan-approval
+    fieldPath: .metadata.name
+  targets:
+  - select:
+      kind: ValidatingAdmissionPolicyBinding
+      name: plan-approval
+    fieldPaths:
+    - .spec.policyName
 # The runner image defaults to the manager's own image: copy the final
 # container image into CAPTF_MANAGER_IMAGE.
 - source:
