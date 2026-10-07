@@ -37,7 +37,7 @@ import (
 // The CAPTF objects config/default renders, besides env.ManagerNamespace
 // and env.ManagerDeployment.
 const (
-	// managerSelector selects the manager pod.
+	// managerSelector selects the manager pods.
 	managerSelector = "control-plane=controller-manager"
 	// managerContainer is the manager container.
 	managerContainer = "manager"
@@ -61,12 +61,12 @@ const (
 )
 
 // captfHealthy checks the CAPTF manager end to end: the Deployment is
-// Available with one Ready pod with 0 restarts running the suite's
-// manager image; the CRDs are Established; the serving Certificate is
+// Available with spec.replicas Ready pods running the suite's manager
+// image; the CRDs are Established; the serving Certificate is
 // Ready and its CA is what the webhook configuration carries; the webhook
 // Service has endpoints and the webhook rejects an invalid object; the
-// health endpoints answer through the pod proxy; the leader Lease is held
-// by that pod; and the manager log has no error, fatal or panic line.
+// health endpoints answer through the pod proxy on every pod; the leader
+// Lease is held by one of the pods; and the manager log has no error, fatal or panic line.
 // It runs under ctx and fails t on any problem.
 func (s *suite) captfHealthy(ctx context.Context, t *testing.T) {
 	ns := env.ManagerNamespace
@@ -101,8 +101,12 @@ func (s *suite) captfHealthy(ctx context.Context, t *testing.T) {
 		t.Errorf("expected the CAPTF webhook to reject an invalid TerraformCluster: %v; inspect: %s", err, hint)
 	}
 	s.checkHealthEndpoints(ctx, t)
-	if err := eventually(ctx, t, "leader Lease held by "+s.managerPod, componentWait, func(ctx context.Context) error {
-		return health.LeaseHeld(ctx, s.c, ns, leaderLease, s.managerPod, leaseMaxAge)
+	if err := eventually(ctx, t, "leader Lease held by a manager pod", componentWait, func(ctx context.Context) error {
+		leader, err := s.leaderPod(ctx)
+		if err != nil {
+			return err
+		}
+		return health.LeaseHeld(ctx, s.c, ns, leaderLease, leader+"_", leaseMaxAge)
 	}); err != nil {
 		t.Errorf("%v; inspect: %s", err, s.kubectl("-n "+ns+" get lease "+leaderLease+" -o yaml"))
 	}
@@ -111,36 +115,84 @@ func (s *suite) captfHealthy(ctx context.Context, t *testing.T) {
 	}
 }
 
-// checkManagerPod records the manager pod and fails t unless there is
-// exactly one, Ready, whose manager container (and the Deployment's
-// template) runs the suite's manager image; hint is the inspect command.
-// It reads under ctx.
+// checkManagerPod fails t unless the number of manager pods equals the
+// Deployment's spec.replicas and status.readyReplicas, and every pod is
+// Ready with a manager container (and the Deployment's template) running
+// the suite's manager image. It records every pod's name in
+// s.managerPods and the one that holds the leader Lease in s.managerPod;
+// hint is the inspect command. It reads under ctx.
 func (s *suite) checkManagerPod(ctx context.Context, t *testing.T, hint string) {
 	t.Helper()
 	ns := env.ManagerNamespace
-	pods, err := podsBySelector(ctx, s.c, ns, managerSelector)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(pods) != 1 {
-		t.Fatalf("expected exactly 1 manager pod (%s), observed %d; inspect: %s", managerSelector, len(pods), hint)
-	}
-	p := &pods[0]
-	s.managerPod = p.Name
-	if !podReady(p) {
-		t.Errorf("manager pod %s: expected Running and Ready, observed %s; inspect: %s", p.Name, p.Status.Phase, hint)
-	}
-	if got := containerImage(p.Spec.Containers, managerContainer); got != s.managerRef {
-		t.Errorf("manager pod %s: expected image %s (built from this tree), observed %q", p.Name, s.managerRef, got)
-	}
 	d, err := s.c.Kube.AppsV1().Deployments(ns).Get(ctx, env.ManagerDeployment, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get Deployment %s/%s: %v", ns, env.ManagerDeployment, err)
 	}
+	want := int32(1)
+	if d.Spec.Replicas != nil {
+		want = *d.Spec.Replicas
+	}
 	if got := containerImage(d.Spec.Template.Spec.Containers, managerContainer); got != s.managerRef {
 		t.Errorf("Deployment %s: expected template image %s, observed %q", env.ManagerDeployment, s.managerRef, got)
 	}
-	t.Logf("manager pod %s runs %s", p.Name, s.managerRef)
+	if d.Status.ReadyReplicas != want {
+		t.Errorf("Deployment %s: expected %d ready replicas (spec.replicas), observed %d; inspect: %s", env.ManagerDeployment, want, d.Status.ReadyReplicas, hint)
+	}
+	pods, err := podsBySelector(ctx, s.c, ns, managerSelector)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if int32(len(pods)) != want {
+		t.Fatalf("expected %d manager pods (%s, the Deployment's spec.replicas), observed %d: %s; inspect: %s", want, managerSelector, len(pods), podNames(pods), hint)
+	}
+	s.managerPods = s.managerPods[:0]
+	for i := range pods {
+		p := &pods[i]
+		s.managerPods = append(s.managerPods, p.Name)
+		if !podReady(p) {
+			t.Errorf("manager pod %s: expected Running and Ready, observed %s; inspect: %s", p.Name, p.Status.Phase, hint)
+		}
+		if got := containerImage(p.Spec.Containers, managerContainer); got != s.managerRef {
+			t.Errorf("manager pod %s: expected image %s (built from this tree), observed %q", p.Name, s.managerRef, got)
+		}
+	}
+	if err := eventually(ctx, t, "a leader among the manager pods", componentWait, func(ctx context.Context) error {
+		leader, err := s.leaderPod(ctx)
+		s.managerPod = leader
+		return err
+	}); err != nil {
+		t.Errorf("%v; inspect: %s", err, s.kubectl("-n "+ns+" get lease "+leaderLease+" -o yaml"))
+	}
+	t.Logf("%d manager pods %v run %s; leader %s", len(pods), s.managerPods, s.managerRef, s.managerPod)
+}
+
+// podNames returns the names of pods, for messages.
+func podNames(pods []corev1.Pod) []string {
+	names := make([]string, 0, len(pods))
+	for i := range pods {
+		names = append(names, pods[i].Name)
+	}
+	return names
+}
+
+// leaderPod returns the name of the manager pod that the leader Lease
+// names (its holderIdentity is "<pod name>_<uuid>"), read under ctx, or an
+// error when the Lease is missing, unheld or names none of s.managerPods.
+func (s *suite) leaderPod(ctx context.Context) (string, error) {
+	l, err := s.c.Kube.CoordinationV1().Leases(env.ManagerNamespace).Get(ctx, leaderLease, metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("get Lease %s/%s: %w", env.ManagerNamespace, leaderLease, err)
+	}
+	holder := ""
+	if l.Spec.HolderIdentity != nil {
+		holder = *l.Spec.HolderIdentity
+	}
+	for _, name := range s.managerPods {
+		if strings.HasPrefix(holder, name+"_") {
+			return name, nil
+		}
+	}
+	return "", fmt.Errorf("expected the leader Lease %s/%s to be held by one of the manager pods %v, observed holderIdentity %q", env.ManagerNamespace, leaderLease, s.managerPods, holder)
 }
 
 // containerImage returns the image of the container name among cs, or ""
@@ -187,24 +239,27 @@ func (s *suite) caBundleMatches(ctx context.Context) error {
 	return nil
 }
 
-// checkHealthEndpoints fails t unless the manager pod answers /healthz
+// checkHealthEndpoints fails t unless every manager pod, the standby as
+// well as the leader (the standby serves the webhooks), answers /healthz
 // and /readyz on the health port with "ok", through the API server's pod
 // proxy under ctx.
 func (s *suite) checkHealthEndpoints(ctx context.Context, t *testing.T) {
 	t.Helper()
-	for _, path := range []string{"/healthz", "/readyz"} {
-		err := eventually(ctx, t, "manager "+path, componentWait, func(ctx context.Context) error {
-			body, err := health.PodProxyGet(ctx, s.c, env.ManagerNamespace, s.managerPod, healthPort, path)
+	for _, pod := range s.managerPods {
+		for _, path := range []string{"/healthz", "/readyz"} {
+			err := eventually(ctx, t, "manager "+pod+" "+path, componentWait, func(ctx context.Context) error {
+				body, err := health.PodProxyGet(ctx, s.c, env.ManagerNamespace, pod, healthPort, path)
+				if err != nil {
+					return err
+				}
+				if strings.TrimSpace(string(body)) != "ok" {
+					return fmt.Errorf("expected body \"ok\", observed %q", body)
+				}
+				return nil
+			})
 			if err != nil {
-				return err
+				t.Errorf("%v; inspect: %s", err, s.kubectl(fmt.Sprintf("get --raw /api/v1/namespaces/%s/pods/%s:%d/proxy%s", env.ManagerNamespace, pod, healthPort, path)))
 			}
-			if strings.TrimSpace(string(body)) != "ok" {
-				return fmt.Errorf("expected body \"ok\", observed %q", body)
-			}
-			return nil
-		})
-		if err != nil {
-			t.Errorf("%v; inspect: %s", err, s.kubectl(fmt.Sprintf("get --raw /api/v1/namespaces/%s/pods/%s:%d/proxy%s", env.ManagerNamespace, s.managerPod, healthPort, path)))
 		}
 	}
 }

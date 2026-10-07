@@ -37,26 +37,22 @@ import (
 // maxLogLines caps the manager log lines a health check reads.
 const maxLogLines = 200000
 
-// health is stage 7: the manager pod is the one setup saw, with no new
-// restart; the manager's log since the suite started holds no panic,
+// health is stage 7: the manager pods are the ones setup saw, with no new
+// restart; the managers' logs since the suite started holds no panic,
 // fatal or klog E/F line (health.DefaultFatal, no allowlist); and every
 // CAPTF Job pod the tracker saw ended Succeeded, except the failing
 // cluster's apply pods from before its variable was removed.
 // It runs under ctx and fails t on any problem.
 func (s *suite) health(ctx context.Context, t *testing.T) {
 	mhint := s.kubectl("-n " + env.ManagerNamespace + " get pods -l " + managerSelector + " -o wide")
-	m, err := s.currentManager(ctx)
-	switch {
-	case err != nil:
+	ms, err := s.currentManagers(ctx)
+	if err != nil {
 		t.Errorf("%v; inspect: %s", err, mhint)
-	case m.uid != s.manager.uid:
-		t.Errorf("expected the manager pod %s (uid %s) to run throughout, observed %s (uid %s): it was replaced during the run; inspect: %s",
-			s.manager.name, s.manager.uid, m.name, m.uid, mhint)
-	case m.restarts != s.manager.restarts:
-		t.Errorf("expected manager pod %s to keep %d restarts, observed %d; inspect: %s", m.name, s.manager.restarts, m.restarts, mhint)
-	}
-	if err == nil {
-		s.scanManagerLog(ctx, t, m.name)
+	} else {
+		s.checkManagersStable(t, ms, mhint)
+		for _, m := range ms {
+			s.scanManagerLog(ctx, t, m.name)
+		}
 	}
 
 	s.tracker.stop()
@@ -85,6 +81,48 @@ func (s *suite) health(ctx context.Context, t *testing.T) {
 	if succeeded == 0 {
 		t.Errorf("expected the tracker to have seen CAPTF Job pods in %s, observed none", s.ns)
 	}
+}
+
+// checkManagersStable fails t unless now is exactly the manager pods
+// setup recorded: the same names and UIDs (none replaced, added or gone)
+// and the same restart counts. hint is the inspect command.
+func (s *suite) checkManagersStable(t *testing.T, now []managerPod, hint string) {
+	t.Helper()
+	want := make(map[string]managerPod, len(s.managers))
+	for _, m := range s.managers {
+		want[m.name] = m
+	}
+	var bad []string
+	seen := make(map[string]bool, len(now))
+	for _, m := range now {
+		seen[m.name] = true
+		w, ok := want[m.name]
+		switch {
+		case !ok:
+			bad = append(bad, fmt.Sprintf("%s (uid %s) is new", m.name, m.uid))
+		case w.uid != m.uid:
+			bad = append(bad, fmt.Sprintf("%s was replaced (uid %s, now %s)", m.name, w.uid, m.uid))
+		case w.restarts != m.restarts:
+			bad = append(bad, fmt.Sprintf("%s restarted (%d restarts, now %d)", m.name, w.restarts, m.restarts))
+		}
+	}
+	for _, w := range s.managers {
+		if !seen[w.name] {
+			bad = append(bad, fmt.Sprintf("%s (uid %s) is gone", w.name, w.uid))
+		}
+	}
+	if len(bad) > 0 {
+		t.Errorf("expected the manager pods %v to run throughout with no restart, observed:\n  %s\ninspect: %s", managerNames(s.managers), strings.Join(bad, "\n  "), hint)
+	}
+}
+
+// managerNames returns the names of ms, for messages.
+func managerNames(ms []managerPod) []string {
+	names := make([]string, 0, len(ms))
+	for _, m := range ms {
+		names = append(names, m.name)
+	}
+	return names
 }
 
 // scanManagerLog fails t when the log of every container of the manager

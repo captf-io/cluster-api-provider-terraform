@@ -34,7 +34,7 @@ import (
 // identityWait bounds the identity reaching Ready.
 const identityWait = 2 * time.Minute
 
-// setup is stage 1: it records the manager pod, creates the run's
+// setup is stage 1: it records the manager pods, creates the run's
 // namespace, the identity's credentials Secret and the cluster-scoped
 // TerraformClusterIdentity that admits only that namespace (waiting for
 // Ready=True, SecretFound), and the bootstrap Secret every machine reads.
@@ -42,12 +42,14 @@ const identityWait = 2 * time.Minute
 // before the identity: the identity controller does not watch Secrets.
 // It runs under ctx and fails t on any problem.
 func (s *suite) setup(ctx context.Context, t *testing.T) {
-	m, err := s.currentManager(ctx)
+	ms, err := s.currentManagers(ctx)
 	if err != nil {
 		t.Fatalf("%v; inspect: %s", err, s.kubectl("-n "+env.ManagerNamespace+" get pods -o wide"))
 	}
-	s.manager = m
-	t.Logf("manager pod %s (uid %s, %d restarts so far)", m.name, m.uid, m.restarts)
+	s.managers = ms
+	for _, m := range ms {
+		t.Logf("manager pod %s (uid %s, %d restarts so far)", m.name, m.uid, m.restarts)
+	}
 
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: s.ns, Labels: map[string]string{"captf.io/e2e": "noop"}}}
 	if _, err := s.c.Kube.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{}); err != nil {

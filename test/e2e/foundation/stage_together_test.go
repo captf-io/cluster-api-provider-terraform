@@ -186,8 +186,8 @@ watch:
 		problems = append(problems, stableErr.Error())
 	}
 	if len(problems) > 0 {
-		t.Fatalf("expected the cluster to hold still for %s (no pod restarted, recreated, deleted, added or not ready; the leader Lease held by %s and renewing; the API server ready), observed after %s:\n  %s\ninspect: %s",
-			window, s.managerPod, time.Since(since).Round(time.Second), strings.Join(problems, "\n  "),
+		t.Fatalf("expected the cluster to hold still for %s (no pod restarted, recreated, deleted, added or not ready; the leader Lease held by one of the manager pods %v and renewing; the API server ready), observed after %s:\n  %s\ninspect: %s",
+			window, s.managerPods, time.Since(since).Round(time.Second), strings.Join(problems, "\n  "),
 			s.kubectl("get pods -A -o wide; kubectl get events -A --field-selector type=Warning; kubectl -n "+env.ManagerNamespace+" get lease "+leaderLease+" -o yaml"))
 	}
 	if err := health.WarningEvents(ctx, s.c, wait.DefaultProviderNamespaces, since, compile(warningEventAllow)); err != nil {
@@ -196,11 +196,15 @@ watch:
 }
 
 // liveChecks returns nil when, read under ctx, the leader Lease is held
-// by the manager pod with a recent renewTime that advances, and the API
+// by one of the manager pods with a recent renewTime that advances, and the API
 // server is ready and live; else the first failure.
 func (s *suite) liveChecks(ctx context.Context) error {
 	ns := env.ManagerNamespace
-	if err := health.LeaseHeld(ctx, s.c, ns, leaderLease, s.managerPod, leaseMaxAge); err != nil {
+	leader, err := s.leaderPod(ctx)
+	if err != nil {
+		return err
+	}
+	if err := health.LeaseHeld(ctx, s.c, ns, leaderLease, leader+"_", leaseMaxAge); err != nil {
 		return err
 	}
 	if err := health.LeaseRenewing(ctx, s.c, ns, leaderLease, leaseAdvanceWithin); err != nil {

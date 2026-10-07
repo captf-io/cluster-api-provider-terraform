@@ -126,8 +126,8 @@ type suite struct {
 	// images: Terraform for the cluster and machine A, OpenTofu for
 	// machine B and the pool.
 	clusterImg, machineAImg, machineBImg, poolImg image
-	// manager is the manager pod at setup (stage 1).
-	manager managerPod
+	// managers are the manager pods at setup, sorted by name (stage 1).
+	managers []managerPod
 	// backendID is the cluster state's exports.backend_id (stage 2).
 	backendID string
 	// failFixed is when the failing cluster's variable was removed; its

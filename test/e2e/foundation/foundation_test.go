@@ -81,7 +81,9 @@ type suite struct {
 	managerRef string
 	// treeID is the tree the manager image was built from (stage 1).
 	treeID string
-	// managerPod is the CAPTF manager pod's name (stage 4).
+	// managerPods are the names of the CAPTF manager pods (stage 4).
+	managerPods []string
+	// managerPod is the manager pod holding the leader Lease (stage 4).
 	managerPod string
 	// envCollected records that an env phase failed and so already wrote
 	// a diagnostics bundle.

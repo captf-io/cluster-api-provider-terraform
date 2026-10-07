@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -155,7 +156,7 @@ func (s *suite) deleteGroup(ctx context.Context, t *testing.T, group cleanupGrou
 	return list(ctx)
 }
 
-// managerPod identifies the CAPTF manager pod and its restarts at setup.
+// managerPod identifies one CAPTF manager pod and its restarts.
 type managerPod struct {
 	// name is the pod's name.
 	name string
@@ -165,29 +166,45 @@ type managerPod struct {
 	restarts int32
 }
 
-// managerSelector selects the CAPTF manager pod.
+// managerSelector selects the CAPTF manager pods.
 const managerSelector = "control-plane=controller-manager"
 
-// currentManager returns the single CAPTF manager pod, read under ctx,
-// or an error when there is not exactly one, Running.
-func (s *suite) currentManager(ctx context.Context) (managerPod, error) {
+// currentManagers returns every CAPTF manager pod, sorted by name, read
+// under ctx, or an error unless their number equals the Deployment's
+// spec.replicas and all are Running.
+func (s *suite) currentManagers(ctx context.Context) ([]managerPod, error) {
+	d, err := s.c.Kube.AppsV1().Deployments(env.ManagerNamespace).Get(ctx, env.ManagerDeployment, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	want := 1
+	if d.Spec.Replicas != nil {
+		want = int(*d.Spec.Replicas)
+	}
 	pods, err := s.c.Kube.CoreV1().Pods(env.ManagerNamespace).List(ctx, metav1.ListOptions{LabelSelector: managerSelector})
 	if err != nil {
-		return managerPod{}, err
+		return nil, err
 	}
-	if len(pods.Items) != 1 || pods.Items[0].Status.Phase != corev1.PodRunning {
-		var names []string
-		for i := range pods.Items {
-			names = append(names, fmt.Sprintf("%s (%s)", pods.Items[i].Name, pods.Items[i].Status.Phase))
+	var names []string
+	running := 0
+	out := make([]managerPod, 0, len(pods.Items))
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		names = append(names, fmt.Sprintf("%s (%s)", p.Name, p.Status.Phase))
+		if p.Status.Phase == corev1.PodRunning {
+			running++
 		}
-		return managerPod{}, fmt.Errorf("expected one Running manager pod (%s) in %s, observed %v", managerSelector, env.ManagerNamespace, names)
+		var restarts int32
+		for _, cs := range p.Status.ContainerStatuses {
+			restarts += cs.RestartCount
+		}
+		out = append(out, managerPod{name: p.Name, uid: string(p.UID), restarts: restarts})
 	}
-	p := &pods.Items[0]
-	var restarts int32
-	for _, cs := range p.Status.ContainerStatuses {
-		restarts += cs.RestartCount
+	if len(pods.Items) != want || running != want {
+		return nil, fmt.Errorf("expected %d Running manager pods (%s, the Deployment's spec.replicas) in %s, observed %v", want, managerSelector, env.ManagerNamespace, names)
 	}
-	return managerPod{name: p.Name, uid: string(p.UID), restarts: restarts}, nil
+	slices.SortFunc(out, func(a, b managerPod) int { return strings.Compare(a.name, b.name) })
+	return out, nil
 }
 
 // podRecord is the last state the tracker saw of one CAPTF Job pod.
