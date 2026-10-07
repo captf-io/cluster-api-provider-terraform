@@ -22,6 +22,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/cluster-api/util/conditions"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
@@ -122,5 +123,33 @@ func TestDestroyCleanupDeletesProtectedSecrets(t *testing.T) {
 		if err := e.c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: name}, &corev1.Secret{}); client.IgnoreNotFound(err) != nil || err == nil {
 			t.Errorf("inputs record %s: %v, want it gone", name, err)
 		}
+	}
+}
+
+// TestDestroyedCleanupFinishes proves a deleting object whose destroy
+// succeeded, whose Cleanup deleted the state but whose finalizer removal
+// was not persisted, and whose destroy Job is gone since, finishes its
+// cleanup on the next pass instead of holding on a lost state.
+func TestDestroyedCleanupFinishes(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, world(machine(deleting, notPaused, provisioned, func(m *infrav1.TerraformMachine) {
+		m.Status.Conditions = []metav1.Condition{{
+			Type: infrav1.ApplyJobSucceededCondition, Status: metav1.ConditionTrue, Reason: infrav1.DestroySucceededReason,
+			LastTransitionTime: metav1.NewTime(t0),
+		}}
+	}))...)
+	e.d.Jobs, e.d.State = &clientRunner{c: e.c}, state.NewReader(e.c)
+	e.writeDurable(t, e.get(t))
+	for range 2 {
+		if e.get(t) == nil {
+			break
+		}
+		if _, err := Reconcile(t.Context(), e.d, healthyKind(t, e, testName)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if m := e.get(t); m != nil {
+		c := conditions.Get(m, infrav1.StateReadableCondition)
+		t.Errorf("object kept (StateReadable %+v; %+v), want the cleanup finished", c, m.Status.Conditions)
 	}
 }

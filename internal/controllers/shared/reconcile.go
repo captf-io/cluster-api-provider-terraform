@@ -1443,6 +1443,14 @@ func (r *reconciler) localSecret(ctx context.Context, set func(metav1.ConditionS
 	return true, nil
 }
 
+// destroyed reports whether the object's ApplyJobSucceeded, as persisted
+// before this pass, records a successful destroy: what the pass that ran
+// Cleanup set, before the finalizer removal it could not persist.
+func (r *reconciler) destroyed() bool {
+	c, ok := r.before[infrav1.ApplyJobSucceededCondition]
+	return ok && c.Status == metav1.ConditionTrue && c.Reason == infrav1.DestroySucceededReason
+}
+
 // errStateUnreadable marks a state that exists but cannot be read, the
 // state that is gone of an object that ever applied (appliedBefore), or
 // a missing state an apply whose outcome is unconfirmed may have left
@@ -1458,6 +1466,12 @@ var errStateUnreadable = errors.New("state unreadable")
 // errStateUnreadable for a lost or held state, or any error from looking
 // for a previous apply or consuming the confirmation.
 func (r *reconciler) noState(ctx context.Context) error {
+	if r.deleting && r.destroyed() {
+		// Cleanup deleted the state after a successful destroy, then the
+		// pass ended before the finalizer went, and that Job is gone too
+		// (pruned, deleted by hand): nothing is lost, the cleanup finishes.
+		return nil
+	}
 	lost, err := appliedBefore(ctx, r.d, r.k, r.suffix, r.durable)
 	if err != nil {
 		return err
