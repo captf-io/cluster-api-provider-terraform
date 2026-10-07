@@ -20,6 +20,9 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -90,6 +93,77 @@ func TestSchemaCache(t *testing.T) {
 	}
 	if c.String() == "" {
 		t.Error("String is empty")
+	}
+}
+
+// blockingInspector answers every Config with cfg once release is closed,
+// counting the calls.
+type blockingInspector struct {
+	cfg     *Config
+	release chan struct{}
+	calls   atomic.Int32
+}
+
+// Config counts the call, waits for release and returns the fixed config.
+func (b *blockingInspector) Config(context.Context, string, authn.Keychain, *v1.Platform) (*Config, error) {
+	b.calls.Add(1)
+	<-b.release
+	return b.cfg, nil
+}
+
+// TestSchemaCacheCoalescesReads: concurrent misses of one reference wait
+// for one registry read and all get its answer.
+func TestSchemaCacheCoalescesReads(t *testing.T) {
+	t.Parallel()
+	c := NewSchemaCache()
+	insp := &blockingInspector{cfg: &Config{Digest: "sha256:aa", Labels: map[string]string{VariablesSchemaLabel: goodSchema}}, release: make(chan struct{})}
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for range 8 {
+		wg.Go(func() {
+			s, err := c.Schema(context.Background(), insp, "ns", "img:v1", nil)
+			if err == nil && s == nil {
+				err = errors.New("no schema")
+			}
+			errs <- err
+		})
+	}
+	// Let every reader reach the cache before the read answers.
+	for insp.calls.Load() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(20 * time.Millisecond)
+	close(insp.release)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Error(err)
+		}
+	}
+	if n := insp.calls.Load(); n != 1 {
+		t.Errorf("registry reads = %d, want 1", n)
+	}
+}
+
+// TestSchemaCacheNamespaceBound: a namespace that reads more references
+// than maxNamespaceRefs loses its own bindings, never another
+// namespace's.
+func TestSchemaCacheNamespaceBound(t *testing.T) {
+	t.Parallel()
+	c := NewSchemaCache()
+	insp := &countingInspector{cfg: &Config{Digest: "sha256:aa", Labels: map[string]string{VariablesSchemaLabel: goodSchema}}}
+	if _, err := c.Schema(context.Background(), insp, "quiet", "img:v1", nil); err != nil {
+		t.Fatal(err)
+	}
+	for i := range maxSchemaEntries {
+		insp.cfg = &Config{Digest: "sha256:" + strconv.Itoa(i), Labels: map[string]string{VariablesSchemaLabel: goodSchema}}
+		if _, err := c.Schema(context.Background(), insp, "noisy", "img:"+strconv.Itoa(i), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, ok := c.Cached("quiet", "img:v1"); !ok {
+		t.Error("another namespace's reads emptied this one's binding")
 	}
 }
 

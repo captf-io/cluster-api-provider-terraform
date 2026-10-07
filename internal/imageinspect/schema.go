@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"strings"
 	"sync"
@@ -46,7 +47,23 @@ const (
 	// maxSchemaEntries bounds the cache. When it is full the cache is
 	// emptied: schemas are cheap to read again.
 	maxSchemaEntries = 512
+	// maxNamespaceRefs bounds one namespace's reference bindings: a
+	// namespace past it loses its own, so no namespace can empty the
+	// cache for the others.
+	maxNamespaceRefs = 64
 )
+
+// namespaceRefs returns how many reference bindings namespace holds; c.mu
+// is held.
+func (c *SchemaCache) namespaceRefs(namespace string) int {
+	prefix, n := refKey(namespace, ""), 0
+	for k := range c.byRef {
+		if strings.HasPrefix(k, prefix) {
+			n++
+		}
+	}
+	return n
+}
 
 // schemaEntry is what one image digest declares.
 type schemaEntry struct {
@@ -81,6 +98,18 @@ type SchemaCache struct {
 	byDigest map[string]schemaEntry
 	byRef    map[string]refEntry
 	failed   map[string]failure
+	// reading holds the reads in flight, by refKey: concurrent misses of
+	// one reference (a restart, many machines of one template) wait for
+	// one registry read instead of each making their own.
+	reading map[string]*schemaRead
+}
+
+// schemaRead is one registry read in flight, which done closes once
+// schema and err hold its answer.
+type schemaRead struct {
+	done   chan struct{}
+	schema *varschema.Schema
+	err    error
 }
 
 // failure is a remembered failed read.
@@ -132,6 +161,12 @@ func (c *SchemaCache) lookup(namespace, ref string) (schemaEntry, bool) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.lookupLocked(namespace, ref)
+}
+
+// lookupLocked returns the entry namespace's reading of ref resolved to,
+// as lookup does; c.mu is held.
+func (c *SchemaCache) lookupLocked(namespace, ref string) (schemaEntry, bool) {
 	r, ok := c.byRef[refKey(namespace, ref)]
 	if !ok || (!r.expires.IsZero() && !c.now().Before(r.expires)) {
 		return schemaEntry{}, false
@@ -149,12 +184,50 @@ func (c *SchemaCache) lookup(namespace, ref string) (schemaEntry, bool) {
 // (wrapping varschema.ErrInvalid or varschema.ErrTooLarge); an invalid
 // label is cached too, so it is reported once.
 func (c *SchemaCache) Schema(ctx context.Context, insp Inspector, namespace, ref string, keychain authn.Keychain) (*varschema.Schema, error) {
-	if e, ok := c.lookup(namespace, ref); ok {
+	k := refKey(namespace, ref)
+	// The cache, the failures and the reads in flight are checked under
+	// one lock: a reader that missed the cache before a read finished
+	// would otherwise find that read gone too and make its own.
+	c.mu.Lock()
+	if e, ok := c.lookupLocked(namespace, ref); ok {
+		c.mu.Unlock()
 		return e.schema, e.invalid
 	}
-	if err := c.recentFailure(namespace, ref); err != nil {
+	if err := c.recentFailureLocked(namespace, ref); err != nil {
+		c.mu.Unlock()
 		return nil, err
 	}
+	if rd, ok := c.reading[k]; ok {
+		c.mu.Unlock()
+		select {
+		case <-rd.done:
+			if errors.Is(rd.err, context.DeadlineExceeded) || errors.Is(rd.err, context.Canceled) {
+				// That reader's own deadline, not the registry's answer.
+				return c.read(ctx, insp, namespace, ref, keychain)
+			}
+			return rd.schema, rd.err
+		case <-ctx.Done():
+			return nil, fmt.Errorf("imageinspect: wait for the schema of %s: %w", ref, ctx.Err())
+		}
+	}
+	if c.reading == nil {
+		c.reading = map[string]*schemaRead{}
+	}
+	rd := &schemaRead{done: make(chan struct{})}
+	c.reading[k] = rd
+	c.mu.Unlock()
+	rd.schema, rd.err = c.read(ctx, insp, namespace, ref, keychain)
+	c.mu.Lock()
+	delete(c.reading, k)
+	c.mu.Unlock()
+	close(rd.done)
+	return rd.schema, rd.err
+}
+
+// read is Schema's registry read of ref for namespace through insp,
+// bounded by ctx and authenticated with keychain, with what it caches. It
+// returns the schema, as Schema does.
+func (c *SchemaCache) read(ctx context.Context, insp Inspector, namespace, ref string, keychain authn.Keychain) (*varschema.Schema, error) {
 	cfg, err := insp.Config(ctx, ref, keychain, DefaultPlatform())
 	if err != nil {
 		if cacheableFailure(ctx, err) {
@@ -213,11 +286,9 @@ func (c *SchemaCache) Remember(namespace, ref string, cfg *Config) (*varschema.S
 	return s, err
 }
 
-// recentFailure returns the error of namespace's last failed read of ref
-// when it is still remembered, else nil.
-func (c *SchemaCache) recentFailure(namespace, ref string) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+// recentFailureLocked returns the error of namespace's last failed read of
+// ref when it is still remembered, else nil; c.mu is held.
+func (c *SchemaCache) recentFailureLocked(namespace, ref string) error {
 	k := refKey(namespace, ref)
 	f, ok := c.failed[k]
 	if !ok || !c.now().Before(f.expires) {
@@ -235,11 +306,28 @@ func (c *SchemaCache) put(namespace, ref, digest string, e schemaEntry) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if len(c.byDigest) >= maxSchemaEntries || len(c.byRef) >= maxSchemaEntries {
-		c.byDigest, c.byRef, c.failed = map[string]schemaEntry{}, map[string]refEntry{}, map[string]failure{}
+	k := refKey(namespace, ref)
+	// Bounded per namespace first, so one namespace reading many images
+	// (or many tags) empties its own bindings, not everyone's.
+	if _, ok := c.byRef[k]; !ok && c.namespaceRefs(namespace) >= maxNamespaceRefs {
+		prefix := refKey(namespace, "")
+		maps.DeleteFunc(c.byRef, func(key string, _ refEntry) bool { return strings.HasPrefix(key, prefix) })
+	}
+	if len(c.byRef) >= maxSchemaEntries {
+		c.byRef, c.failed = map[string]refEntry{}, map[string]failure{}
+	}
+	if _, ok := c.byDigest[digest]; !ok && len(c.byDigest) >= maxSchemaEntries {
+		// The digests no binding names any more go first.
+		used := map[string]bool{}
+		for _, r := range c.byRef {
+			used[r.digest] = true
+		}
+		maps.DeleteFunc(c.byDigest, func(d string, _ schemaEntry) bool { return !used[d] })
+		if len(c.byDigest) >= maxSchemaEntries {
+			c.byDigest, c.byRef = map[string]schemaEntry{}, map[string]refEntry{}
+		}
 	}
 	c.byDigest[digest] = e
-	k := refKey(namespace, ref)
 	delete(c.failed, k)
 	r := refEntry{digest: digest}
 	if digestOf(ref) == "" {
