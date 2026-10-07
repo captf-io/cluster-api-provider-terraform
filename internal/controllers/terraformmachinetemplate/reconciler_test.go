@@ -57,12 +57,37 @@ type fakeInspector struct {
 	cfg   *imageinspect.Config
 	err   error
 	calls int
+	// schemas is the shared schema cache of the reconcilers the test
+	// builds around f, as the manager has one; it follows f so that
+	// consecutive runs see each other's cached images.
+	schemas *imageinspect.SchemaCache
+	// now is the schema cache's clock; nil is the wall clock.
+	now func() time.Time
 }
 
-// Config records the call and returns f's fixed config and error.
+// Config records the call and returns f's fixed config and error. A
+// config without a digest gets one, as a registry always supplies it.
 func (f *fakeInspector) Config(context.Context, string, authn.Keychain, *v1.Platform) (*imageinspect.Config, error) {
 	f.calls++
+	if f.cfg != nil && f.cfg.Digest == "" {
+		cfg := *f.cfg
+		cfg.Digest = "sha256:fake"
+		return &cfg, f.err
+	}
 	return f.cfg, f.err
+}
+
+// cache returns f's schema cache, creating it on first use.
+func (f *fakeInspector) cache() *imageinspect.SchemaCache {
+	if f.schemas == nil {
+		f.schemas = imageinspect.NewSchemaCacheWithClock(func() time.Time {
+			if f.now != nil {
+				return f.now()
+			}
+			return time.Now()
+		})
+	}
+	return f.schemas
 }
 
 // t0 is the fixed time every test's clock reports.
@@ -146,7 +171,7 @@ func runRecorded(t *testing.T, tpl *infrav1.TerraformMachineTemplate, insp *fake
 		t.Fatal(err)
 	}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tpl).WithStatusSubresource(tpl).Build()
-	r := &Reconciler{Deps: shared.Deps{Client: c, APIReader: c, Inspector: insp, Clock: testingclock.NewFakePassiveClock(t0)}}
+	r := &Reconciler{Deps: shared.Deps{Client: c, APIReader: c, Inspector: insp, Schemas: insp.cache(), Clock: testingclock.NewFakePassiveClock(t0)}}
 	if rec != nil {
 		r.Deps.Recorder = rec
 	}
@@ -182,7 +207,7 @@ func TestReconcileResolved(t *testing.T) {
 	got, res := run(t, template(), insp)
 	if reasonOf(got) != infrav1.CapacityResolvedReason || !got.Status.Capacity.Memory().Equal(resource.MustParse("16Gi")) ||
 		got.Status.NodeInfo.Architecture != infrav1.ArchitectureAmd64 || got.Status.CapacitySource.Image != image ||
-		got.Status.CapacitySource.Source != infrav1.CapacitySourceImage || res.RequeueAfter != 0 {
+		got.Status.CapacitySource.Source != infrav1.CapacitySourceImage || res.RequeueAfter != imageinspect.SchemaTagTTL {
 		t.Errorf("status = %+v, result %+v", got.Status, res)
 	}
 
@@ -299,8 +324,8 @@ func TestReconcileSpecCapacityInspectFailed(t *testing.T) {
 	if v := conditions.Get(got, infrav1.VariablesValidCondition); v == nil || v.Status != metav1.ConditionUnknown || v.Reason != infrav1.VariablesSchemaUnavailableReason {
 		t.Errorf("VariablesValid = %+v, want Unknown/%s", v, infrav1.VariablesSchemaUnavailableReason)
 	}
-	if Resolved(got) {
-		t.Error("a template whose image was not inspected counts as resolved")
+	if capacityCurrent(got) {
+		t.Error("a template whose image was not inspected counts as current")
 	}
 }
 
@@ -360,10 +385,11 @@ func TestFailedRetry(t *testing.T) {
 	t.Parallel()
 	failing := func(since time.Duration) *infrav1.TerraformMachineTemplate {
 		return template(func(tpl *infrav1.TerraformMachineTemplate) {
-			tpl.Status.Conditions = []metav1.Condition{{
-				Type: infrav1.CapacityResolvedCondition, Status: metav1.ConditionFalse, Reason: infrav1.ImageInspectFailedReason,
-				LastTransitionTime: metav1.NewTime(t0.Add(-since)),
-			}}
+			tpl.Status.Conditions = []metav1.Condition{
+				// An old success: it must not date the failures.
+				{Type: infrav1.CapacityResolvedCondition, Status: metav1.ConditionTrue, Reason: infrav1.CapacityResolvedReason, LastTransitionTime: metav1.NewTime(t0.Add(-100 * time.Hour))},
+				{Type: infrav1.VariablesValidCondition, Status: metav1.ConditionUnknown, Reason: infrav1.VariablesSchemaUnavailableReason, LastTransitionTime: metav1.NewTime(t0.Add(-since))},
+			}
 		})
 	}
 	for _, tt := range []struct {
@@ -412,20 +438,17 @@ func TestVariablesValid(t *testing.T) {
 	}
 
 	got, res := run(t, template(withVars(`{"instance_type":"m5"}`)), insp)
-	if c := variablesValid(got); c == nil || c.Status != metav1.ConditionTrue || c.Reason != infrav1.VariablesValidReason || res.RequeueAfter != 0 {
+	if c := variablesValid(got); c == nil || c.Status != metav1.ConditionTrue || c.Reason != infrav1.VariablesValidReason || res.RequeueAfter != imageinspect.SchemaTagTTL {
 		t.Errorf("valid variables: %+v, %+v", c, res)
 	}
-	if !Resolved(got) {
-		t.Error("a template with valid variables is resolved")
+	if !capacityCurrent(got) {
+		t.Error("a template with valid variables has current capacity")
 	}
 
 	got, _ = run(t, template(withVars(`{"instance_type":"m5","instnce":1}`)), insp)
 	c := variablesValid(got)
 	if c == nil || c.Status != metav1.ConditionFalse || c.Reason != infrav1.VariablesRejectedReason || !strings.Contains(c.Message, `"instnce" is not declared`) {
 		t.Errorf("invalid variables: %+v", c)
-	}
-	if !Resolved(got) {
-		t.Error("invalid variables are final for this image")
 	}
 
 	got, _ = run(t, template(), &fakeInspector{cfg: &imageinspect.Config{}})
@@ -438,9 +461,6 @@ func TestVariablesValid(t *testing.T) {
 	}), insp)
 	if c := variablesValid(got); c == nil || c.Status != metav1.ConditionUnknown || c.Reason != infrav1.VariablesSourcePendingReason || res.RequeueAfter != RetryFloor {
 		t.Errorf("missing source: %+v, %+v", c, res)
-	}
-	if Resolved(got) {
-		t.Error("a missing source is retried")
 	}
 
 	got, _ = run(t, template(), &fakeInspector{err: errors.New("down")})

@@ -124,9 +124,10 @@ func MirrorIdentityIndexer(o client.Object) []string {
 }
 
 // SetupIndexes registers the field indexes on mgr, using ctx; call it
-// before the controllers start. Templates are not indexed: they run
-// nothing. Indexing a type starts its informer, so a Secret index must be
-// on manager.SecretMeta: a typed one would cache every payload. It returns any error registering an index.
+// before the controllers start. Only machine templates are indexed (by
+// variables source): the other templates run nothing. Indexing a type starts
+// its informer, so a Secret index must be on manager.SecretMeta: a typed one
+// would cache every payload. It returns any error registering an index.
 func SetupIndexes(ctx context.Context, mgr ctrl.Manager) error {
 	for _, ix := range []struct {
 		obj   client.Object
@@ -139,6 +140,7 @@ func SetupIndexes(ctx context.Context, mgr ctrl.Manager) error {
 		{&infrav1.TerraformMachine{}, VariablesSourceIndex, MachineVariablesSourceIndexer},
 		{&infrav1.TerraformMachinePool{}, IdentityIndex, PoolIdentityIndexer},
 		{&infrav1.TerraformMachinePool{}, VariablesSourceIndex, PoolVariablesSourceIndexer},
+		{&infrav1.TerraformMachineTemplate{}, VariablesSourceIndex, TemplateVariablesSourceIndexer},
 		{&infrav1.TerraformPlan{}, PlanTargetIndex, PlanTargetIndexer},
 		// Metadata only: the informer the managed-Secret watches share.
 		{manager.SecretMeta(), MirrorIdentityIndex, MirrorIdentityIndexer},

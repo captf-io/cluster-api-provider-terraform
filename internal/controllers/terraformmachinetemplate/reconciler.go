@@ -47,6 +47,7 @@ import (
 	"github.com/captf-io/cluster-api-provider-terraform/internal/contract"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/controllers/shared"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/imageinspect"
+	"github.com/captf-io/cluster-api-provider-terraform/internal/varschema"
 )
 
 // Retry bounds after a registry or auth failure.
@@ -66,19 +67,20 @@ type Reconciler struct {
 }
 
 // Reconcile resolves, using ctx, the capacity of the TerraformMachineTemplate
-// named by req from its image, once per image reference (tags are not
-// re-polled; a new image is a new template). It returns a Result requeuing
-// with a backoff after a failed inspection, and an error only from a
-// failed get or status patch.
+// named by req from its image, and checks its variables against the image's
+// schema. The image is inspected when the status does not describe the
+// spec, and again once SchemaTagTTL has passed for a mutable tag (a
+// re-pushed tag changes capacity and schema; a digest reference never
+// does); in between, a reconcile only re-checks the variables, against the
+// schema in the shared cache, so a fixed ConfigMap or Secret is picked up.
+// It returns a Result requeuing with a backoff after a failed inspection,
+// and an error only from a failed get or status patch.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Result, reterr error) {
 	t := &infrav1.TerraformMachineTemplate{}
 	if err := r.Deps.Client.Get(ctx, req.NamespacedName, t); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	ctx = klog.NewContext(ctx, klog.LoggerWithValues(klog.FromContext(ctx), "TerraformMachineTemplate", klog.KObj(t)))
-	if Resolved(t) {
-		return ctrl.Result{}, nil
-	}
 
 	helper, err := patch.NewHelper(t, r.Deps.Client)
 	if err != nil {
@@ -89,16 +91,34 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 			reterr = kerrors.NewAggregate([]error{reterr, fmt.Errorf("patch: %w", err)})
 		}
 	}()
+	res, err := r.reconcile(ctx, t)
+	if err == nil && res.RequeueAfter == 0 && !imageinspect.PinsDigest(t.Spec.Template.Spec.Source.Image) && capacityCurrent(t) {
+		// Poll a mutable tag; the cache's tag binding decides when the
+		// image is really read again.
+		res.RequeueAfter = imageinspect.SchemaTagTTL
+	}
+	return res, err
+}
+
+// reconcile does Reconcile's work on t: re-checks the variables against the
+// cached schema when the capacity is current and the tag binding fresh,
+// else inspects the image, both bounded by ctx. It returns what Reconcile
+// returns.
+func (r *Reconciler) reconcile(ctx context.Context, t *infrav1.TerraformMachineTemplate) (ctrl.Result, error) {
+	if capacityCurrent(t) {
+		if schema, ok := r.Deps.Schemas.Cached(t.Namespace, t.Spec.Template.Spec.Source.Image); ok {
+			return r.validateVariables(ctx, t, schema)
+		}
+	}
 	return r.resolve(ctx, t)
 }
 
-// Resolved reports whether t's status already describes its spec: the same
-// image, the capacity from the same origin (spec.capacity as it stands, or
-// the image), resolved or not declared, or a label invalid for that same
-// image (the tag is not re-polled, so a retry cannot change it), and its
-// variables checked against the image's schema (valid or invalid;
-// Unknown, a source that is not there yet, is retried).
-func Resolved(t *infrav1.TerraformMachineTemplate) bool {
+// capacityCurrent reports whether t's capacity status describes its spec:
+// the same image, the capacity from the same origin (spec.capacity as it
+// stands, or the image), resolved or not declared, or a label invalid for
+// that same image (a retry cannot change it before the image does). It says
+// nothing of the variables, which are re-checked on every reconcile.
+func capacityCurrent(t *infrav1.TerraformMachineTemplate) bool {
 	if t.Status.CapacitySource.Image != t.Spec.Template.Spec.Source.Image {
 		return false
 	}
@@ -110,9 +130,7 @@ func Resolved(t *infrav1.TerraformMachineTemplate) bool {
 		return false
 	}
 	c := conditions.Get(t, infrav1.CapacityResolvedCondition)
-	v := conditions.Get(t, infrav1.VariablesValidCondition)
-	return c != nil && (c.Status == metav1.ConditionTrue || c.Reason == infrav1.CapacityLabelInvalidReason) &&
-		v != nil && v.Status != metav1.ConditionUnknown
+	return c != nil && (c.Status == metav1.ConditionTrue || c.Reason == infrav1.CapacityLabelInvalidReason)
 }
 
 // resolve inspects t's spec image using ctx, and sets its status.capacity,
@@ -144,13 +162,20 @@ func (r *Reconciler) resolve(ctx context.Context, t *infrav1.TerraformMachineTem
 		// The raw error goes to the log only: registry responses can carry
 		// arbitrary bodies that do not belong in a condition or an event.
 		klog.FromContext(ctx).V(shared.LogFlow).Info("Image inspection failed", "image", spec.Source.Image, "error", err.Error())
-		retry := failedRetry(t, r.Deps.Clock.Now())
-		prev := conditions.Get(t, infrav1.CapacityResolvedCondition)
-		firstFailure := prev == nil || (prev.Reason != infrav1.ImageInspectFailedReason && !strings.HasPrefix(prev.Message, notInspected))
+		now := r.Deps.Clock.Now()
+		retry := failedRetry(t, now)
+		prev := conditions.Get(t, infrav1.VariablesValidCondition)
+		firstFailure := prev == nil || prev.Reason != infrav1.VariablesSchemaUnavailableReason
+		if firstFailure {
+			// Start the failure clock: a condition keeps its transition
+			// time while its status stays Unknown.
+			conditions.Delete(t, infrav1.VariablesValidCondition)
+		}
 		// Without the image there is no schema to check the variables
 		// against, with the override or without.
 		conditions.Set(t, metav1.Condition{
 			Type: infrav1.VariablesValidCondition, Status: metav1.ConditionUnknown, Reason: infrav1.VariablesSchemaUnavailableReason, Message: msg,
+			LastTransitionTime: metav1.NewTime(now),
 		})
 		if len(t.Spec.Capacity) > 0 {
 			// The override does not depend on the registry: apply it, keep
@@ -200,22 +225,23 @@ func (r *Reconciler) resolve(ctx context.Context, t *infrav1.TerraformMachineTem
 		r.Deps.Metrics.ImageInspectError(infrav1.CapacityLabelInvalidReason)
 	}
 	conditions.Set(t, res.Condition)
-	return r.validateVariables(ctx, t, cfg)
+	// A label that is present but unusable checks nothing (tfcapi-lint
+	// reports it), as no label does.
+	schema, _ := r.Deps.Schemas.Remember(t.Namespace, spec.Source.Image, cfg)
+	return r.validateVariables(ctx, t, schema)
 }
 
 // validateVariables sets t's VariablesValid condition: the template's
-// merged variables and variablesFrom against the variables schema in cfg,
-// the image config just read (also remembered in the shared cache, so the
-// admission webhook knows it). A source that is missing leaves it Unknown
-// and requeues; an image without a usable schema checks nothing. ctx
+// merged variables and variablesFrom against schema, the variables schema
+// of its image (nil when the image declares no usable one: nothing is
+// checked). A source that is missing leaves it Unknown and requeues. ctx
 // bounds the source reads. It returns a Result requeuing for a missing
 // source, and an error only from reading a source.
-func (r *Reconciler) validateVariables(ctx context.Context, t *infrav1.TerraformMachineTemplate, cfg *imageinspect.Config) (ctrl.Result, error) {
+func (r *Reconciler) validateVariables(ctx context.Context, t *infrav1.TerraformMachineTemplate, schema *varschema.Schema) (ctrl.Result, error) {
 	spec := t.Spec.Template.Spec
 	set := func(status metav1.ConditionStatus, reason, msg string) {
 		conditions.Set(t, metav1.Condition{Type: infrav1.VariablesValidCondition, Status: status, Reason: reason, Message: msg})
 	}
-	schema, schemaErr := r.Deps.Schemas.Remember(t.Namespace, spec.Source.Image, cfg)
 	vars, gate, err := shared.ResolveVariables(ctx, r.Deps.APIReader, t.Namespace, contract.RoleMachine,
 		shared.VariablesSpec{Inline: spec.Variables, From: spec.VariablesFrom})
 	switch {
@@ -226,7 +252,7 @@ func (r *Reconciler) validateVariables(ctx context.Context, t *infrav1.Terraform
 		return ctrl.Result{RequeueAfter: RetryFloor}, nil
 	case gate != nil:
 		set(metav1.ConditionFalse, infrav1.VariablesRejectedReason, gate.Message)
-	case schemaErr != nil || schema == nil:
+	case schema == nil:
 		set(metav1.ConditionTrue, infrav1.VariablesSchemaNotDeclaredReason, "The image declares no usable "+imageinspect.VariablesSchemaLabel+"; the variables are not checked")
 	default:
 		if g := shared.VariablesSchemaGateOf(schema, vars); g != nil {
@@ -292,30 +318,36 @@ func InspectFailure(image string, err error) string {
 
 // failedRetry roughly doubles the retry while t's inspection keeps
 // failing: it returns the time since the failures began, measured from
-// now, clamped to [RetryFloor, RetryCeiling].
+// now, clamped to [RetryFloor, RetryCeiling]. The failures began when
+// VariablesValid became Unknown for want of the schema, which every failed
+// inspection sets, spec.capacity or not (CapacityResolved keeps the
+// transition time of an earlier success when the override applies).
 func failedRetry(t *infrav1.TerraformMachineTemplate, now time.Time) time.Duration {
-	c := conditions.Get(t, infrav1.CapacityResolvedCondition)
-	if c == nil || (c.Reason != infrav1.ImageInspectFailedReason && !strings.HasPrefix(c.Message, notInspected)) {
+	v := conditions.Get(t, infrav1.VariablesValidCondition)
+	if v == nil || v.Reason != infrav1.VariablesSchemaUnavailableReason {
 		return RetryFloor
 	}
-	return min(max(now.Sub(c.LastTransitionTime.Time), RetryFloor), RetryCeiling)
+	return min(max(now.Sub(v.LastTransitionTime.Time), RetryFloor), RetryCeiling)
 }
 
 // SetupWithManager registers the controller with mgr, applying opts to the
-// underlying controller: the template and its generation only (a fixed pull
-// Secret is picked up by the retry; a spec.capacity change bumps the
-// generation). It returns
-// an error if the controller could not be built.
+// underlying controller: the template and its generation (a spec.capacity
+// change bumps it), and the labeled ConfigMaps and Secrets its
+// variablesFrom names, so fixing one re-checks the variables. A fixed pull
+// Secret is picked up by the retry. It returns an error if the controller
+// could not be built.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager, opts controller.Options) error {
-	err := ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&infrav1.TerraformMachineTemplate{}, builder.WithPredicates(
 			predicates.ResourceHasFilterLabel(mgr.GetScheme(), mgr.GetLogger(), r.Deps.WatchFilter),
 			predicate.GenerationChangedPredicate{},
 		)).
 		Named("terraformmachinetemplate").
-		WithOptions(opts).
-		Complete(r)
-	if err != nil {
+		WithOptions(opts)
+	for _, src := range shared.VariablesSourceWatches(r.Deps, shared.VariablesSourceToTemplates(mgr.GetClient())) {
+		b = b.WatchesRawSource(src)
+	}
+	if err := b.Complete(r); err != nil {
 		return fmt.Errorf("terraformmachinetemplate: setup: %w", err)
 	}
 	return nil
