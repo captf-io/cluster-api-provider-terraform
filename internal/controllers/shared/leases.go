@@ -19,6 +19,7 @@ package shared
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/util/conditions"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -230,8 +232,15 @@ func clusterGate(ctx context.Context, d Deps, run runlease.Spec, now time.Time) 
 		return leaseWait{reason: infrav1.WaitingForRunLeaseReason, message: heldBy("the cluster write lease "+cl.Name, res.Holder, run.Op)}, nil
 	}
 	live, err := runlease.LiveMachineOps(ctx, d.APIReader, run.Namespace, run.ClusterName, now)
-	if err != nil || len(live) == 0 {
+	if err != nil {
 		return leaseWait{}, err
+	}
+	if len(live) == 0 {
+		// The leases are writable by every module of the namespace: the
+		// Jobs, which no module can touch, are checked too.
+		if live, err = runningMutatingJobs(ctx, d, run.Namespace, run.ClusterName, state.KindTerraformMachine, state.KindTerraformMachinePool); err != nil || len(live) == 0 {
+			return leaseWait{}, err
+		}
 	}
 	named := live[:min(len(live), maxNamedHolders)]
 	msg := fmt.Sprintf("Waiting for %d machine and machine pool apply or destroy Jobs of cluster %s to finish before the %s starts: %s",
@@ -254,11 +263,47 @@ func clusterGate(ctx context.Context, d Deps, run runlease.Spec, now time.Time) 
 func machineGate(ctx context.Context, d Deps, run runlease.Spec, now time.Time) (leaseWait, error) {
 	name := runlease.ClusterName(run.Namespace, run.ClusterName)
 	holder, live, err := runlease.Live(ctx, d.APIReader, run.Namespace, name, now)
-	if err != nil || !live {
+	if err != nil {
 		return leaseWait{}, err
+	}
+	if !live {
+		// The lease is writable by every module of the namespace, which
+		// could free it under a running cluster Job: the Jobs, which no
+		// module can touch, are checked too.
+		running, err := runningMutatingJobs(ctx, d, run.Namespace, run.ClusterName, state.KindTerraformCluster)
+		if err != nil || len(running) == 0 {
+			return leaseWait{}, err
+		}
+		holder = running[0]
 	}
 	return leaseWait{reason: infrav1.WaitingForClusterOperationReason, message: fmt.Sprintf(
 		"Waiting for the TerraformCluster's Job %s of cluster %s to finish before the %s starts", holder, run.ClusterName, run.Op)}, nil
+}
+
+// runningMutatingJobs returns, sorted, the names of the running apply,
+// destroy and restore Jobs (runlease.Mutating) of objects of kinds in
+// cluster clusterName of namespace, listed using ctx through d.Client
+// (the Job cache). The run and cluster write leases say the same when
+// nobody tampered with them; these Jobs only the manager creates. It
+// returns any list error.
+func runningMutatingJobs(ctx context.Context, d Deps, namespace, clusterName string, kinds ...string) ([]string, error) {
+	var out []string
+	for _, kind := range kinds {
+		var list batchv1.JobList
+		if err := d.Client.List(ctx, &list, client.InNamespace(namespace), client.MatchingLabels{
+			state.OwnerKindLabel: kind, clusterv1.ClusterNameLabel: state.LabelValue(clusterName),
+		}); err != nil {
+			return nil, fmt.Errorf("list %s Jobs of cluster %s: %w", kind, clusterName, err)
+		}
+		for i := range list.Items {
+			j := &list.Items[i]
+			if runlease.Mutating(jobs.OpOf(j)) && jobs.OutcomeOf(j) == jobs.Running {
+				out = append(out, j.Name)
+			}
+		}
+	}
+	slices.Sort(out)
+	return out, nil
 }
 
 // heldBy returns the message of a wait for lease, held by holder ("" when

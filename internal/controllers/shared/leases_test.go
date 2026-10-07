@@ -772,6 +772,20 @@ func TestClusterGateClusterFirst(t *testing.T) {
 			t.Errorf("%d WaitingForClusterOperation events", n)
 		}
 	})
+	t.Run("a freed lease does not hide the running cluster Job", func(t *testing.T) {
+		t.Parallel()
+		e := start(t, true)
+		// A module, with the runner's rights on Leases, blanks the holder.
+		l := e.lease(t, runlease.ClusterName(testNS, "c1"))
+		l.Spec.HolderIdentity = nil
+		if err := e.c.Update(t.Context(), l); err != nil {
+			t.Fatal(err)
+		}
+		requeue, m := e.reconcileNamed(t, e.d, testName)
+		if requeue != GateRequeue || applyReason(m) != infrav1.WaitingForClusterOperationReason || len(e.jobsOf(t)) != 1 {
+			t.Errorf("m1: requeue %s, reason %s, %d Jobs; want it to wait for the running cluster Job", requeue, applyReason(m), len(e.jobsOf(t)))
+		}
+	})
 	t.Run("gate off", func(t *testing.T) {
 		t.Parallel()
 		e := start(t, false)
