@@ -70,8 +70,10 @@ func SecretToPools(c client.Reader) handler.MapFunc {
 // captf.io/managed, so the cache does not hold it): a rotated token
 // reaches the pool at its next reconcile, at the latest the membership
 // refresh interval later. Managed Secrets are watched as metadata only
-// (manager.CacheOptions). It returns an error if the controller could not
-// be built.
+// (manager.CacheOptions), and a credential mirror only for its deletion
+// (shared.ManagedSecretEvents); identities only for spec changes
+// (shared.IdentitySpecChanged). It returns an error if the controller
+// could not be built.
 func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, opts controller.Options) error {
 	logger := klog.FromContext(ctx)
 	scheme, c := mgr.GetScheme(), mgr.GetClient()
@@ -96,8 +98,9 @@ func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, opt
 		// An approval is a spec change; the controller's own phase labels
 		// and status writes are not.
 		Owns(&infrav1.TerraformPlan{}, predicate.GenerationChangedPredicate{}).
-		WatchesMetadata(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(SecretToPools(c)), shared.ManagedSecret()).
-		Watches(&infrav1.TerraformClusterIdentity{}, handler.EnqueueRequestsFromMapFunc(shared.IdentityToPools(c))).
+		WatchesMetadata(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(SecretToPools(c)), shared.ManagedSecretEvents()).
+		Watches(&infrav1.TerraformClusterIdentity{}, handler.EnqueueRequestsFromMapFunc(shared.IdentityToPools(c)),
+			shared.IdentitySpecChanged()).
 		Watches(&corev1.Namespace{},
 			handler.EnqueueRequestsFromMapFunc(shared.NamespaceToObjects(c, func() client.ObjectList { return &infrav1.TerraformMachinePoolList{} })),
 			shared.LabelsChanged())

@@ -26,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
+	"github.com/captf-io/cluster-api-provider-terraform/internal/identity"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/state"
 )
 
@@ -87,13 +88,34 @@ func inheritedPolicy(tc *infrav1.TerraformCluster) []any {
 	return []any{tc.Spec.Defaults, tc.Spec.IdentityRef, tc.Spec.Jobs, tc.Spec.Drift, tc.Spec.DeletionPolicy}
 }
 
-// ManagedSecret passes Secrets labeled captf.io/managed=true: state, durable
-// inputs and credential mirrors. It returns the predicate to register on
-// a watch.
-func ManagedSecret() predicate.Funcs {
-	return predicate.NewPredicateFuncs(func(o client.Object) bool {
-		return o.GetLabels()[state.ManagedLabel] == "true"
-	})
+// ManagedSecretEvents passes the events of Secrets labeled
+// captf.io/managed=true that an owner must react to: every event of a
+// state, backup or inputs Secret, and only the deletion of a credential
+// mirror (identity.MirroredLabel), which its users recreate. A mirror
+// carries one ownerRef per object using the identity in its namespace, so
+// passing its updates would wake every one of them each time one is added
+// or removed. Its users read it live when they need it, so they need no
+// other event. Updates of the other Secrets all pass: the watch sees only
+// metadata, so a data change cannot be told from an ownerRef change. It
+// returns the predicate to register on a watch.
+func ManagedSecretEvents() predicate.Funcs {
+	managed := func(o client.Object) bool { return o.GetLabels()[state.ManagedLabel] == "true" }
+	mirror := func(o client.Object) bool { return o.GetLabels()[identity.MirroredLabel] == "true" }
+	return predicate.Funcs{
+		CreateFunc:  func(e event.CreateEvent) bool { return managed(e.Object) && !mirror(e.Object) },
+		UpdateFunc:  func(e event.UpdateEvent) bool { return managed(e.ObjectNew) && !mirror(e.ObjectNew) },
+		GenericFunc: func(e event.GenericEvent) bool { return managed(e.Object) && !mirror(e.Object) },
+		DeleteFunc:  func(e event.DeleteEvent) bool { return managed(e.Object) },
+	}
+}
+
+// IdentitySpecChanged passes a TerraformClusterIdentity's creation and
+// deletion, and its updates that change its generation, that is its spec.
+// Its users read only the spec; its status changes (Ready,
+// status.namespaces as mirrors come and go) would otherwise wake every
+// object using it. It returns the predicate to register on a watch.
+func IdentitySpecChanged() predicate.GenerationChangedPredicate {
+	return predicate.GenerationChangedPredicate{}
 }
 
 // LabelsChanged passes updates whose labels changed and nothing else: the

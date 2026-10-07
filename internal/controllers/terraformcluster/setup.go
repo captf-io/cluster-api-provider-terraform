@@ -63,7 +63,9 @@ func ClusterPredicates(scheme *runtime.Scheme, logger klog.Logger) predicate.Fun
 // The watch-filter predicate is only on For and the Cluster watch: Jobs,
 // Secrets, identities and Namespaces never carry the label, and a global
 // event filter would drop Job completions. Managed Secrets are watched as
-// metadata only (manager.CacheOptions). It returns an error if the
+// metadata only (manager.CacheOptions), and a credential mirror only for
+// its deletion (shared.ManagedSecretEvents); identities only for spec
+// changes (shared.IdentitySpecChanged). It returns an error if the
 // controller could not be built.
 func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, opts controller.Options) error {
 	logger := klog.FromContext(ctx)
@@ -82,8 +84,9 @@ func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, opt
 		// and status writes are not.
 		Owns(&infrav1.TerraformPlan{}, predicate.GenerationChangedPredicate{}).
 		WatchesMetadata(&corev1.Secret{},
-			handler.EnqueueRequestsFromMapFunc(shared.SecretToOwner(state.KindTerraformCluster)), shared.ManagedSecret()).
-		Watches(&infrav1.TerraformClusterIdentity{}, handler.EnqueueRequestsFromMapFunc(shared.IdentityToClusters(c))).
+			handler.EnqueueRequestsFromMapFunc(shared.SecretToOwner(state.KindTerraformCluster)), shared.ManagedSecretEvents()).
+		Watches(&infrav1.TerraformClusterIdentity{}, handler.EnqueueRequestsFromMapFunc(shared.IdentityToClusters(c)),
+			shared.IdentitySpecChanged()).
 		Watches(&corev1.Namespace{},
 			handler.EnqueueRequestsFromMapFunc(shared.NamespaceToObjects(c, func() client.ObjectList { return &infrav1.TerraformClusterList{} })),
 			shared.LabelsChanged()).

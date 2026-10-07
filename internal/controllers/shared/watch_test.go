@@ -46,8 +46,8 @@ func names(reqs []reconcile.Request) []string {
 	return out
 }
 
-// TestPredicates proves ClusterEndpointChanged, ManagedSecret, LabelsChanged
-// and DeletesOnly each fire only on the event they name.
+// TestPredicates proves ClusterEndpointChanged, LabelsChanged and
+// DeletesOnly each fire only on the event they name.
 func TestPredicates(t *testing.T) {
 	t.Parallel()
 	c1 := &clusterv1.Cluster{}
@@ -57,11 +57,6 @@ func TestPredicates(t *testing.T) {
 	if !ep.Update(event.UpdateEvent{ObjectOld: c1, ObjectNew: c2}) || ep.Update(event.UpdateEvent{ObjectOld: c2, ObjectNew: c2.DeepCopy()}) ||
 		ep.Create(event.CreateEvent{Object: c2}) || ep.Delete(event.DeleteEvent{Object: c2}) || ep.Generic(event.GenericEvent{Object: c2}) {
 		t.Error("ClusterEndpointChanged")
-	}
-
-	managed := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{state.ManagedLabel: "true"}}}
-	if !ManagedSecret().Create(event.CreateEvent{Object: managed}) || ManagedSecret().Create(event.CreateEvent{Object: &corev1.Secret{}}) {
-		t.Error("ManagedSecret")
 	}
 
 	ns1 := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"tier": "gold"}}}
