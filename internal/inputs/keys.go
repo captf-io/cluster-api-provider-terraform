@@ -96,6 +96,14 @@ const (
 	// and a deletion. It holds a Job name, nothing else;
 	// SetInterruptedApply sets it and ClearInterruptedApply removes it.
 	InterruptedApplyAnnotation = "captf.io/unconfirmed-apply"
+	// UnpullableImagesAnnotation lists, on the durable Secret, the image
+	// references a destroy, refresh, drift or restore Job of the object
+	// could not pull (a JSON array, oldest first, at most MaxUnpullable):
+	// the next such Job runs the next image it may (the applied record's
+	// tag, then spec.source.image) instead. AddUnpullable appends to it;
+	// only a successful apply, which pins a new digest, removes it
+	// (ClearUnpullable). WriteAttempt keeps it.
+	UnpullableImagesAnnotation = "captf.io/unpullable-images"
 )
 
 // Data keys: the two rendered files, and on a TerraformMachinePool's

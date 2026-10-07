@@ -126,6 +126,10 @@ type Durable struct {
 	// ended without a result, or is gone before it finished
 	// (InterruptedApplyAnnotation); "" when none. WriteAttempt keeps it.
 	InterruptedApply string
+	// Unpullable lists the image references a non-apply Job could not
+	// pull since the last successful apply (UnpullableImagesAnnotation),
+	// oldest first; nil when none. WriteAttempt keeps it.
+	Unpullable []string
 }
 
 // LastAttempt returns d's attempt record; nil when d is nil or has none.
@@ -213,8 +217,8 @@ func fileData(files render.Files) map[string][]byte {
 // annotations from rec, and removes MayHaveAppliedAnnotation: that marks
 // a Job of the record it replaces. It never touches AppliedAnnotation,
 // PendingClusterOutputsAnnotation, PartialClusterOutputsAnnotation,
-// AppliedClusterOutputsHashAnnotation or InterruptedApplyAnnotation, nor
-// the applied Secret. rec.Digest and rec.MayHaveApplied are ignored.
+// AppliedClusterOutputsHashAnnotation, InterruptedApplyAnnotation or
+// UnpullableImagesAnnotation, nor the applied Secret. rec.Digest and rec.MayHaveApplied are ignored.
 // Between applies, the reconciler keeps the owner reference pointing at
 // owner's current UID (ownership.RepairSecret on the metadata Read
 // returned), so a Secret restored without it, or with owner's earlier
@@ -381,6 +385,7 @@ func Read(ctx context.Context, c client.Reader, namespace, kindshort, name strin
 		d.Pending = parsePending(s.Annotations[PendingClusterOutputsAnnotation])
 		d.Partial = parsePartial(s.Annotations[PartialClusterOutputsAnnotation])
 		d.InterruptedApply = s.Annotations[InterruptedApplyAnnotation]
+		d.Unpullable = parseUnpullable(s.Annotations[UnpullableImagesAnnotation])
 		d.AppliedExportsHash, d.AppliedClusterOutputs = appliedExports(s)
 	}
 	a := &corev1.Secret{}
