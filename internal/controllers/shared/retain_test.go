@@ -30,6 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
+	"github.com/captf-io/cluster-api-provider-terraform/internal/identity"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/inputs"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/jobs"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/ownership"
@@ -183,6 +184,53 @@ func TestReconcileRetain(t *testing.T) {
 	st, err := state.NewReader(e.c).Read(t.Context(), testNS, suffixOf(t, state.KindTerraformMachine, testName))
 	if err != nil || st.Serial != 3 {
 		t.Errorf("retained state reads %+v, %v", st, err)
+	}
+}
+
+// TestReconcileRetainLocalSecret: an object whose identityRef is a
+// namespace-local Secret has no credential mirror, so Retain releases
+// none, even one named as that Secret's mirror would be, and leaves the
+// Secret itself alone.
+func TestReconcileRetainLocalSecret(t *testing.T) {
+	t.Parallel()
+	const secretName = "my-creds"
+	e := retainEnv(t, deleting, retainPolicy, func(m *infrav1.TerraformMachine) {
+		m.Spec.IdentityRef = infrav1.IdentityReference{Name: secretName, Kind: infrav1.IdentityKindSecret}
+	})
+	m := e.get(t)
+	if err := inputs.Write(t.Context(), e.c, m, renderMachine(t), inputs.Meta{
+		Image: "registry.example/mod:1.0", Identity: secretName, IdentityKind: string(infrav1.IdentityKindSecret),
+		ImageDigest: "registry.example/mod@sha256:abc",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := ownership.SecretOwnerRef(m, e.c.Scheme())
+	if err != nil {
+		t.Fatal(err)
+	}
+	mirror := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Namespace: testNS, Name: identity.MirrorName(secretName), OwnerReferences: []metav1.OwnerReference{ref},
+	}}
+	for _, s := range []*corev1.Secret{mirror, {ObjectMeta: metav1.ObjectMeta{Namespace: testNS, Name: secretName}}} {
+		if err := e.c.Create(t.Context(), s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Reconcile(t.Context(), e.d, healthyKind(t, e, testName)); err != nil {
+		t.Fatal(err)
+	}
+	if m := e.get(t); m != nil {
+		t.Fatalf("object kept: %+v", m.Finalizers)
+	}
+	assertRetained(t, e, "m1-uid")
+	for _, name := range []string{mirror.Name, secretName} {
+		var s corev1.Secret
+		if err := e.c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: name}, &s); err != nil {
+			t.Errorf("Secret %s: %v, want it kept", name, err)
+		}
+	}
+	if e.rec.count(EventMirrorRemoved) != 0 {
+		t.Errorf("events %v", e.rec.reasons)
 	}
 }
 

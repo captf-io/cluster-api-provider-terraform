@@ -30,6 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
+	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/render"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/state"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/strutil"
@@ -53,8 +54,12 @@ func Name(kindshort, name string) string {
 type Meta struct {
 	// Image is spec.source.image as written.
 	Image string
-	// Identity is the TerraformClusterIdentity name.
+	// Identity is the TerraformClusterIdentity name, or the Secret name when
+	// IdentityKind is Secret.
 	Identity string
+	// IdentityKind is the kind Identity names, as an
+	// infrav1.IdentityKind string; "" for a TerraformClusterIdentity.
+	IdentityKind string
 	// ImageDigest is repo@sha256:…; empty until pinned.
 	ImageDigest string
 	// Applied is true once MarkApplied recorded a successful apply or
@@ -216,6 +221,11 @@ func apply(s *corev1.Secret, refs []metav1.OwnerReference, kind, ownerName strin
 	s.Labels[state.OwnerNameLabel] = state.LabelValue(ownerName)
 	metav1.SetMetaDataAnnotation(&s.ObjectMeta, ImageAnnotation, meta.Image)
 	metav1.SetMetaDataAnnotation(&s.ObjectMeta, IdentityAnnotation, meta.Identity)
+	if meta.IdentityKind == string(infrav1.IdentityKindSecret) {
+		metav1.SetMetaDataAnnotation(&s.ObjectMeta, IdentityKindAnnotation, meta.IdentityKind)
+	} else {
+		delete(s.Annotations, IdentityKindAnnotation)
+	}
 }
 
 // Read returns the durable inputs of the object named name, of short kind
@@ -233,10 +243,11 @@ func Read(ctx context.Context, c client.Reader, namespace, kindshort, name strin
 	d := &Durable{
 		Files: render.Files{MainTF: s.Data[MainTFKey], TFVars: s.Data[TFVarsKey]},
 		Meta: Meta{
-			Image:       s.Annotations[ImageAnnotation],
-			Identity:    s.Annotations[IdentityAnnotation],
-			ImageDigest: s.Annotations[ImageDigestAnnotation],
-			Applied:     s.Annotations[AppliedAnnotation] == "true",
+			Image:        s.Annotations[ImageAnnotation],
+			Identity:     s.Annotations[IdentityAnnotation],
+			IdentityKind: s.Annotations[IdentityKindAnnotation],
+			ImageDigest:  s.Annotations[ImageDigestAnnotation],
+			Applied:      s.Annotations[AppliedAnnotation] == "true",
 		},
 		Secret:           s.ObjectMeta,
 		Pending:          parsePending(s.Annotations[PendingClusterOutputsAnnotation]),

@@ -357,6 +357,64 @@ func TestReconcileStartsApply(t *testing.T) {
 	}
 }
 
+// TestReconcileLocalSecretIdentity proves an identityRef of kind Secret
+// delivers the object's own namespace's Secret to the Job directly: no
+// TerraformClusterIdentity is read (none exists here), IdentityAllowed is
+// True/LocalSecret, no mirror is made, the Job's envFrom names the Secret,
+// and the durable Secret records the Secret and its kind. A missing Secret
+// is IdentityAllowed False/SecretNotFound and starts no Job.
+func TestReconcileLocalSecretIdentity(t *testing.T) {
+	t.Parallel()
+	const secretName = "my-creds"
+	local := machine(withFinalizer, notPaused, func(m *infrav1.TerraformMachine) {
+		m.Spec.IdentityRef = infrav1.IdentityReference{Name: secretName, Kind: infrav1.IdentityKindSecret}
+	})
+	creds := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: testNS, Name: secretName}, Data: map[string][]byte{"KEY": []byte("v")}}
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNS}}
+
+	t.Run("present", func(t *testing.T) {
+		t.Parallel()
+		e := newEnv(t, ns, creds, local)
+		k := e.kindFor(t, readyOwner)
+		k.in = machineIn()
+		if _, err := reconcileOnce(t, e, k); err != nil {
+			t.Fatal(err)
+		}
+		if len(e.runner.created) != 1 {
+			t.Fatalf("created %v, want one apply", e.runner.created)
+		}
+		m := e.get(t)
+		if c := conditions.Get(m, infrav1.IdentityAllowedCondition); c == nil || c.Status != metav1.ConditionTrue || c.Reason != infrav1.LocalSecretReason {
+			t.Errorf("IdentityAllowed = %+v, want True/LocalSecret", c)
+		}
+		if err := e.c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: identity.MirrorName(secretName)}, &corev1.Secret{}); !apierrors.IsNotFound(err) {
+			t.Errorf("mirror Secret: %v, want not found", err)
+		}
+		ef := e.runner.jobs[0].Spec.Template.Spec.Containers[0].EnvFrom
+		if len(ef) != 1 || ef[0].SecretRef == nil || ef[0].SecretRef.Name != secretName {
+			t.Errorf("envFrom = %+v, want the Secret %s", ef, secretName)
+		}
+		d, err := inputs.Read(t.Context(), e.c, testNS, "m", testName)
+		if err != nil || d.Meta.Identity != secretName || d.Meta.IdentityKind != string(infrav1.IdentityKindSecret) {
+			t.Errorf("durable meta = %+v, %v", d, err)
+		}
+	})
+	t.Run("missing", func(t *testing.T) {
+		t.Parallel()
+		e := newEnv(t, ns, local)
+		k := e.kindFor(t, readyOwner)
+		k.in = machineIn()
+		requeue, err := reconcileOnce(t, e, k)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := conditions.Get(e.get(t), infrav1.IdentityAllowedCondition)
+		if c == nil || c.Status != metav1.ConditionFalse || c.Reason != infrav1.SecretNotFoundReason || len(e.runner.created) != 0 || requeue != GateRequeue {
+			t.Errorf("IdentityAllowed = %+v, created %v, requeue %s", c, e.runner.created, requeue)
+		}
+	})
+}
+
 // TestReconcileJobActive proves a running Job with a readable pod records
 // status.activeJob and starts nothing more, while a Job stuck without a
 // per-run Secret and a pod that never mounted it is deleted so the

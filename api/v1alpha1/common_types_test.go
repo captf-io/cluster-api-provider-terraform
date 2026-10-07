@@ -217,3 +217,26 @@ func TestEveryFieldHasJSONTag(t *testing.T) {
 		}
 	}
 }
+
+// TestIdentityReferenceKind proves an unset kind and TerraformClusterIdentity
+// name an identity, and Secret does not, so ClusterIdentityName is "" for it.
+func TestIdentityReferenceKind(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		ref        IdentityReference
+		wantSecret bool
+		wantName   string
+	}{
+		{IdentityReference{Name: "aws"}, false, "aws"},
+		{IdentityReference{Name: "aws", Kind: IdentityKindClusterIdentity}, false, "aws"},
+		{IdentityReference{Name: "aws", Kind: IdentityKindSecret}, true, ""},
+		{IdentityReference{}, false, ""},
+	} {
+		if got := tc.ref.IsSecret(); got != tc.wantSecret {
+			t.Errorf("%+v IsSecret = %v, want %v", tc.ref, got, tc.wantSecret)
+		}
+		if got := tc.ref.ClusterIdentityName(); got != tc.wantName {
+			t.Errorf("%+v ClusterIdentityName = %q, want %q", tc.ref, got, tc.wantName)
+		}
+	}
+}

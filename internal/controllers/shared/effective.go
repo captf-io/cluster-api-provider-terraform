@@ -32,8 +32,12 @@ import (
 // EffectiveConfig is the configuration after inheritance. Nothing is
 // persisted; the webhook defaults nothing.
 type EffectiveConfig struct {
-	// IdentityName is the resolved identity; "" when none is set.
+	// IdentityName is the resolved identity (or, for IdentityKind Secret,
+	// the namespace-local Secret); "" when none is set.
 	IdentityName string
+	// IdentityKind is the kind IdentityName names; "" or
+	// TerraformClusterIdentity for an identity.
+	IdentityKind infrav1.IdentityKind
 	// Jobs is the object's jobs policy, merged field by field over the
 	// cluster's defaults.jobs, then its own spec.jobs, for kinds that
 	// inherit them. internal/jobs
@@ -108,12 +112,11 @@ func Resolve(spec SpecView, cluster *infrav1.TerraformCluster, driftDefault time
 	if spec.InheritsDefaults {
 		defaults := clusterDefaults(cluster)
 		jobs, drift := clusterInherited(cluster)
-		e.IdentityName, _ = identity.EffectiveName(spec.IdentityRef, cluster)
+		ref, _ := identity.EffectiveRef(spec.IdentityRef, cluster)
+		e.IdentityName, e.IdentityKind = ref.Name, ref.Kind
 		e.DeletionPolicy = spec.DeletionPolicy
 		if cluster != nil {
 			e.DeletionPolicy = cmp.Or(spec.DeletionPolicy, defaults.DeletionPolicy, cluster.Spec.DeletionPolicy, infrav1.DeletionPolicyDestroy)
-		}
-		if cluster != nil {
 			e.MaxActiveJobs = cluster.Spec.MaxActiveJobs
 		}
 		e.Jobs = MergeJobPolicy(spec.Jobs, jobs)
@@ -124,7 +127,7 @@ func Resolve(spec SpecView, cluster *infrav1.TerraformCluster, driftDefault time
 			e.Remediation = MergeRemediation(spec.Remediation, defaults.Remediation)
 		}
 	} else {
-		e.IdentityName = spec.IdentityRef.Name
+		e.IdentityName, e.IdentityKind = spec.IdentityRef.Name, spec.IdentityRef.Kind
 		e.MaxActiveJobs = spec.MaxActiveJobs
 		if spec.Jobs != nil {
 			e.Jobs = *spec.Jobs.DeepCopy()

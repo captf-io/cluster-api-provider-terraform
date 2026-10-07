@@ -272,6 +272,7 @@ func (r *reconciler) startRestore(ctx context.Context, bk *Bookkeeping, dec Deci
 		Files:          render.BackendRoot(),
 		InputsHash:     b.InputsHash,
 		Identity:       r.identityName,
+		IdentityKind:   r.identityKind,
 		ServiceAccount: r.serviceAccount,
 		Suffix:         r.suffix,
 		ClusterName:    ClusterName(r.obj, r.owner),

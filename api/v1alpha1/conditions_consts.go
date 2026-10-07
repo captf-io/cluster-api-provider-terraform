@@ -113,6 +113,10 @@ const (
 
 	// IdentityAllowedReason is the True reason.
 	IdentityAllowedReason = "IdentityAllowed"
+	// LocalSecretReason is the True reason when the identityRef names a
+	// Secret in the object's own namespace (kind: Secret): it is used as it
+	// is, with no mirror and no allowedNamespaces check.
+	LocalSecretReason = "LocalSecret"
 	// IdentityNotFoundReason is the False reason when the identity does not exist.
 	IdentityNotFoundReason = "IdentityNotFound"
 	// NamespaceNotAllowedReason is the False reason when allowedNamespaces
@@ -650,7 +654,7 @@ func ConditionReasons() map[string]map[metav1.ConditionStatus][]string {
 			metav1.ConditionUnknown: {WaitingForOwnerReason, WaitingForClusterInfrastructureReason, WaitingForClusterExportsReason, WaitingForBootstrapDataReason},
 		},
 		IdentityAllowedCondition: {
-			metav1.ConditionTrue:    {IdentityAllowedReason},
+			metav1.ConditionTrue:    {IdentityAllowedReason, LocalSecretReason},
 			metav1.ConditionFalse:   {IdentityNotFoundReason, NamespaceNotAllowedReason, SecretNotFoundReason, CredentialsIncompleteReason},
 			metav1.ConditionUnknown: {IdentityCheckFailedReason},
 		},

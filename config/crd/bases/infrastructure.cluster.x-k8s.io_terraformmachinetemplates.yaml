@@ -140,8 +140,21 @@ spec:
                           object's Jobs use. Whether it is required, and where it falls back to
                           when unset, depends on the kind.
                         properties:
+                          kind:
+                            description: |-
+                              kind of the referenced object: TerraformClusterIdentity (the default
+                              when unset) or Secret. A Secret is read from the namespace of the
+                              object that references it and mounted into Jobs as it is: it is not
+                              mirrored, and no allowedNamespaces rule applies. Its keys become
+                              environment variables and files exactly like an identity's Secret.
+                            enum:
+                            - TerraformClusterIdentity
+                            - Secret
+                            type: string
                           name:
-                            description: name of the TerraformClusterIdentity.
+                            description: |-
+                              name of the TerraformClusterIdentity, or of the Secret when kind is
+                              Secret.
                             maxLength: 253
                             minLength: 1
                             type: string

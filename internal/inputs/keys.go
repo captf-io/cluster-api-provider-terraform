@@ -30,6 +30,10 @@ const (
 	ImageDigestAnnotation = "captf.io/image-digest"
 	// IdentityAnnotation is the TerraformClusterIdentity used.
 	IdentityAnnotation = "captf.io/identity"
+	// IdentityKindAnnotation is "Secret" when the identity recorded in
+	// IdentityAnnotation is a namespace-local Secret, not a
+	// TerraformClusterIdentity; absent otherwise.
+	IdentityKindAnnotation = "captf.io/identity-kind"
 	// AppliedAnnotation is "true" once an apply of the object succeeded or
 	// a state backup was restored into its backend: a missing state is
 	// then a lost one, not one that was never written. It moves with the

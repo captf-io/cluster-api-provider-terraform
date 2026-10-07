@@ -149,6 +149,17 @@ func TestIndexers(t *testing.T) {
 	if got := MachineIdentityIndexer(&infrav1.TerraformMachine{}); got != nil {
 		t.Errorf("machine without identity = %v", got)
 	}
+	// A Secret reference names no TerraformClusterIdentity, so it is not indexed.
+	secret := infrav1.IdentityReference{Name: "s", Kind: infrav1.IdentityKindSecret}
+	local := &infrav1.TerraformCluster{Spec: infrav1.TerraformClusterSpec{
+		WorkspaceSpec: infrav1.WorkspaceSpec{IdentityRef: secret}, Defaults: &infrav1.TerraformClusterDefaults{IdentityRef: secret},
+	}}
+	if got := ClusterIdentityIndexer(local); got != nil {
+		t.Errorf("cluster with Secret refs = %v", got)
+	}
+	if got := MachineIdentityIndexer(&infrav1.TerraformMachine{Spec: infrav1.TerraformMachineSpec{WorkspaceSpec: infrav1.WorkspaceSpec{IdentityRef: secret}}}); got != nil {
+		t.Errorf("machine with a Secret ref = %v", got)
+	}
 	pool := &infrav1.TerraformMachinePool{Spec: infrav1.TerraformMachinePoolSpec{WorkspaceSpec: infrav1.WorkspaceSpec{IdentityRef: infrav1.IdentityReference{Name: "p"}}}}
 	if got := PoolIdentityIndexer(pool); !slices.Equal(got, []string{"p"}) {
 		t.Errorf("pool = %v", got)

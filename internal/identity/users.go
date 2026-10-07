@@ -111,7 +111,7 @@ func findUsers(ctx context.Context, reader client.Reader, name string, firstOnly
 		return nil, fmt.Errorf("identity: list TerraformClusters: %w", err)
 	}
 	for i := range clusters.Items {
-		if clusters.Items[i].Spec.IdentityRef.Name == name {
+		if clusters.Items[i].Spec.IdentityRef.ClusterIdentityName() == name {
 			out = append(out, &clusters.Items[i])
 			if firstOnly {
 				return out, nil

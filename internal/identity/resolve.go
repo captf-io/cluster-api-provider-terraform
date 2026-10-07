@@ -33,34 +33,77 @@ import (
 // exist (IdentityAllowed=False/SecretNotFound).
 var ErrSecretNotFound = errors.New("identity: credential secret not found")
 
-// EffectiveName returns the identity a machine or pool uses: its own
+// EffectiveRef returns the credentials a machine or pool uses: its own
 // identityRef, else the TerraformCluster's spec.defaults.identityRef, else
 // the TerraformCluster's spec.identityRef. A TerraformCluster itself uses
 // only its spec.identityRef. cluster may be nil while it is not resolved
 // yet. The bool is false when none is set
 // (IdentityAllowed=False/IdentityNotFound).
-func EffectiveName(own infrav1.IdentityReference, cluster *infrav1.TerraformCluster) (string, bool) {
+func EffectiveRef(own infrav1.IdentityReference, cluster *infrav1.TerraformCluster) (infrav1.IdentityReference, bool) {
 	if own.Name != "" {
-		return own.Name, true
+		return own, true
 	}
-	if name := MachineFallbackName(cluster); name != "" {
-		return name, true
+	if ref := MachineFallbackRef(cluster); ref.Name != "" {
+		return ref, true
 	}
-	return "", false
+	return infrav1.IdentityReference{}, false
 }
 
-// MachineFallbackName is the identity machines and pools without their own
-// identityRef use: the cluster's spec.defaults.identityRef, else its
-// spec.identityRef.
-// It returns that name, or "" when cluster is nil or sets neither.
-func MachineFallbackName(cluster *infrav1.TerraformCluster) string {
+// MachineFallbackRef is the identityRef machines and pools without their own
+// use: the cluster's spec.defaults.identityRef, else its spec.identityRef.
+// It returns the zero reference when cluster is nil or sets neither.
+func MachineFallbackRef(cluster *infrav1.TerraformCluster) infrav1.IdentityReference {
 	if cluster == nil {
-		return ""
+		return infrav1.IdentityReference{}
 	}
 	if d := cluster.Spec.Defaults; d != nil && d.IdentityRef.Name != "" {
-		return d.IdentityRef.Name
+		return d.IdentityRef
 	}
-	return cluster.Spec.IdentityRef.Name
+	return cluster.Spec.IdentityRef
+}
+
+// EffectiveName returns the name EffectiveRef resolves for own (the object's
+// own identityRef) and cluster when it names a TerraformClusterIdentity. A
+// Secret reference (kind: Secret) yields "" and false: it is no
+// TerraformClusterIdentity, and a machine that sets one never falls through
+// to its cluster's. The bool is false when no TerraformClusterIdentity is in
+// use.
+func EffectiveName(own infrav1.IdentityReference, cluster *infrav1.TerraformCluster) (string, bool) {
+	ref, ok := EffectiveRef(own, cluster)
+	if !ok || ref.IsSecret() {
+		return "", false
+	}
+	return ref.Name, true
+}
+
+// MachineFallbackName returns MachineFallbackRef's name when it names a
+// TerraformClusterIdentity, and "" when cluster is nil, sets neither or
+// names a Secret.
+func MachineFallbackName(cluster *infrav1.TerraformCluster) string {
+	return MachineFallbackRef(cluster).ClusterIdentityName()
+}
+
+// CredentialsSecretName returns the name of the Secret a Job mounts for ref:
+// the Secret itself for kind Secret, else the identity's mirror (MirrorName).
+func CredentialsSecretName(ref infrav1.IdentityReference) string {
+	if ref.IsSecret() {
+		return ref.Name
+	}
+	return MirrorName(ref.Name)
+}
+
+// LocalSecret reads the Secret called name, which a kind: Secret reference
+// names, in namespace, bounded by ctx, through reader. It returns the
+// Secret, or ErrSecretNotFound when it does not exist.
+func LocalSecret(ctx context.Context, reader client.Reader, namespace, name string) (*corev1.Secret, error) {
+	s := &corev1.Secret{}
+	if err := reader.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, s); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("%w: %s/%s", ErrSecretNotFound, namespace, name)
+		}
+		return nil, fmt.Errorf("identity: get secret %s/%s: %w", namespace, name, err)
+	}
+	return s, nil
 }
 
 // MissingKeys returns the keys of id.Spec.RequiredKeys that src's data does

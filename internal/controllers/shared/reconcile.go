@@ -172,6 +172,7 @@ type reconciler struct {
 	chunks []metav1.ObjectMeta
 
 	identityName     string
+	identityKind     infrav1.IdentityKind
 	identityAllowed  bool
 	credsReady       bool
 	serviceAccount   string
@@ -680,6 +681,7 @@ func (r *reconciler) startOp(ctx context.Context, bk *Bookkeeping, dec Decision,
 	req := JobRequest{
 		Op:             op,
 		Identity:       r.identityName,
+		IdentityKind:   r.identityKind,
 		ServiceAccount: r.serviceAccount,
 		Suffix:         r.suffix,
 		ClusterName:    ClusterName(r.obj, r.owner),
@@ -965,14 +967,19 @@ func (r *reconciler) cleanup(ctx context.Context, bk *Bookkeeping, mode cleanupM
 		klog.FromContext(ctx).V(LogFlow).Info("A live Job holds the run lease; the finalizer stays until it finishes", "holder", holder)
 		return r.finish(bk, nil, ctrl.Result{RequeueAfter: LagRequeue})
 	}
+	// A namespace-local Secret has no mirror to release.
+	mirrorOf := r.identityName
+	if r.identityKind == infrav1.IdentityKindSecret {
+		mirrorOf = ""
+	}
 	var kept Retained
 	switch mode {
 	case cleanupRetained:
-		kept, err = Retain(ctx, r.d, r.k, r.suffix, r.identityName)
+		kept, err = Retain(ctx, r.d, r.k, r.suffix, mirrorOf)
 	case cleanupReleased:
-		err = release(ctx, r.d, r.k, r.identityName)
+		err = release(ctx, r.d, r.k, mirrorOf)
 	default:
-		err = Cleanup(ctx, r.d, r.k, r.suffix, r.identityName)
+		err = Cleanup(ctx, r.d, r.k, r.suffix, mirrorOf)
 	}
 	if errors.Is(err, errMirrorConflict) {
 		// Cleanup logged the race; the next pass, with the finalizer
@@ -1017,15 +1024,15 @@ func (r *reconciler) recordActive(job *batchv1.Job) {
 	}
 }
 
-// resolveIdentity sets the name of the identity the object's Jobs run
-// with. Immutable kinds use the identity pinned in their durable Secret:
+// resolveIdentity sets the name and kind of the identity the object's Jobs
+// run with. Immutable kinds use the identity pinned in their durable Secret:
 // the apply that wrote it records the identity it ran with, and destroy,
 // refresh and drift keep using it even when the cluster's
 // defaults.identityRef changes.
 func (r *reconciler) resolveIdentity() {
-	r.identityName = r.eff.IdentityName
+	r.identityName, r.identityKind = r.eff.IdentityName, r.eff.IdentityKind
 	if !r.k.Mutable() && r.durable != nil && r.durable.Meta.Identity != "" {
-		r.identityName = r.durable.Meta.Identity
+		r.identityName, r.identityKind = r.durable.Meta.Identity, infrav1.IdentityKind(r.durable.Meta.IdentityKind)
 	}
 }
 
@@ -1118,6 +1125,9 @@ func (r *reconciler) identity(ctx context.Context) (bool, error) {
 		pending("No identity")
 		return false, nil
 	}
+	if r.identityKind == infrav1.IdentityKindSecret {
+		return r.localSecret(ctx, set, pending)
+	}
 	id, err := identity.Get(ctx, r.d.APIReader, r.identityName)
 	if apierrors.IsNotFound(err) {
 		set(metav1.ConditionFalse, infrav1.IdentityNotFoundReason, "TerraformClusterIdentity "+r.identityName+" not found")
@@ -1209,6 +1219,32 @@ func (r *reconciler) identity(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	return err == nil, nil
+}
+
+// localSecret handles an identityRef of kind Secret using ctx: the Secret of
+// the object's own namespace is delivered to Jobs as it is, so there is no
+// allowedNamespaces check and no mirror. set and pending record
+// IdentityAllowed and CredentialsMirrored. It reports whether the
+// credentials are in place, and returns an error from a failed read.
+func (r *reconciler) localSecret(ctx context.Context, set func(metav1.ConditionStatus, string, string), pending func(string)) (bool, error) {
+	ns := r.obj.GetNamespace()
+	_, err := identity.LocalSecret(ctx, r.d.APIReader, ns, r.identityName)
+	switch {
+	case errors.Is(err, identity.ErrSecretNotFound):
+		set(metav1.ConditionFalse, infrav1.SecretNotFoundReason, err.Error())
+		pending("Identity Secret not found")
+		return false, nil
+	case err != nil:
+		set(metav1.ConditionUnknown, infrav1.IdentityCheckFailedReason, err.Error())
+		return false, err
+	}
+	set(metav1.ConditionTrue, infrav1.LocalSecretReason, "Secret "+r.identityName+" of namespace "+ns+" is used directly")
+	r.identityAllowed = true
+	conditions.Set(r.obj, metav1.Condition{
+		Type: infrav1.CredentialsMirroredCondition, Status: metav1.ConditionTrue, Reason: infrav1.MirroredReason,
+		Message: "A namespace-local Secret is used directly; nothing is mirrored",
+	})
+	return true, nil
 }
 
 // errStateUnreadable marks a state that exists but cannot be read, or the

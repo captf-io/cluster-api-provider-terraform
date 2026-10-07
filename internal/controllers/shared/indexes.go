@@ -32,18 +32,19 @@ import (
 const IdentityIndex = "captf.identity"
 
 // ClusterIdentityIndexer returns o, a TerraformCluster's, own identityRef
-// and its defaults.identityRef (machines and pools inherit the latter).
+// and its defaults.identityRef (machines and pools inherit the latter). A
+// kind: Secret reference names no identity and is left out.
 func ClusterIdentityIndexer(o client.Object) []string {
 	tc, ok := o.(*infrav1.TerraformCluster)
 	if !ok {
 		return nil
 	}
 	var out []string
-	if n := tc.Spec.IdentityRef.Name; n != "" {
+	if n := tc.Spec.IdentityRef.ClusterIdentityName(); n != "" {
 		out = append(out, n)
 	}
-	if d := tc.Spec.Defaults; d != nil && d.IdentityRef.Name != "" && d.IdentityRef.Name != tc.Spec.IdentityRef.Name {
-		out = append(out, d.IdentityRef.Name)
+	if d := tc.Spec.Defaults; d != nil && d.IdentityRef.ClusterIdentityName() != "" && d.IdentityRef.ClusterIdentityName() != tc.Spec.IdentityRef.ClusterIdentityName() {
+		out = append(out, d.IdentityRef.ClusterIdentityName())
 	}
 	return out
 }
@@ -51,7 +52,7 @@ func ClusterIdentityIndexer(o client.Object) []string {
 // MachineIdentityIndexer returns o, a TerraformMachine's, own identityRef.
 func MachineIdentityIndexer(o client.Object) []string {
 	tm, ok := o.(*infrav1.TerraformMachine)
-	if !ok || tm.Spec.IdentityRef.Name == "" {
+	if !ok || tm.Spec.IdentityRef.ClusterIdentityName() == "" {
 		return nil
 	}
 	return []string{tm.Spec.IdentityRef.Name}
@@ -60,7 +61,7 @@ func MachineIdentityIndexer(o client.Object) []string {
 // PoolIdentityIndexer returns o, a TerraformMachinePool's, own identityRef.
 func PoolIdentityIndexer(o client.Object) []string {
 	mp, ok := o.(*infrav1.TerraformMachinePool)
-	if !ok || mp.Spec.IdentityRef.Name == "" {
+	if !ok || mp.Spec.IdentityRef.ClusterIdentityName() == "" {
 		return nil
 	}
 	return []string{mp.Spec.IdentityRef.Name}

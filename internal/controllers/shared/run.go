@@ -72,8 +72,12 @@ type JobRequest struct {
 	Source infrav1.Source
 	// PinnedDigest is the durable Secret's repo@digest, if any.
 	PinnedDigest string
-	// Identity names the identity whose mirror the Job mounts.
-	Identity       string
+	// Identity names the identity whose mirror the Job mounts, or the
+	// namespace-local Secret it mounts when IdentityKind is Secret.
+	Identity string
+	// IdentityKind is the kind Identity names; "" for a
+	// TerraformClusterIdentity.
+	IdentityKind   infrav1.IdentityKind
 	ServiceAccount string
 	Suffix         string
 	ClusterName    string
@@ -252,7 +256,7 @@ func startJob(ctx context.Context, d Deps, k Kind, req JobRequest) (job *batchv1
 		return nil, false, err
 	}
 	if req.Op == jobs.OpApply {
-		meta := inputs.Meta{Image: req.Source.Image, Identity: req.Identity}
+		meta := inputs.Meta{Image: req.Source.Image, Identity: req.Identity, IdentityKind: string(req.IdentityKind)}
 		if err := inputs.Write(ctx, d.Client, obj, req.Files, meta); err != nil {
 			return nil, false, err
 		}
@@ -287,7 +291,7 @@ func startJob(ctx context.Context, d Deps, k Kind, req JobRequest) (job *batchv1
 		ImageRef:       ref,
 		PullPolicy:     req.Source.ImagePullPolicy,
 		ServiceAccount: req.ServiceAccount,
-		CredsSecret:    identity.MirrorName(req.Identity),
+		CredsSecret:    identity.CredentialsSecretName(infrav1.IdentityReference{Name: req.Identity, Kind: req.IdentityKind}),
 		PlanKeySecret:  planKey,
 		Policy:         req.Policy,
 		Suffix:         req.Suffix,

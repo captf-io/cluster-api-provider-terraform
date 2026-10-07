@@ -255,13 +255,54 @@ type MachineRemediation struct {
 	HealthCheckIntervalSeconds int32 `json:"healthCheckIntervalSeconds,omitempty"`
 }
 
-// IdentityReference names a cluster-scoped TerraformClusterIdentity.
+// IdentityKind is the kind of object an IdentityReference names.
+// +kubebuilder:validation:Enum=TerraformClusterIdentity;Secret
+type IdentityKind string
+
+const (
+	// IdentityKindClusterIdentity names a cluster-scoped
+	// TerraformClusterIdentity. It is the default when kind is unset.
+	IdentityKindClusterIdentity IdentityKind = "TerraformClusterIdentity"
+	// IdentityKindSecret names a Secret in the referencing object's own
+	// namespace, delivered to Jobs directly: no mirror and no
+	// allowedNamespaces check.
+	IdentityKindSecret IdentityKind = "Secret"
+)
+
+// IdentityReference names the credentials an object's Jobs run with: a
+// cluster-scoped TerraformClusterIdentity (the default), or a Secret in the
+// object's own namespace.
 type IdentityReference struct {
-	// name of the TerraformClusterIdentity.
+	// kind of the referenced object: TerraformClusterIdentity (the default
+	// when unset) or Secret. A Secret is read from the namespace of the
+	// object that references it and mounted into Jobs as it is: it is not
+	// mirrored, and no allowedNamespaces rule applies. Its keys become
+	// environment variables and files exactly like an identity's Secret.
+	// +optional
+	Kind IdentityKind `json:"kind,omitempty"`
+
+	// name of the TerraformClusterIdentity, or of the Secret when kind is
+	// Secret.
 	// +required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
 	Name string `json:"name,omitempty"`
+}
+
+// IsSecret reports whether r names a namespace-local Secret rather than a
+// TerraformClusterIdentity.
+func (r IdentityReference) IsSecret() bool {
+	return r.Kind == IdentityKindSecret
+}
+
+// ClusterIdentityName returns r.Name when r names a TerraformClusterIdentity
+// (kind unset or TerraformClusterIdentity), and "" when it names a Secret or
+// is unset.
+func (r IdentityReference) ClusterIdentityName() string {
+	if r.IsSecret() {
+		return ""
+	}
+	return r.Name
 }
 
 // SecretReference names a Secret in a given namespace.
