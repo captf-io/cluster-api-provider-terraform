@@ -42,6 +42,10 @@ import (
 // DefaultGatherer and make any later Gather (see
 // TestMetricsBridgeGathersCleanInThisBinary) see every component-base
 // series twice.
+//
+// The global is shared by the whole test binary, so a test that calls this
+// (or setup) must not call t.Parallel, and neither may a test that reads
+// ctrlmetrics.Registry: a parallel test would see another's Bridge.
 func restoreMetricsRegistry(t *testing.T) {
 	t.Helper()
 	saved := ctrlmetrics.Registry

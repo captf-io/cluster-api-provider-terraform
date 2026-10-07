@@ -117,6 +117,8 @@ func TestNewBridgeGatherMergesAndFilters(t *testing.T) {
 // Register still reaches the value Install found there. It is not
 // parallel: it mutates that package variable, restored on cleanup.
 func TestInstall(t *testing.T) {
+	// Do not add t.Parallel: ctrlmetrics.Registry is one global for the
+	// whole test binary, and a parallel test would see this Bridge.
 	original := ctrlmetrics.Registry
 	t.Cleanup(func() { ctrlmetrics.Registry = original })
 
