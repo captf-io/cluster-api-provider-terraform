@@ -19,6 +19,7 @@ package shared
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -918,4 +919,198 @@ func (f failingCreates) Create(ctx context.Context, obj client.Object, opts ...c
 		return errors.New("etcd unavailable")
 	}
 	return f.Client.Create(ctx, obj, opts...)
+}
+
+// TestPlanSupersededWhenStale: a live plan the pass's decision is not
+// about is superseded, with a Normal PlanSuperseded saying why: a Manual
+// plan whose inputs changed (a plan Job of the new ones starts in the
+// same pass), were reverted to the state's, or whose applyPolicy is no
+// longer Manual, and a Destructive plan once applyPolicy is Manual or its
+// change is reverted.
+func TestPlanSupersededWhenStale(t *testing.T) {
+	t.Parallel()
+	waiting := func(t *testing.T) (planEnv, string) {
+		t.Helper()
+		e := newPlanEnv(t, "h1:old")
+		e.reconcile(t, nil)
+		planJob := e.newest(t)
+		p := &runner.Plan{Hash: runner.PlanHash([]string{"module.role.lb|update"}), Update: 1}
+		e.finishRunner(t, planJob, jobs.Succeeded, t0.Add(-time.Minute), planResult(runner.OpPlan, p, ""))
+		e.reconcile(t, nil)
+		name := planName(testName, planJob, p.Hash)
+		checkPlan(t, e.plan(t, name), infrav1.PlanPhasePending, infrav1.PlanPendingReason, infrav1.PlanPendingReason)
+		return e, name
+	}
+	superseded := func(t *testing.T, e planEnv, name, why string) {
+		t.Helper()
+		checkPlan(t, e.plan(t, name), infrav1.PlanPhaseSuperseded, infrav1.PlanSupersededReason, infrav1.PlanNotApprovedReason)
+		got := e.rec.only(EventPlanSuperseded)
+		if len(got) != 1 || got[0].eventType != corev1.EventTypeNormal || !strings.Contains(got[0].note, why) {
+			t.Errorf("PlanSuperseded = %+v, want one saying %q", got, why)
+		}
+		if e.planRef.Name != "" {
+			t.Errorf("status.pendingPlanRef = %+v", e.planRef)
+		}
+	}
+	t.Run("inputs changed", func(t *testing.T) {
+		t.Parallel()
+		e, name := waiting(t)
+		k := e.kind(t, nil)
+		edited := machineIn()
+		edited.MachineName = "m2"
+		k.in = edited
+		if _, err := reconcileOnce(t, e.env, k); err != nil {
+			t.Fatal(err)
+		}
+		superseded(t, e, name, "the inputs changed since it was planned")
+		if len(e.runner.created) != 2 || jobs.OpOf(e.jobNamed(t, e.newest(t))) != jobs.OpPlan {
+			t.Errorf("created %v, want a plan Job of the new inputs", e.runner.created)
+		}
+	})
+	t.Run("inputs reverted", func(t *testing.T) {
+		t.Parallel()
+		e, name := waiting(t)
+		e.state.st.InputsHash = e.hash
+		e.jobNamed(t, "a").Annotations[state.InputsHashAnnotation] = e.hash
+		e.reconcile(t, nil)
+		superseded(t, e, name, "no apply of its inputs is due any more")
+	})
+	t.Run("applyPolicy Automatic", func(t *testing.T) {
+		t.Parallel()
+		e, name := waiting(t)
+		*e.policy = infrav1.ApplyPolicyAutomatic
+		e.reconcile(t, nil)
+		superseded(t, e, name, "applyPolicy is no longer Manual")
+		if a := e.jobNamed(t, e.newest(t)); jobs.OpOf(a) != jobs.OpApply || slices.ContainsFunc(sourceArgs(a), func(s string) bool { return strings.HasPrefix(s, "--expect-plan") }) {
+			t.Errorf("created %v, want the guarded apply", e.runner.created)
+		}
+	})
+	t.Run("destructive, applyPolicy Manual", func(t *testing.T) {
+		t.Parallel()
+		e := newBlockedEnv(t, "h1:old", false)
+		if _, err := reconcileOnce(t, e.env, e.kind(t, nil)); err != nil {
+			t.Fatal(err)
+		}
+		name := planName(testName, "b", blockedPlan().Hash)
+		k := e.kind(t, nil)
+		k.applyPolicy = infrav1.ApplyPolicyManual
+		if _, err := reconcileOnce(t, e.env, k); err != nil {
+			t.Fatal(err)
+		}
+		checkPlan(t, e.plan(t, name), infrav1.PlanPhaseSuperseded, infrav1.PlanSupersededReason, infrav1.PlanNotApprovedReason)
+		if len(e.runner.created) != 1 || jobs.OpOf(e.jobNamed(t, e.newest(t))) != jobs.OpPlan {
+			t.Errorf("created %v, want a plan Job", e.runner.created)
+		}
+	})
+}
+
+// TestPlanKeptWhilePausedOrRunning: a stale plan is not superseded while
+// the object is paused (clusterctl move copies it) or a Job runs (its
+// approved apply may be the one running).
+func TestPlanKeptWhilePausedOrRunning(t *testing.T) {
+	t.Parallel()
+	e := newPlanEnv(t, "h1:old")
+	e.reconcile(t, nil)
+	planJob := e.newest(t)
+	p := &runner.Plan{Hash: runner.PlanHash([]string{"module.role.lb|update"}), Update: 1}
+	e.finishRunner(t, planJob, jobs.Succeeded, t0.Add(-time.Minute), planResult(runner.OpPlan, p, ""))
+	e.reconcile(t, nil)
+	name := planName(testName, planJob, p.Hash)
+	e.approve(t, name, "alice")
+	e.reconcile(t, nil) // the approved apply starts
+	*e.policy = infrav1.ApplyPolicyAutomatic
+	e.reconcile(t, nil) // runs
+	checkPlan(t, e.plan(t, name), infrav1.PlanPhaseApproved, infrav1.PlanApprovedReason, infrav1.PlanApprovedReason)
+
+	e.runner.jobs = e.runner.jobs[:1]
+	obj := e.get(t)
+	obj.Annotations = map[string]string{clusterv1.PausedAnnotation: "true"}
+	if err := e.c.Update(t.Context(), obj); err != nil {
+		t.Fatal(err)
+	}
+	e.reconcile(t, nil)
+	checkPlan(t, e.plan(t, name), infrav1.PlanPhaseApproved, infrav1.PlanApprovedReason, infrav1.PlanApprovedReason)
+	if e.rec.count(EventPlanSuperseded) != 0 {
+		t.Errorf("%d PlanSuperseded while running or paused", e.rec.count(EventPlanSuperseded))
+	}
+}
+
+// TestPlanApprovalRace: an approval that lands just before the plan is
+// superseded (the webhook refuses one after) is ignored: Approved
+// False/ApprovalIgnored and one Warning naming the approver and the plan
+// live now.
+func TestPlanApprovalRace(t *testing.T) {
+	t.Parallel()
+	e := newPlanEnv(t, "h1:old")
+	owner := []metav1.OwnerReference{{APIVersion: infrav1.GroupVersion.String(), Kind: state.KindTerraformCluster, Name: testName, UID: "m1-uid", Controller: new(true)}}
+	for _, p := range []*infrav1.TerraformPlan{
+		{ObjectMeta: metav1.ObjectMeta{Namespace: testNS, Name: "m1-raced", OwnerReferences: owner, CreationTimestamp: metav1.NewTime(t0.Add(-time.Hour)),
+			Labels: map[string]string{infrav1.PlanPhaseLabel: string(infrav1.PlanPhaseSuperseded)}},
+			Spec: infrav1.TerraformPlanSpec{TargetRef: infrav1.PlanTargetRef{Kind: infrav1.PlanTargetCluster, Name: testName}, PlanHash: "p2:a", InputsHash: "h1:a",
+				Reason: infrav1.PlanReasonManual, Summary: infrav1.PlanSummary{Update: new(int32(1))}, Approved: new(true), ApprovedBy: "alice"}},
+		{ObjectMeta: metav1.ObjectMeta{Namespace: testNS, Name: "m1-now", OwnerReferences: owner, CreationTimestamp: metav1.NewTime(t0),
+			Labels: map[string]string{infrav1.PlanPhaseLabel: string(infrav1.PlanPhasePending)}},
+			Spec: infrav1.TerraformPlanSpec{TargetRef: infrav1.PlanTargetRef{Kind: infrav1.PlanTargetCluster, Name: testName}, PlanHash: "p2:b", InputsHash: e.hash,
+				Reason: infrav1.PlanReasonManual, Summary: infrav1.PlanSummary{Update: new(int32(1))}}},
+	} {
+		if err := e.c.Create(t.Context(), p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 2 {
+		e.reconcile(t, nil)
+	}
+	checkPlan(t, e.plan(t, "m1-raced"), infrav1.PlanPhaseSuperseded, infrav1.PlanSupersededReason, infrav1.PlanApprovalIgnoredReason)
+	got := e.rec.only(EventPlanSuperseded)
+	if len(got) != 1 || got[0].eventType != corev1.EventTypeWarning || !strings.Contains(got[0].note, "alice") || !strings.Contains(got[0].note, "m1-now") {
+		t.Errorf("PlanSuperseded = %+v, want one Warning naming alice and m1-now", got)
+	}
+}
+
+// TestPrunePlans: the newest maxFinishedPlans finished plans of the
+// target stay, older ones go, and a live plan stays however old; nothing
+// is pruned while the object is paused.
+func TestPrunePlans(t *testing.T) {
+	t.Parallel()
+	for _, paused := range []bool{false, true} {
+		e := newPlanEnv(t, "h1:old")
+		owner := []metav1.OwnerReference{{APIVersion: infrav1.GroupVersion.String(), Kind: state.KindTerraformCluster, Name: testName, UID: "m1-uid", Controller: new(true)}}
+		mk := func(name string, phase infrav1.PlanPhase, age time.Duration) {
+			p := &infrav1.TerraformPlan{
+				ObjectMeta: metav1.ObjectMeta{Namespace: testNS, Name: name, OwnerReferences: owner, CreationTimestamp: metav1.NewTime(t0.Add(-age)),
+					Labels: map[string]string{infrav1.PlanPhaseLabel: string(phase)}},
+				Spec: infrav1.TerraformPlanSpec{TargetRef: infrav1.PlanTargetRef{Kind: infrav1.PlanTargetCluster, Name: testName}, PlanHash: "p2:" + name, InputsHash: e.hash,
+					Reason: infrav1.PlanReasonManual, Summary: infrav1.PlanSummary{Delete: new(int32(1))}},
+			}
+			if err := e.c.Create(t.Context(), p); err != nil {
+				t.Fatal(err)
+			}
+		}
+		mk("m1-live", infrav1.PlanPhasePending, 100*time.Hour)
+		for i := range maxFinishedPlans + 3 {
+			mk(fmt.Sprintf("m1-done-%02d", i), infrav1.PlanPhaseApplied, time.Duration(i+1)*time.Hour)
+		}
+		if paused {
+			obj := e.get(t)
+			obj.Annotations = map[string]string{clusterv1.PausedAnnotation: "true"}
+			if err := e.c.Update(t.Context(), obj); err != nil {
+				t.Fatal(err)
+			}
+		}
+		e.reconcile(t, nil)
+		var names []string
+		for _, p := range e.plans(t) {
+			names = append(names, p.Name)
+		}
+		want := maxFinishedPlans + 1
+		if paused {
+			want = maxFinishedPlans + 4
+		}
+		if len(names) != want || slices.Contains(names, "m1-done-10") != paused || !slices.Contains(names, "m1-done-09") {
+			t.Errorf("paused %v: plans %v", paused, names)
+		}
+		if p := e.plan(t, "m1-live"); phaseOf(p) != infrav1.PlanPhasePending {
+			t.Errorf("paused %v: the live plan is %s", paused, phaseOf(p))
+		}
+	}
 }

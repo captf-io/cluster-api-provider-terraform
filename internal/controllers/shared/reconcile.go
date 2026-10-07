@@ -522,6 +522,14 @@ func (r *reconciler) run(ctx context.Context) (ctrl.Result, error) {
 	dec, waiting := decide(di)
 	klog.FromContext(ctx).V(LogFlow).Info("Decided", "op", decisionOp(dec), "reason", dec.Reason, "requeueAfter", dec.RequeueAfter)
 	r.d.Metrics.Decision(r.k.Kind(), decisionOp(dec), dec.Reason)
+	if !r.deleting {
+		if err := r.supersedeStale(ctx, dec, gate, view); err != nil {
+			return ctrl.Result{}, err
+		}
+		if err := r.prunePlans(ctx); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
 	r.decided = true
 	switch p := r.planNamed(dec.Plan); {
 	case p == nil:

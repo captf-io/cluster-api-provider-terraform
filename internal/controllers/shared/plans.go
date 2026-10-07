@@ -291,6 +291,75 @@ func (r *reconciler) waitingExports() string {
 	return ""
 }
 
+// maxFinishedPlans is how many finished (terminal) TerraformPlans of a
+// target prunePlans keeps.
+const maxFinishedPlans = 10
+
+// supersedeStale supersedes, using ctx, the object's live Manual or
+// Destructive plan when dec, the pass's decision, is not about it: its
+// apply is no longer due (the drift it remediated is gone, the change was
+// reverted), the inputs changed since it was planned (a plan Job of the
+// new ones is due instead), or applyPolicy changed (a Manual plan under
+// Automatic, a Destructive one under Manual). gate is the pass's
+// dependency gate and view the state as read this pass: a gated pass, or
+// one that built no inputs, cannot tell, and neither can a restore. The
+// caller runs it only when no Job runs and the object is neither paused
+// nor deleting. A pool's ExportsChange plan is supersedeWithdrawn's. It
+// returns any write error.
+func (r *reconciler) supersedeStale(ctx context.Context, dec Decision, gate *Gate, view StateView) error {
+	p := r.livePlan()
+	if p == nil || gate != nil || view.CurrentHash == "" || dec.Op == jobs.OpRestore || p.Spec.Reason == infrav1.PlanReasonExportsChange || dec.Plan == p.Name {
+		return nil
+	}
+	manual := p.Spec.Reason == infrav1.PlanReasonManual
+	var why string
+	switch {
+	case manual && !r.manualApply():
+		why = "applyPolicy is no longer Manual"
+	case !manual && r.manualApply():
+		why = "applyPolicy is Manual now: a plan Job plans the change for approval instead"
+	case p.Spec.InputsHash != view.CurrentHash:
+		why = fmt.Sprintf("the inputs changed since it was planned (inputs hash %s, the plan's %s)", view.CurrentHash, p.Spec.InputsHash)
+	default:
+		why = "no apply of its inputs is due any more"
+	}
+	return r.supersede(ctx, p, why, "")
+}
+
+// prunePlans deletes, using ctx, the object's finished (terminal) plans
+// beyond the maxFinishedPlans newest; a live plan is never deleted. The
+// delete is conditional on each plan's UID, so a plan created again under
+// the same name meanwhile stays. The caller runs it only when the object
+// is neither paused nor deleting: clusterctl move copies the plans then,
+// and garbage collection removes them with a deleted object. It returns
+// any delete error.
+func (r *reconciler) prunePlans(ctx context.Context) error {
+	kept := 0
+	var gone []string
+	for i := range r.plans {
+		p := &r.plans[i]
+		if !phaseOf(p).Terminal() {
+			continue
+		}
+		if kept < maxFinishedPlans {
+			kept++
+			continue
+		}
+		uid := p.UID
+		err := r.d.Client.Delete(ctx, p, client.Preconditions{UID: &uid})
+		if err = client.IgnoreNotFound(err); err != nil {
+			return fmt.Errorf("prune TerraformPlan %s: %w", p.Name, err)
+		}
+		gone = append(gone, p.Name)
+	}
+	if len(gone) == 0 {
+		return nil
+	}
+	klog.FromContext(ctx).V(LogFlow).Info("Pruned finished TerraformPlans", "kept", maxFinishedPlans, "deleted", gone)
+	r.plans = slices.DeleteFunc(r.plans, func(p infrav1.TerraformPlan) bool { return slices.Contains(gone, p.Name) })
+	return nil
+}
+
 // supersedeWithdrawn supersedes, using ctx, the object's live
 // ExportsChange plan once this pass's guard (r.guard, of the inputs just
 // built) neither holds nor guards the change it was made for: the
