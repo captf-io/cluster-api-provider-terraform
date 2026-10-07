@@ -55,6 +55,10 @@ spec:
         description: |-
           TerraformCluster is the Schema for the terraformclusters API: the
           InfraCluster of Cluster API, provisioned by a Terraform/OpenTofu module.
+          It requires spec.identityRef, which the TerraformClusterTemplate it shares
+          the spec type with may leave to a ClusterClass patch. The endpoint
+          immutability is a rule of the kind as well, not of TerraformClusterSpec,
+          which the template shares and whose immutability only the webhook enforces.
         properties:
           apiVersion:
             description: |-
@@ -108,7 +112,7 @@ spec:
                   set by the user is passed to the module as its control_plane_endpoint
                   input; otherwise the controller writes the module's output here once.
                   host and port are set together. Once both are set it is immutable
-                  (the webhook enforces this).
+                  (the webhook and a CEL rule of the CRD enforce this).
                 minProperties: 1
                 properties:
                   host:
@@ -2327,6 +2331,17 @@ spec:
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - fieldPath: .spec.controlPlaneEndpoint
+          message: 'controlPlaneEndpoint is immutable once it has a host and a port:
+            every Machine and kubeconfig of the cluster points at it'
+          rule: '!has(oldSelf.spec.controlPlaneEndpoint) || !has(oldSelf.spec.controlPlaneEndpoint.host)
+            || !has(oldSelf.spec.controlPlaneEndpoint.port) || (has(self.spec.controlPlaneEndpoint)
+            && self.spec.controlPlaneEndpoint == oldSelf.spec.controlPlaneEndpoint)'
+        - fieldPath: .spec.identityRef
+          message: 'an identity is mandatory: set spec.identityRef (spec.defaults.identityRef
+            only applies to machines)'
+          rule: has(self.spec.identityRef)
     served: true
     storage: true
     subresources:

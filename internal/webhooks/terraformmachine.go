@@ -86,7 +86,10 @@ func (w *TerraformMachine) ValidateCreate(ctx context.Context, obj *infrav1.Terr
 // any providerID change except setting it once, from empty to non-empty, by
 // the manager's ServiceAccount (ManagerUser): the controller only writes it
 // while empty, so a value set by anyone else would stay wrong for good or
-// bind the machine to another Node. Create still accepts a providerID,
+// bind the machine to another Node. The CRD repeats the immutability and
+// set-once rules in CEL (TerraformMachine in api/v1alpha1), so they hold when
+// the webhook is down or its configuration is gone, but only this webhook
+// knows who sets providerID. Create still accepts a providerID,
 // because clusterctl move recreates objects with theirs. jobs, drift and remediation are operational policy and
 // stay mutable, so a stuck machine's deadline or drift checks can be changed
 // without rolling it. Metadata changes are always allowed: KCP SSA-syncs

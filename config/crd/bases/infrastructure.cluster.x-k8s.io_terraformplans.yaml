@@ -106,6 +106,10 @@ spec:
                 maxLength: 128
                 minLength: 1
                 type: string
+                x-kubernetes-validations:
+                - message: TerraformPlan spec.inputsHash is immutable; create a new
+                    TerraformPlan instead
+                  rule: self == oldSelf
               planHash:
                 description: |-
                   planHash fingerprints the plan's changes: an approval covers exactly
@@ -114,6 +118,10 @@ spec:
                 maxLength: 128
                 minLength: 1
                 type: string
+                x-kubernetes-validations:
+                - message: TerraformPlan spec.planHash is immutable; create a new
+                    TerraformPlan instead
+                  rule: self == oldSelf
               reason:
                 description: reason the plan waits for an approval.
                 enum:
@@ -121,6 +129,10 @@ spec:
                 - Destructive
                 - ExportsChange
                 type: string
+                x-kubernetes-validations:
+                - message: TerraformPlan spec.reason is immutable; create a new TerraformPlan
+                    instead
+                  rule: self == oldSelf
               summary:
                 description: summary of the plan.
                 minProperties: 1
@@ -199,6 +211,10 @@ spec:
                     minimum: 0
                     type: integer
                 type: object
+                x-kubernetes-validations:
+                - message: TerraformPlan spec.summary is immutable; create a new TerraformPlan
+                    instead
+                  rule: self == oldSelf
               targetRef:
                 description: |-
                   targetRef is the object the plan is for. The TerraformPlan is owned by
@@ -219,6 +235,10 @@ spec:
                 - kind
                 - name
                 type: object
+                x-kubernetes-validations:
+                - message: TerraformPlan spec.targetRef is immutable; create a new
+                    TerraformPlan instead
+                  rule: self == oldSelf
             required:
             - inputsHash
             - planHash
@@ -226,6 +246,17 @@ spec:
             - summary
             - targetRef
             type: object
+            x-kubernetes-validations:
+            - fieldPath: .approvedBy
+              message: approvedBy is required when approved is true
+              rule: '!has(self.approved) || !self.approved || has(self.approvedBy)'
+            - fieldPath: .approvedBy
+              message: approvedBy can only be set when approved is true
+              rule: (has(self.approved) && self.approved) || !has(self.approvedBy)
+            - fieldPath: .approved
+              message: an approval can be neither withdrawn nor changed
+              rule: '!(has(oldSelf.approved) && oldSelf.approved) || (has(self.approved)
+                && self.approved && self.approvedBy == oldSelf.approvedBy)'
           status:
             description: status is the observed state of the TerraformPlan.
             minProperties: 1

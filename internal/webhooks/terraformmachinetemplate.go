@@ -66,8 +66,12 @@ func (w *TerraformMachineTemplate) ValidateCreate(ctx context.Context, obj *infr
 // ValidateUpdate applies the create rules to newObj and also rejects any
 // change to spec.template.spec, compared against oldObj: Cluster API
 // templates are immutable, even where the TerraformMachine itself is not
-// (jobs, drift, remediation); a new template rolls the machines. ctx
-// supplies the admission request skipImmutability inspects for a
+// (jobs, drift, remediation); a new template rolls the machines. The CRD
+// carries no CEL rule for this, unlike TerraformMachine: CAPI's ClusterClass
+// topology controller dry-runs an update that changes the template spec to
+// find out whether it can be applied, and only this webhook can skip the
+// check for such a request (skipImmutability); a CEL transition rule would
+// reject it. ctx supplies the admission request skipImmutability inspects for a
 // ClusterClass dry-run. It returns no warnings and an Invalid error listing
 // every violation found, or a nil error when the update is valid.
 func (w *TerraformMachineTemplate) ValidateUpdate(ctx context.Context, oldObj, newObj *infrav1.TerraformMachineTemplate) (admission.Warnings, error) {

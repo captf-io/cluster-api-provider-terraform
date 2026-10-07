@@ -59,6 +59,12 @@ spec:
         description: |-
           TerraformMachine is the Schema for the terraformmachines API: the
           InfraMachine of Cluster API, provisioned by a Terraform/OpenTofu module.
+
+          The immutability of source, identityRef, variables and variablesFrom and
+          the set-once providerID are rules of the kind, not of TerraformMachineSpec:
+          that type is also the spec of a TerraformMachineTemplate's template, whose
+          immutability is enforced by the webhook only, which can skip it for a
+          ClusterClass topology dry-run.
         properties:
           apiVersion:
             description: |-
@@ -1459,6 +1465,30 @@ spec:
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - fieldPath: .spec.source
+          message: TerraformMachine spec.source is immutable; create a new TerraformMachine
+            instead
+          rule: self.spec.source == oldSelf.spec.source
+        - fieldPath: .spec.identityRef
+          message: TerraformMachine spec.identityRef is immutable; create a new TerraformMachine
+            instead
+          rule: 'has(self.spec.identityRef) ? (has(oldSelf.spec.identityRef) && self.spec.identityRef
+            == oldSelf.spec.identityRef) : !has(oldSelf.spec.identityRef)'
+        - fieldPath: .spec.variables
+          message: TerraformMachine spec.variables is immutable; create a new TerraformMachine
+            instead
+          rule: 'has(self.spec.variables) ? (has(oldSelf.spec.variables) && self.spec.variables
+            == oldSelf.spec.variables) : !has(oldSelf.spec.variables)'
+        - fieldPath: .spec.variablesFrom
+          message: TerraformMachine spec.variablesFrom is immutable; create a new
+            TerraformMachine instead
+          rule: 'has(self.spec.variablesFrom) ? (has(oldSelf.spec.variablesFrom) &&
+            self.spec.variablesFrom == oldSelf.spec.variablesFrom) : !has(oldSelf.spec.variablesFrom)'
+        - fieldPath: .spec.providerID
+          message: providerID can only be set once, from empty to non-empty
+          rule: '!has(oldSelf.spec.providerID) || (has(self.spec.providerID) && self.spec.providerID
+            == oldSelf.spec.providerID)'
     served: true
     storage: true
     subresources:

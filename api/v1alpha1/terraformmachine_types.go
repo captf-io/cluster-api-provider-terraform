@@ -25,7 +25,8 @@ import (
 // machine-role module image and how to run it. source, identityRef,
 // variables and variablesFrom define the machine and are immutable after
 // creation, and providerID can only be
-// set once, by the controller; the admission webhook enforces this. jobs,
+// set once, by the controller; the admission webhook and CEL rules of the
+// CRD enforce this. jobs,
 // drift and remediation are operational policy and may change at any time.
 // +kubebuilder:validation:MinProperties=1
 type TerraformMachineSpec struct {
@@ -110,6 +111,17 @@ type TerraformMachineStatus struct {
 
 // TerraformMachine is the Schema for the terraformmachines API: the
 // InfraMachine of Cluster API, provisioned by a Terraform/OpenTofu module.
+//
+// The immutability of source, identityRef, variables and variablesFrom and
+// the set-once providerID are rules of the kind, not of TerraformMachineSpec:
+// that type is also the spec of a TerraformMachineTemplate's template, whose
+// immutability is enforced by the webhook only, which can skip it for a
+// ClusterClass topology dry-run.
+// +kubebuilder:validation:XValidation:rule="self.spec.source == oldSelf.spec.source",message="TerraformMachine spec.source is immutable; create a new TerraformMachine instead",fieldPath=".spec.source"
+// +kubebuilder:validation:XValidation:rule="has(self.spec.identityRef) ? (has(oldSelf.spec.identityRef) && self.spec.identityRef == oldSelf.spec.identityRef) : !has(oldSelf.spec.identityRef)",message="TerraformMachine spec.identityRef is immutable; create a new TerraformMachine instead",fieldPath=".spec.identityRef"
+// +kubebuilder:validation:XValidation:rule="has(self.spec.variables) ? (has(oldSelf.spec.variables) && self.spec.variables == oldSelf.spec.variables) : !has(oldSelf.spec.variables)",message="TerraformMachine spec.variables is immutable; create a new TerraformMachine instead",fieldPath=".spec.variables"
+// +kubebuilder:validation:XValidation:rule="has(self.spec.variablesFrom) ? (has(oldSelf.spec.variablesFrom) && self.spec.variablesFrom == oldSelf.spec.variablesFrom) : !has(oldSelf.spec.variablesFrom)",message="TerraformMachine spec.variablesFrom is immutable; create a new TerraformMachine instead",fieldPath=".spec.variablesFrom"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.spec.providerID) || (has(self.spec.providerID) && self.spec.providerID == oldSelf.spec.providerID)",message="providerID can only be set once, from empty to non-empty",fieldPath=".spec.providerID"
 type TerraformMachine struct {
 	metav1.TypeMeta `json:",inline"`
 

@@ -192,10 +192,14 @@ type PlanSummary struct {
 // controller writes every field but approved and approvedBy when it creates
 // the object, and they never change afterwards; the approver writes approved
 // and approvedBy.
+// +kubebuilder:validation:XValidation:rule="!has(self.approved) || !self.approved || has(self.approvedBy)",message="approvedBy is required when approved is true",fieldPath=".approvedBy"
+// +kubebuilder:validation:XValidation:rule="(has(self.approved) && self.approved) || !has(self.approvedBy)",message="approvedBy can only be set when approved is true",fieldPath=".approvedBy"
+// +kubebuilder:validation:XValidation:rule="!(has(oldSelf.approved) && oldSelf.approved) || (has(self.approved) && self.approved && self.approvedBy == oldSelf.approvedBy)",message="an approval can be neither withdrawn nor changed",fieldPath=".approved"
 type TerraformPlanSpec struct {
 	// targetRef is the object the plan is for. The TerraformPlan is owned by
 	// it and moves with it.
 	// +required
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="TerraformPlan spec.targetRef is immutable; create a new TerraformPlan instead"
 	TargetRef PlanTargetRef `json:"targetRef,omitempty,omitzero"`
 
 	// planHash fingerprints the plan's changes: an approval covers exactly
@@ -204,20 +208,24 @@ type TerraformPlanSpec struct {
 	// +required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=128
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="TerraformPlan spec.planHash is immutable; create a new TerraformPlan instead"
 	PlanHash string `json:"planHash,omitempty"`
 
 	// inputsHash is the hash of the inputs the plan was made for.
 	// +required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=128
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="TerraformPlan spec.inputsHash is immutable; create a new TerraformPlan instead"
 	InputsHash string `json:"inputsHash,omitempty"`
 
 	// reason the plan waits for an approval.
 	// +required
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="TerraformPlan spec.reason is immutable; create a new TerraformPlan instead"
 	Reason PlanReason `json:"reason,omitempty"`
 
 	// summary of the plan.
 	// +required
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="TerraformPlan spec.summary is immutable; create a new TerraformPlan instead"
 	Summary PlanSummary `json:"summary,omitempty,omitzero"`
 
 	// approved approves the plan, once and for good: it can only change from

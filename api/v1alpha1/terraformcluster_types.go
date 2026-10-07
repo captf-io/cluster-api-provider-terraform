@@ -57,7 +57,7 @@ type TerraformClusterSpec struct {
 	// set by the user is passed to the module as its control_plane_endpoint
 	// input; otherwise the controller writes the module's output here once.
 	// host and port are set together. Once both are set it is immutable
-	// (the webhook enforces this).
+	// (the webhook and a CEL rule of the CRD enforce this).
 	// +optional
 	// +kubebuilder:validation:XValidation:rule="has(self.host) == has(self.port)",message="host and port must be set together"
 	ControlPlaneEndpoint *clusterv1.APIEndpoint `json:"controlPlaneEndpoint,omitempty"`
@@ -216,6 +216,12 @@ const MaxPublishedExportsBytes = 64 << 10
 
 // TerraformCluster is the Schema for the terraformclusters API: the
 // InfraCluster of Cluster API, provisioned by a Terraform/OpenTofu module.
+// It requires spec.identityRef, which the TerraformClusterTemplate it shares
+// the spec type with may leave to a ClusterClass patch. The endpoint
+// immutability is a rule of the kind as well, not of TerraformClusterSpec,
+// which the template shares and whose immutability only the webhook enforces.
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.spec.controlPlaneEndpoint) || !has(oldSelf.spec.controlPlaneEndpoint.host) || !has(oldSelf.spec.controlPlaneEndpoint.port) || (has(self.spec.controlPlaneEndpoint) && self.spec.controlPlaneEndpoint == oldSelf.spec.controlPlaneEndpoint)",message="controlPlaneEndpoint is immutable once it has a host and a port: every Machine and kubeconfig of the cluster points at it",fieldPath=".spec.controlPlaneEndpoint"
+// +kubebuilder:validation:XValidation:rule="has(self.spec.identityRef)",message="an identity is mandatory: set spec.identityRef (spec.defaults.identityRef only applies to machines)",fieldPath=".spec.identityRef"
 type TerraformCluster struct {
 	metav1.TypeMeta `json:",inline"`
 

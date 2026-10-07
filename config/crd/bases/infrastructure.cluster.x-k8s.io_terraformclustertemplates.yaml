@@ -117,7 +117,7 @@ spec:
                           set by the user is passed to the module as its control_plane_endpoint
                           input; otherwise the controller writes the module's output here once.
                           host and port are set together. Once both are set it is immutable
-                          (the webhook enforces this).
+                          (the webhook and a CEL rule of the CRD enforce this).
                         minProperties: 1
                         properties:
                           host:
