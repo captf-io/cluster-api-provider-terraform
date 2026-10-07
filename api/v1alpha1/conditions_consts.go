@@ -616,6 +616,23 @@ const (
 	InputsUnavailableReason = "InputsUnavailable"
 )
 
+// Reconciling: abnormal-true polarity, the kstatus convention; never in
+// Ready. kstatus (Flux's wait, Argo's health) reads Reconciling=True as
+// in progress: without it, Ready=True and observedGeneration equal to
+// generation report an edit as done while it waits to be applied.
+const (
+	// ReconcilingCondition is True while the current generation's inputs
+	// wait to be applied: InputsApplied is False with ApplyPending,
+	// AwaitingApproval or ApplyRunning.
+	ReconcilingCondition = "Reconciling"
+
+	// InputsNotAppliedReason is the True reason; the message carries
+	// InputsApplied's reason and message.
+	InputsNotAppliedReason = "InputsNotApplied"
+	// ReconciledReason is the False reason: nothing waits to be applied.
+	ReconciledReason = "Reconciled"
+)
+
 // Ready of a TerraformClusterIdentity: positive polarity. The identity uses
 // ReadyCondition with its own reasons; the manager sets it from the
 // credentials Secret.
@@ -791,6 +808,10 @@ func ConditionReasons() map[string]map[metav1.ConditionStatus][]string {
 			metav1.ConditionTrue:    {InputsAppliedReason},
 			metav1.ConditionFalse:   {ApplyPendingReason, AwaitingApprovalReason, ApplyRunningReason, InputsApplyFailedReason},
 			metav1.ConditionUnknown: {InputsUnavailableReason},
+		},
+		ReconcilingCondition: {
+			metav1.ConditionTrue:  {InputsNotAppliedReason},
+			metav1.ConditionFalse: {ReconciledReason},
 		},
 		clusterv1.DeletingCondition: {
 			metav1.ConditionTrue:  {clusterv1.DeletingReason, DeletionPolicyUnresolvedReason},

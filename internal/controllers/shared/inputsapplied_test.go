@@ -25,6 +25,30 @@ import (
 	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
 )
 
+// TestReconciling proves Reconciling is True, naming why, only while the
+// inputs wait to be applied (pending, awaiting approval, running), and
+// False when they are applied, unknown or failed.
+func TestReconciling(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		status metav1.ConditionStatus
+		reason string
+		want   metav1.ConditionStatus
+	}{
+		{metav1.ConditionFalse, infrav1.ApplyPendingReason, metav1.ConditionTrue},
+		{metav1.ConditionFalse, infrav1.AwaitingApprovalReason, metav1.ConditionTrue},
+		{metav1.ConditionFalse, infrav1.ApplyRunningReason, metav1.ConditionTrue},
+		{metav1.ConditionFalse, infrav1.InputsApplyFailedReason, metav1.ConditionFalse},
+		{metav1.ConditionUnknown, infrav1.InputsUnavailableReason, metav1.ConditionFalse},
+		{metav1.ConditionTrue, infrav1.InputsAppliedReason, metav1.ConditionFalse},
+	} {
+		c := reconciling(&metav1.Condition{Type: infrav1.InputsAppliedCondition, Status: tt.status, Reason: tt.reason, Message: "m"})
+		if c.Type != infrav1.ReconcilingCondition || c.Status != tt.want || (tt.want == metav1.ConditionTrue && c.Message != tt.reason+": m") {
+			t.Errorf("%s/%s: Reconciling = %+v, want %s", tt.status, tt.reason, c, tt.want)
+		}
+	}
+}
+
 // TestInputsApplied proves each state of the InputsApplied condition from
 // the facts a pass learned.
 func TestInputsApplied(t *testing.T) {

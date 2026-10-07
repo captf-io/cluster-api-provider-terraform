@@ -50,6 +50,7 @@ var conditionStatuses = map[string][]metav1.ConditionStatus{
 	PlanApprovedCondition:          {metav1.ConditionTrue, metav1.ConditionFalse},
 	VariablesValidCondition:        {metav1.ConditionTrue, metav1.ConditionFalse, metav1.ConditionUnknown},
 	InputsAppliedCondition:         {metav1.ConditionTrue, metav1.ConditionFalse, metav1.ConditionUnknown},
+	ReconcilingCondition:           {metav1.ConditionTrue, metav1.ConditionFalse},
 }
 
 // TestEveryTypeHasReasonsForEachStatus proves ConditionReasons has an

@@ -17,6 +17,8 @@ limitations under the License.
 package shared
 
 import (
+	"slices"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
@@ -34,6 +36,22 @@ type inputsFacts struct {
 	// gate is the dependency or variables gate that stopped the inputs from
 	// being built this pass; nil when they were built or not asked for.
 	gate *Gate
+}
+
+// reconciling returns the Reconciling condition that goes with ia, the
+// pass's InputsApplied: True while the inputs wait to be applied (False
+// with ApplyPending, AwaitingApproval or ApplyRunning), naming why, and
+// False otherwise, a failed apply included (kstatus would read that as
+// in progress forever).
+func reconciling(ia *metav1.Condition) metav1.Condition {
+	if ia.Status == metav1.ConditionFalse && slices.Contains([]string{infrav1.ApplyPendingReason, infrav1.AwaitingApprovalReason, infrav1.ApplyRunningReason}, ia.Reason) {
+		msg := ia.Reason
+		if ia.Message != "" {
+			msg += ": " + ia.Message
+		}
+		return metav1.Condition{Type: infrav1.ReconcilingCondition, Status: metav1.ConditionTrue, Reason: infrav1.InputsNotAppliedReason, Message: msg}
+	}
+	return metav1.Condition{Type: infrav1.ReconcilingCondition, Status: metav1.ConditionFalse, Reason: infrav1.ReconciledReason}
 }
 
 // inputsApplied returns the InputsApplied condition of the pass, with bk

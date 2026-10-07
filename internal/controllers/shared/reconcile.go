@@ -384,6 +384,7 @@ func (r *reconciler) finish(bk *Bookkeeping, applyCond *metav1.Condition, res ct
 	}
 	if ia := r.inputsApplied(bk); ia != nil {
 		conditions.Set(r.obj, *ia)
+		conditions.Set(r.obj, reconciling(ia))
 	}
 	if err := captfconds.SetReady(r.obj, r.k.Kind(), r.phase()); err != nil {
 		return ctrl.Result{}, err
