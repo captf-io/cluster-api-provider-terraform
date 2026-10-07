@@ -39,7 +39,8 @@ import (
 // value bytes, as for machines. Autoscaling is parsed from mp's autoscaler
 // annotations (ParseAutoscaling). Replicas is MachinePool.spec.replicas, 1
 // when unset (CAPI's default), while autoscaling is disabled; enabled, it
-// is the observed replicas output (status.replicas) once one exists, else
+// is the observed replicas output (status.replicas) once one exists (but
+// spec.replicas while a foreign controller owns the replicas), else
 // still spec.replicas for the first apply, clamped into
 // [Autoscaling.Min, Autoscaling.Max] so a render never asks the cloud for
 // an out-of-range desired count (the write-back that patches spec.replicas
@@ -74,9 +75,16 @@ func MachinePoolInputs(cluster *clusterv1.Cluster, mp *clusterv1.MachinePool, tm
 // refresh, a pointer so a real 0 (scale-to-zero) is distinguished from "no
 // observation yet" — falling back to mp.Spec.Replicas for the first apply,
 // before any refresh has run; either way the result is clamped into
-// [autoscaling.Min, autoscaling.Max].
+// [autoscaling.Min, autoscaling.Max]. While replicas-managed-by names a
+// foreign controller (foreignReplicasOwner) that controller owns
+// mp.Spec.Replicas and CAPTF never writes it back, so the observed value
+// would pin the render to a stale count: the spec value (1 when unset) is
+// rendered as is.
 func poolReplicas(mp *clusterv1.MachinePool, tmp *infrav1.TerraformMachinePool, autoscaling contract.Autoscaling) int32 {
 	if !autoscaling.Enabled {
+		return ptr.Deref(mp.Spec.Replicas, 1)
+	}
+	if _, foreign := foreignReplicasOwner(mp); foreign {
 		return ptr.Deref(mp.Spec.Replicas, 1)
 	}
 	r := ptr.Deref(tmp.Status.Replicas, ptr.Deref(mp.Spec.Replicas, 1))
