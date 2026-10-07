@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -31,6 +32,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
+	"github.com/captf-io/cluster-api-provider-terraform/internal/jobs"
 )
 
 // TestPreambleExternallyManagedDeleting proves a deleting object carrying
@@ -68,6 +70,39 @@ func TestPreambleExternallyManagedDeleting(t *testing.T) {
 	}
 	if m := live.get(t); !slices.Contains(m.Finalizers, testFinal) || len(live.rec.reasons) != 0 {
 		t.Errorf("live externally managed object changed: %+v, events %v", m.Finalizers, live.rec.reasons)
+	}
+}
+
+// TestPreambleExternallyManagedKeepsState proves the release of a deleting
+// managed-by object waits while one of its Jobs runs, then keeps its state
+// chunks, backups and inputs records as deletionPolicy Retain does
+// (unowned, unprotected, labeled with its uid), so the garbage collector
+// does not take the state the event says is left to the external manager.
+func TestPreambleExternallyManagedKeepsState(t *testing.T) {
+	t.Parallel()
+	e := retainEnv(t, deleting, func(m *infrav1.TerraformMachine) {
+		m.Annotations = map[string]string{clusterv1.ManagedByAnnotation: "someone"}
+	})
+	e.d.Jobs = e.runner
+	e.runner.jobs = []batchv1.Job{job("a", jobs.OpApply, jobs.Running, t0)}
+	got, err := Preamble(t.Context(), e.d, e.kindFor(t, OwnerInfo{}))
+	if err != nil || !got.Stop || got.Result.RequeueAfter == 0 {
+		t.Fatalf("Preamble with a running Job = %+v, %v; want a requeue", got, err)
+	}
+	if m := e.get(t); m == nil || !slices.Contains(m.Finalizers, testFinal) {
+		t.Fatal("the finalizer went while a Job ran")
+	}
+
+	e.runner.jobs = nil
+	if _, err := Preamble(t.Context(), e.d, e.kindFor(t, OwnerInfo{})); err != nil {
+		t.Fatal(err)
+	}
+	if e.get(t) != nil {
+		t.Fatal("object kept after the release")
+	}
+	assertRetained(t, e, "m1-uid")
+	if !slices.Contains(e.rec.reasons, EventExternallyManagedReleased) {
+		t.Errorf("events = %v, want %s", e.rec.reasons, EventExternallyManagedReleased)
 	}
 }
 

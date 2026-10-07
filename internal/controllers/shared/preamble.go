@@ -59,7 +59,9 @@ type PreambleResult struct {
 //
 //  0. deleting with foreground propagation → drop the foregroundDeletion
 //     finalizer (convertForeground) and carry on;
-//  1. externally managed → stop before any write;
+//  1. externally managed → stop before any write; deleting, keep the
+//     state as Retain does and drop the finalizer once no Job runs
+//     (releaseExternallyManaged);
 //  2. owner lookup: no ownerRef of the expected kind and not deleting →
 //     DependenciesReady=Unknown and requeue; no ownerRef and deleting with
 //     no state, no Job, no live run lease, no dependents blocking the
@@ -89,20 +91,7 @@ func Preamble(ctx context.Context, d Deps, k Kind) (PreambleResult, error) {
 			klog.FromContext(ctx).V(LogDebug).Info("Object is externally managed, skipping")
 			return PreambleResult{Stop: true}, nil
 		}
-		// A deleting object that still carries our finalizer would hang
-		// forever: release only the finalizer and leave the state and the
-		// infrastructure to the external manager.
-		removed, err := dropFinalizer(ctx, d.Client, obj, k.Finalizer())
-		if err != nil {
-			return conflictRequeue(err)
-		}
-		if removed {
-			klog.FromContext(ctx).Info("Removed the finalizer",
-				"finalizer", k.Finalizer(), "reason", "externally managed")
-			d.Emit(obj, corev1.EventTypeNormal, EventExternallyManagedReleased, "Delete",
-				"Removed finalizer %s: the object is externally managed, so its state and infrastructure are left to the external manager", k.Finalizer())
-		}
-		return PreambleResult{Stop: true}, nil
+		return releaseExternallyManaged(ctx, d, k)
 	}
 
 	owner, err := k.Owner(ctx)
@@ -220,6 +209,56 @@ func conflictRequeue(err error) (PreambleResult, error) {
 	return PreambleResult{}, err
 }
 
+// releaseExternallyManaged lets k's deleting object, which carries the
+// managed-by annotation, go without a destroy, using ctx and the shared
+// dependencies d: a deleting object that still carries our finalizer would
+// otherwise hang forever. The infrastructure is left to the external
+// manager, and so is its state: while a Job of the object runs (one
+// started before the annotation was set) it waits, then it keeps the
+// state Secrets, the backups and the inputs records exactly as
+// deletionPolicy Retain does (Retain: unowned, so the garbage collector
+// does not take them with the object, and labeled with its uid), deletes
+// the state lock, releases the object and persists the finalizer removal
+// with an optimistic-lock patch. It returns the PreambleResult (always
+// Stop) and any error; a conflict requeues.
+func releaseExternallyManaged(ctx context.Context, d Deps, k Kind) (PreambleResult, error) {
+	obj := k.Object()
+	if !controllerutil.ContainsFinalizer(obj, k.Finalizer()) {
+		return PreambleResult{Stop: true}, nil
+	}
+	suffix, err := state.Suffix(obj.GetNamespace(), k.Kind(), obj.GetName())
+	if err != nil {
+		return PreambleResult{}, err
+	}
+	switch running, err := jobRunning(ctx, d, k, suffix); {
+	case err != nil:
+		return PreambleResult{}, err
+	case running:
+		klog.FromContext(ctx).V(LogFlow).Info("Externally managed and deleting; waiting for the running Job before releasing")
+		return PreambleResult{Stop: true, Result: ctrl.Result{RequeueAfter: GateRequeue}}, nil
+	}
+	before, ok := obj.DeepCopyObject().(client.Object)
+	if !ok {
+		return PreambleResult{}, fmt.Errorf("copy %T", obj)
+	}
+	// The credential mirror is not resolved here: the garbage collector
+	// drops this object's reference from it, or the mirror with its last
+	// user.
+	kept, err := Retain(ctx, d, k, suffix, "")
+	if err != nil {
+		return conflictRequeue(err)
+	}
+	if err := client.IgnoreNotFound(d.Client.Patch(ctx, obj, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{}))); err != nil {
+		return conflictRequeue(fmt.Errorf("remove finalizer: %w", err))
+	}
+	klog.FromContext(ctx).Info("Removed the finalizer", "finalizer", k.Finalizer(), "reason", "externally managed")
+	d.Emit(obj, corev1.EventTypeNormal, EventExternallyManagedReleased, "Delete",
+		"Removed finalizer %s: the object is externally managed, so its infrastructure is left to the external manager; "+
+			"its state (%d Secrets), %d state backup Secrets and %d inputs Secrets are kept, labeled %s=%s",
+		k.Finalizer(), kept.State, kept.Backups, kept.Inputs, state.RetainedFromUIDLabel, obj.GetUID())
+	return PreambleResult{Stop: true}, nil
+}
+
 // convertForeground turns a foreground deletion of obj into a background
 // one, using ctx and the shared dependencies d: it removes the
 // foregroundDeletion finalizer the API server adds for
@@ -311,6 +350,15 @@ func hasStateOrJob(ctx context.Context, d Deps, k Kind, suffix string) (bool, er
 		}
 		return true, nil
 	}
+	return jobRunning(ctx, d, k, suffix)
+}
+
+// jobRunning reports, using ctx and the shared dependencies d, whether k's
+// object, of state suffix suffix, has an active Job (counting the one
+// status.activeJob names while the Job cache lags behind it) or a live run
+// lease. It returns any error from those reads.
+func jobRunning(ctx context.Context, d Deps, k Kind, suffix string) (bool, error) {
+	obj := k.Object()
 	list, err := d.Jobs.List(ctx, obj, k.Kind())
 	if err != nil {
 		return false, fmt.Errorf("list jobs: %w", err)
