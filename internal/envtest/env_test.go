@@ -102,6 +102,10 @@ type testEnv struct {
 	// stopWebhooks stops the webhook server and returns once it has
 	// stopped; nil for an environment without webhooks.
 	stopWebhooks func()
+	// usersMu guards users: envtest's AddUser is not safe for concurrent use.
+	usersMu sync.Mutex
+	// users holds the client of each user already provisioned, by name.
+	users map[string]client.Client
 }
 
 // startEnv starts an API server with the CRDs of config/crd/bases and the
@@ -221,9 +225,15 @@ func (te *testEnv) stop() error {
 }
 
 // userClient returns a client that authenticates as the user name, a
-// member of usersGroup. Test t fails when the user cannot be provisioned.
+// member of usersGroup, provisioning the user on first use. Test t fails
+// when the user cannot be provisioned.
 func (te *testEnv) userClient(t *testing.T, name string) client.Client {
 	t.Helper()
+	te.usersMu.Lock()
+	defer te.usersMu.Unlock()
+	if c, ok := te.users[name]; ok {
+		return c
+	}
 	u, err := te.env.AddUser(crenvtest.User{Name: name, Groups: []string{usersGroup}}, nil)
 	if err != nil {
 		t.Fatalf("add user %s: %v", name, err)
@@ -232,6 +242,10 @@ func (te *testEnv) userClient(t *testing.T, name string) client.Client {
 	if err != nil {
 		t.Fatalf("client for %s: %v", name, err)
 	}
+	if te.users == nil {
+		te.users = map[string]client.Client{}
+	}
+	te.users[name] = c
 	return c
 }
 
