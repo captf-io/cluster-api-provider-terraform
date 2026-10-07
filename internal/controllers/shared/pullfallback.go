@@ -55,17 +55,21 @@ const pullRunbook = "https://captf.io/docs/operator-guide/runbooks/job-failures.
 // durable Secret as unpullable (inputs.AddUnpullable), status.activeJob
 // is released on the API server and the Job deleted, as DeleteStuckJob
 // does, and the Warning ImagePullFallback says which image runs next;
-// the next pass starts the operation on it (ChooseImage). With none
-// left, or no durable Secret to record it on, the Job is left to its
-// deadline and the operation's condition reports ImagePullFailed now:
+// the next pass that may start a Job starts the operation on it
+// (ChooseImage). With none left, or no durable Secret to record it on,
+// the operation's condition reports ImagePullFailed now:
 // ApplyJobSucceeded for a destroy (returned, for finish), else
-// DriftJobSucceeded or RestoreJobSucceeded (set here).
+// DriftJobSucceeded or RestoreJobSucceeded (set here). The Job is then
+// left to its deadline, unless paused: a paused object's Job is deleted
+// all the same, as it can never succeed and would hold block-move, and
+// with it clusterctl move, until its deadline (keepPausedPullFailure
+// keeps that condition while the object stays paused).
 //
 // Apply and plan Jobs are never touched: they run spec.source.image, and
 // only the operator can fix it. It returns whether job was deleted, the
 // ApplyJobSucceeded condition to report (nil for none), and any error
 // listing pods, recording the image, releasing or deleting the Job.
-func (r *reconciler) pullStuck(ctx context.Context, job *batchv1.Job) (bool, *metav1.Condition, error) {
+func (r *reconciler) pullStuck(ctx context.Context, job *batchv1.Job, paused bool) (bool, *metav1.Condition, error) {
 	op := jobs.OpOf(job)
 	// A Job with a ready pod pulled its image: its pods are not read.
 	if op == jobs.OpApply || op == jobs.OpPlan || r.d.Clock.Now().Sub(job.CreationTimestamp.Time) < PullFailureGrace ||
@@ -99,32 +103,91 @@ func (r *reconciler) pullStuck(ctx context.Context, job *batchv1.Job) (bool, *me
 	next := r.pullFallbacks(job, image, unpullable)
 	logger := klog.LoggerWithValues(klog.FromContext(ctx), "Job", klog.KObj(job), "image", image, "reason", reason)
 	if len(next) == 0 {
-		logger.Info("The Job's module image cannot be pulled, and no other image is left to try; it fails at activeDeadlineSeconds")
-		return false, r.pullFailed(job, image, reason, ""), nil
+		return r.pullFailedJob(ctx, job, image, reason, "", paused)
 	}
 	recorded, added, err := inputs.AddUnpullable(ctx, r.d.Client, r.obj, unpullable, image)
 	switch {
 	case errors.Is(err, inputs.ErrNotFound):
-		logger.Info("The Job's module image cannot be pulled, but the durable inputs Secret that records it is missing; it fails at activeDeadlineSeconds")
-		return false, r.pullFailed(job, image, reason, "the durable inputs Secret that records unpullable images is missing, so no other image can be tried"), nil
+		return r.pullFailedJob(ctx, job, image, reason, "the durable inputs Secret that records unpullable images is missing, so no other image can be tried", paused)
 	case err != nil:
 		return false, nil, err
 	}
 	if r.durable != nil {
 		r.durable.Unpullable = recorded
 	}
-	if err := releaseActiveJob(ctx, r.d, r.obj, job.Name); err != nil {
-		return false, nil, fmt.Errorf("release status.activeJob before deleting %s: %w", job.Name, err)
-	}
-	if err := r.d.Jobs.Delete(ctx, job); err != nil {
+	if err := r.deletePullStuck(ctx, job); err != nil {
 		return false, nil, err
 	}
-	logger.Info("Deleted a Job whose module image cannot be pulled; the operation starts again on the next image", "next", next[0])
+	logger.Info("Deleted a Job whose module image cannot be pulled; the operation starts again on the next image", "next", next[0], "paused", paused)
 	if added {
+		retry := fmt.Sprintf("retrying %s with %s", op, next[0])
+		if paused {
+			retry = fmt.Sprintf("%s runs with %s once the object is unpaused", op, next[0])
+		}
 		r.d.EmitRelated(r.obj, job, corev1.EventTypeWarning, EventImagePullFallback, "Run",
-			"Could not pull %s (%s): deleted %s Job %s; retrying %s with %s", image, reason, op, job.Name, op, next[0])
+			"Could not pull %s (%s): deleted %s Job %s; %s", image, reason, op, job.Name, retry)
 	}
 	return true, nil, nil
+}
+
+// pullFailedJob reports, using ctx, that job cannot pull image (the
+// kubelet's reason) and that no other image is tried, why saying why (""
+// for none left): pullFailed sets or returns its condition. A Job of a
+// paused object is deleted (deletePullStuck), as it would hold
+// clusterctl move until its deadline; otherwise it is left to fail
+// there. It returns whether job was deleted, the ApplyJobSucceeded
+// condition to report (nil for none), and any error releasing or
+// deleting the Job.
+func (r *reconciler) pullFailedJob(ctx context.Context, job *batchv1.Job, image, reason, why string, paused bool) (bool, *metav1.Condition, error) {
+	logger := klog.LoggerWithValues(klog.FromContext(ctx), "Job", klog.KObj(job), "image", image, "reason", reason)
+	if !paused {
+		logger.Info("The Job's module image cannot be pulled, and no other image is tried; it fails at activeDeadlineSeconds")
+		return false, r.pullFailed(job, image, reason, why, false), nil
+	}
+	if err := r.deletePullStuck(ctx, job); err != nil {
+		return false, nil, err
+	}
+	logger.Info("Deleted a paused object's Job whose module image cannot be pulled, and no other image is tried: it would hold clusterctl move until its deadline")
+	return true, r.pullFailed(job, image, reason, why, true), nil
+}
+
+// deletePullStuck releases status.activeJob on the API server, then
+// deletes job, using ctx, as DeleteStuckJob does: the Job never started,
+// so it must not be named there, nor recorded as a vanished apply, if the
+// pass's status write is lost. It returns any error releasing or
+// deleting.
+func (r *reconciler) deletePullStuck(ctx context.Context, job *batchv1.Job) error {
+	if err := releaseActiveJob(ctx, r.d, r.obj, job.Name); err != nil {
+		return fmt.Errorf("release status.activeJob before deleting %s: %w", job.Name, err)
+	}
+	return r.d.Jobs.Delete(ctx, job)
+}
+
+// pausedPullNote marks the ImagePullFailed message of a Job deleted while
+// its object is paused (keepPausedPullFailure).
+const pausedPullNote = "it was deleted, as the object is paused and the Job would hold clusterctl move until its deadline; the operation starts again once unpaused"
+
+// keepPausedPullFailure keeps, on a pass of a paused object, the
+// ImagePullFailed conditions pullStuck set when it deleted a Job on its
+// last image (pausedPullNote): with that Job gone, bookkeeping would
+// otherwise report an older Job's outcome again. DriftJobSucceeded and
+// RestoreJobSucceeded are set here; ApplyJobSucceeded is returned, for
+// finish (nil when none). Once unpaused, the operation starts again and
+// reports its own outcome.
+func (r *reconciler) keepPausedPullFailure() *metav1.Condition {
+	var applyCond *metav1.Condition
+	for _, t := range []string{infrav1.ApplyJobSucceededCondition, infrav1.DriftJobSucceededCondition, infrav1.RestoreJobSucceededCondition} {
+		c, ok := r.before[t]
+		if !ok || c.Reason != infrav1.ImagePullFailedReason || !strings.Contains(c.Message, pausedPullNote) {
+			continue
+		}
+		if t == infrav1.ApplyJobSucceededCondition {
+			applyCond = &c
+			continue
+		}
+		conditions.Set(r.obj, c)
+	}
+	return applyCond
 }
 
 // pullFallbacks returns the images job, which runs image, falls back to
@@ -148,22 +211,26 @@ func (r *reconciler) pullFallbacks(job *batchv1.Job, image string, unpullable []
 }
 
 // pullFailed reports that job cannot pull image (the kubelet's reason)
-// and will fail at its deadline: why says why no other image is tried
+// and will fail at its deadline, or, when deleted, that it was deleted
+// while paused (pausedPullNote): why says why no other image is tried
 // ("" for none left). It sets DriftJobSucceeded for a refresh or drift
 // Job and RestoreJobSucceeded for a restore, False/ImagePullFailed, and
 // returns ApplyJobSucceeded so for a destroy (nil otherwise), whose
 // message names the ways out, Retain among them.
-func (r *reconciler) pullFailed(job *batchv1.Job, image, reason, why string) *metav1.Condition {
+func (r *reconciler) pullFailed(job *batchv1.Job, image, reason, why string, deleted bool) *metav1.Condition {
 	if why == "" {
 		why = "no other image is left to try"
+	}
+	outcome := "it fails at activeDeadlineSeconds"
+	if deleted {
+		outcome = pausedPullNote
 	}
 	var fix strings.Builder
 	fmt.Fprintf(&fix, "Make %s pullable again (push it back, or let the Job's pull secrets reach it)", image)
 	if r.k.Mutable() {
 		fix.WriteString(", or set spec.source.image to an image that can be pulled")
 	}
-	msg := fmt.Sprintf("Job %s: cannot pull its module image %s (%s), and %s; it fails at activeDeadlineSeconds. ",
-		job.Name, image, reason, why)
+	msg := fmt.Sprintf("Job %s: cannot pull its module image %s (%s), and %s; %s. ", job.Name, image, reason, why, outcome)
 	op := jobs.OpOf(job)
 	c := metav1.Condition{Status: metav1.ConditionFalse, Reason: infrav1.ImagePullFailedReason}
 	switch op {

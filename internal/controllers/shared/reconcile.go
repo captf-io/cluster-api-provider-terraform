@@ -398,9 +398,10 @@ func (r *reconciler) finish(bk *Bookkeeping, applyCond *metav1.Condition, res ct
 }
 
 // paused is the branch run using ctx when the object is paused: Job
-// bookkeeping, a stuck Job deleted, and block-move cleared once no Job
-// runs, which is what clusterctl move waits for. No Job starts. It
-// returns the result and error from finish.
+// bookkeeping, a stuck Job deleted (DeleteStuckJob), as is a non-apply
+// Job whose module image cannot be pulled (pullStuck), and block-move
+// cleared once no Job runs, which is what clusterctl move waits for. No
+// Job starts. It returns the result and error from finish.
 func (r *reconciler) paused(ctx context.Context) (ctrl.Result, error) {
 	if r.deleting {
 		// A paused object never destroys: clusterctl move deletes its
@@ -415,12 +416,22 @@ func (r *reconciler) paused(ctx context.Context) (ctrl.Result, error) {
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	applyCond := r.keepPausedPullFailure()
 	if bk.Active != nil {
-		// A Job that can never start would otherwise hold block-move, and
-		// with it clusterctl move, until its deadline.
+		// A Job that can never start, or whose module image cannot be
+		// pulled, would otherwise hold block-move, and with it clusterctl
+		// move, until its deadline. Nothing starts while paused: the
+		// operation starts again once unpaused, on the next image.
 		deleted, err := DeleteStuckJob(ctx, r.d, r.obj, bk.Active)
 		if err != nil {
 			return ctrl.Result{}, err
+		}
+		if !deleted {
+			var cond *metav1.Condition
+			if deleted, cond, err = r.pullStuck(ctx, bk.Active, true); err != nil {
+				return ctrl.Result{}, err
+			}
+			applyCond = cmp.Or(cond, applyCond)
 		}
 		if deleted {
 			// It never started: nothing vanished (recordVanishedApply).
@@ -429,7 +440,7 @@ func (r *reconciler) paused(ctx context.Context) (ctrl.Result, error) {
 	}
 	if bk.Active != nil {
 		r.recordActive(bk.Active)
-		return r.finish(bk, nil, ctrl.Result{})
+		return r.finish(bk, applyCond, ctrl.Result{})
 	}
 	// Block-move stays until the API server confirms the Job is gone.
 	lag, err := r.cacheLag(ctx, bk)
@@ -437,14 +448,14 @@ func (r *reconciler) paused(ctx context.Context) (ctrl.Result, error) {
 		return ctrl.Result{}, err
 	}
 	if lag {
-		return r.finish(bk, nil, ctrl.Result{RequeueAfter: LagRequeue})
+		return r.finish(bk, applyCond, ctrl.Result{RequeueAfter: LagRequeue})
 	}
 	if err := r.recordVanishedApply(ctx, bk); err != nil {
 		return ctrl.Result{}, err
 	}
 	ClearBlockMove(r.obj)
 	r.st.ActiveJob = infrav1.ActiveJob{}
-	return r.finish(bk, nil, ctrl.Result{})
+	return r.finish(bk, applyCond, ctrl.Result{})
 }
 
 // run is the unpaused path after setup, using ctx: credentials, Job
@@ -471,7 +482,7 @@ func (r *reconciler) run(ctx context.Context) (ctrl.Result, error) {
 		if !deleted {
 			// A non-apply Job whose module image cannot be pulled starts
 			// again on the next image it may run.
-			if deleted, applyCond, err = r.pullStuck(ctx, bk.Active); err != nil {
+			if deleted, applyCond, err = r.pullStuck(ctx, bk.Active, false); err != nil {
 				return ctrl.Result{}, err
 			}
 		}

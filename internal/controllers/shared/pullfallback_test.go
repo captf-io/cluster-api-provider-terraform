@@ -340,3 +340,99 @@ func TestPromotionClearsUnpullable(t *testing.T) {
 		t.Errorf("records = %+v, %v; want the apply promoted and no unpullable images", d, err)
 	}
 }
+
+// TestPullStuckPaused proves a paused object's Job whose module image
+// cannot be pulled is deleted, so it cannot hold clusterctl move until
+// its deadline, and nothing starts while paused: with an image left, the
+// image is recorded and ImagePullFallback says the next one runs once
+// unpaused; on the last image, the condition reports ImagePullFailed,
+// and keeps it on later paused passes although an older Job's outcome
+// would otherwise show.
+func TestPullStuckPaused(t *testing.T) {
+	t.Parallel()
+	pausedOwner := OwnerInfo{HasOwnerRef: true, Cluster: cluster(true)}
+	setup := func(t *testing.T, m *infrav1.TerraformMachine, name string, op jobs.Op, image, fallbacks string) *env {
+		t.Helper()
+		runSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: testNS, Name: inputs.RunName(name)}}
+		e := newEnv(t, world(m, runSecret)...)
+		if err := writeInputs(t.Context(), e.c, e.get(t), renderMachine(t), testMeta{Image: appliedTag, Identity: testIdentity, ImageDigest: pinnedRef}); err != nil {
+			t.Fatal(err)
+		}
+		// A first paused pass persists the Paused condition, as the pass
+		// that saw the pause did; its patch leaves the in-memory object's
+		// resourceVersion behind, which releaseActiveJob would conflict on.
+		if _, err := reconcileOnce(t, e, e.kindFor(t, pausedOwner)); err != nil {
+			t.Fatal(err)
+		}
+		j := job(name, op, jobs.Running, t0)
+		j.UID = "stuck-uid"
+		j.CreationTimestamp = metav1.NewTime(t0.Add(-3 * time.Minute))
+		j.Spec.Template.Spec.Containers = []corev1.Container{{Name: jobs.SourceContainer, Image: image}}
+		if fallbacks != "" {
+			j.Annotations = map[string]string{ImageFallbacksAnnotation: fallbacks}
+		}
+		e.runner.jobs = append(e.runner.jobs, j)
+		e.runner.pods[name] = []corev1.Pod{pullingPod(&j, jobs.SourceContainer, "ImagePullBackOff")}
+		// status.activeJob names the Job, as the pass that started it left it.
+		// block-move and status.activeJob name the Job, as the pass that
+		// started it left them.
+		m = e.get(t)
+		SetBlockMove(m)
+		if err := e.c.Update(t.Context(), m); err != nil {
+			t.Fatal(err)
+		}
+		m.Status.ActiveJob = infrav1.ActiveJob{Name: name, Operation: infrav1.Operation(op)}
+		if err := e.c.Status().Update(t.Context(), m); err != nil {
+			t.Fatal(err)
+		}
+		return e
+	}
+	pass := func(t *testing.T, e *env) {
+		t.Helper()
+		if _, err := reconcileOnce(t, e, e.kindFor(t, pausedOwner)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("an image left: recorded, deleted, nothing starts", func(t *testing.T) {
+		t.Parallel()
+		e := setup(t, machine(withFinalizer), "drift", jobs.OpDrift, pinnedRef, `["`+appliedTag+`","`+specRef+`"]`)
+		pass(t, e)
+		m := e.get(t)
+		if !slices.Equal(e.runner.deleted, []string{"drift"}) || len(e.runner.created) != 0 || m.Status.ActiveJob.Name != "" || HasBlockMove(m) {
+			t.Errorf("deleted %v, created %v, activeJob %+v, block-move %v", e.runner.deleted, e.runner.created, m.Status.ActiveJob, HasBlockMove(m))
+		}
+		if got := e.unpullable(t); !slices.Equal(got, []string{pinnedRef}) {
+			t.Errorf("unpullable = %v", got)
+		}
+		evs := e.rec.only(EventImagePullFallback)
+		if len(evs) != 1 || !strings.HasSuffix(evs[0].note, "drift runs with "+appliedTag+" once the object is unpaused") {
+			t.Errorf("ImagePullFallback = %+v", evs)
+		}
+	})
+	t.Run("the last image: deleted, ImagePullFailed kept while paused", func(t *testing.T) {
+		t.Parallel()
+		e := setup(t, machine(deleting), "destroy", jobs.OpDestroy, specRef, "")
+		// An older destroy whose outcome bookkeeping would report again.
+		e.runner.jobs = append(e.runner.jobs, job("old", jobs.OpDestroy, jobs.Failed, t0.Add(-time.Hour)))
+		check := func(when string) {
+			t.Helper()
+			m := e.get(t)
+			c := conditions.Get(m, infrav1.ApplyJobSucceededCondition)
+			if c == nil || c.Reason != infrav1.ImagePullFailedReason || !strings.HasPrefix(c.Message, "Job destroy: cannot pull its module image "+specRef) ||
+				!strings.Contains(c.Message, pausedPullNote) || !strings.Contains(c.Message, retainHint) {
+				t.Errorf("%s: ApplyJobSucceeded = %+v", when, c)
+			}
+			if !slices.Equal(e.runner.deleted, []string{"destroy"}) || len(e.runner.created) != 0 || m.Status.ActiveJob.Name != "" || HasBlockMove(m) {
+				t.Errorf("%s: deleted %v, created %v, activeJob %+v, block-move %v", when, e.runner.deleted, e.runner.created, m.Status.ActiveJob, HasBlockMove(m))
+			}
+		}
+		pass(t, e)
+		check("deleting pass")
+		if len(e.unpullable(t)) != 0 || e.rec.count(EventImagePullFallback) != 0 {
+			t.Errorf("unpullable %v, fallback events %d", e.unpullable(t), e.rec.count(EventImagePullFallback))
+		}
+		pass(t, e)
+		check("next paused pass")
+	})
+}
