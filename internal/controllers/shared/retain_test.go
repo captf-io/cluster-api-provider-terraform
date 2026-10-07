@@ -25,6 +25,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/util/conditions"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -580,7 +581,8 @@ func TestResolveDeletionPolicy(t *testing.T) {
 		{"defaults next", machineSpec(""), tc(retain, destroy), retain},
 		{"the cluster's own next", machineSpec(""), tc("", retain), retain},
 		{"Destroy last", machineSpec(""), tc("", ""), destroy},
-		{"no cluster", machineSpec(""), nil, destroy},
+		{"no cluster: unknown, never Destroy", machineSpec(""), nil, ""},
+		{"no cluster, own value", machineSpec(retain), nil, retain},
 		{"a pool inherits too", SpecView{InheritsDefaults: true, PoolDrift: &infrav1.MachinePoolDriftPolicy{}}, tc(retain, ""), retain},
 		{"a cluster: its own", SpecView{WorkspaceSpec: infrav1.WorkspaceSpec{DeletionPolicy: retain}}, nil, retain},
 		{"a cluster: not its defaults", SpecView{}, tc(retain, ""), destroy},
@@ -589,4 +591,80 @@ func TestResolveDeletionPolicy(t *testing.T) {
 			t.Errorf("%s: %s, want %s", tt.name, got, tt.want)
 		}
 	}
+}
+
+// TestReconcileDeletionPolicyUnresolved: a deleting machine that sets no
+// deletionPolicy and whose TerraformCluster cannot be found (its owner is
+// gone without a cluster, or forged) holds with Deleting
+// DeletionPolicyUnresolved: no destroy, no Retain, nothing deleted or
+// labeled, and Destroy is never assumed. A policy of its own proceeds, and
+// a destroy that already succeeded still cleans up.
+func TestReconcileDeletionPolicyUnresolved(t *testing.T) {
+	t.Parallel()
+	gone := OwnerInfo{HasOwnerRef: true, OwnerGone: true}
+	forged := OwnerInfo{HasOwnerRef: true, Gate: &Gate{Status: metav1.ConditionFalse, Reason: infrav1.OwnerMismatchReason, Message: "forged"}}
+	for _, owner := range []OwnerInfo{gone, forged} {
+		e := retainEnv(t, deleting)
+		k := healthyKind(t, e, testName)
+		k.owner = owner
+		res, err := Reconcile(t.Context(), e.d, k)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := e.get(t)
+		keepsFinalizer(t, m)
+		c := conditions.Get(m, clusterv1.DeletingCondition)
+		if c == nil || c.Status != metav1.ConditionTrue || c.Reason != infrav1.DeletionPolicyUnresolvedReason ||
+			!strings.Contains(c.Message, "spec.deletionPolicy") || res.RequeueAfter != GateRequeue {
+			t.Errorf("%+v: Deleting = %+v, requeue %s", owner, c, res.RequeueAfter)
+		}
+		if n := len(e.jobsOf(t)); n != 0 {
+			t.Errorf("%+v: %d Jobs started", owner, n)
+		}
+		for _, s := range e.objectSecretMetas(t) {
+			if state.RetainedFrom(s.meta.Labels) != "" || len(s.meta.OwnerReferences) != 1 {
+				t.Errorf("%+v: %s Secret %s touched: %v %+v", owner, s.what, s.meta.Name, s.meta.Labels, s.meta.OwnerReferences)
+			}
+		}
+		if len(e.objectSecretMetas(t)) != 4 {
+			t.Errorf("%+v: Secrets deleted", owner)
+		}
+	}
+	t.Run("own Retain proceeds", func(t *testing.T) {
+		t.Parallel()
+		e := retainEnv(t, deleting, retainPolicy)
+		k := healthyKind(t, e, testName)
+		k.owner = gone
+		if _, err := Reconcile(t.Context(), e.d, k); err != nil {
+			t.Fatal(err)
+		}
+		if e.get(t) != nil {
+			t.Fatal("object kept")
+		}
+		assertRetained(t, e, "m1-uid")
+	})
+	t.Run("own Destroy proceeds", func(t *testing.T) {
+		t.Parallel()
+		e := retainEnv(t, deleting, func(m *infrav1.TerraformMachine) { m.Spec.DeletionPolicy = infrav1.DeletionPolicyDestroy })
+		k := healthyKind(t, e, testName)
+		k.owner = gone
+		if _, err := Reconcile(t.Context(), e.d, k); err != nil {
+			t.Fatal(err)
+		}
+		if js := e.jobsOf(t); len(js) != 1 || jobs.OpOf(&js[0]) != jobs.OpDestroy {
+			t.Errorf("Jobs %v, want one destroy", js)
+		}
+	})
+	t.Run("a succeeded destroy still cleans up", func(t *testing.T) {
+		t.Parallel()
+		e := newEnv(t, world(machine(deleting, notPaused))...)
+		e.state.st = &state.State{InputsHash: "h1:x"}
+		e.runner.jobs = append(e.runner.jobs, job("d", jobs.OpDestroy, jobs.Succeeded, t0))
+		if _, err := reconcileOnce(t, e, e.kindFor(t, gone)); err != nil {
+			t.Fatal(err)
+		}
+		if e.get(t) != nil || e.rec.count(EventDestroyed) != 1 {
+			t.Errorf("events %v", e.rec.reasons)
+		}
+	})
 }

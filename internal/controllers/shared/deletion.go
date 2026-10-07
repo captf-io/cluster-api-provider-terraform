@@ -21,6 +21,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/util/conditions"
 	ctrl "sigs.k8s.io/controller-runtime"
 
@@ -110,6 +111,23 @@ func (r *reconciler) lostOnDelete() {
 func (r *reconciler) deletionHeld(ctx context.Context, bk *Bookkeeping) (ctrl.Result, error) {
 	klog.FromContext(ctx).V(LogFlow).Info("Deletion held on the state", "reason", stateReadableReason(r.obj))
 	return r.finish(bk, nil, ctrl.Result{RequeueAfter: StateRequeue})
+}
+
+// policyUnresolved ends a pass of a deleting object whose deletionPolicy
+// is inherited but unknown (EffectiveConfig.DeletionPolicy ""): it sets no
+// policy of its own and its TerraformCluster cannot be found, so neither a
+// destroy nor a Retain may run, and Destroy is never assumed. The Deleting
+// condition says so, with DeletionPolicyUnresolved, and the pass requeues
+// at GateRequeue, logging with ctx and reporting the pass's bookkeeping
+// bk. It returns the result and error from finish.
+func (r *reconciler) policyUnresolved(ctx context.Context, bk *Bookkeeping) (ctrl.Result, error) {
+	conditions.Set(r.obj, metav1.Condition{
+		Type: clusterv1.DeletingCondition, Status: metav1.ConditionTrue, Reason: infrav1.DeletionPolicyUnresolvedReason,
+		Message: "Deletion waits: this object sets no spec.deletionPolicy, and the TerraformCluster it inherits one from cannot be found, " +
+			"so neither a destroy nor a Retain runs. Set spec.deletionPolicy on this object (Destroy or Retain) to proceed",
+	})
+	klog.FromContext(ctx).V(LogFlow).Info("Deletion held: the inherited deletionPolicy is unknown")
+	return r.finish(bk, nil, ctrl.Result{RequeueAfter: GateRequeue})
 }
 
 // stateReadableReason returns obj's StateReadable reason, "" when unset.

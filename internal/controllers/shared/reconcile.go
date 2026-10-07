@@ -477,6 +477,9 @@ func (r *reconciler) run(ctx context.Context) (ctrl.Result, error) {
 		if blocked {
 			return r.finish(bk, nil, ctrl.Result{RequeueAfter: GateRequeue})
 		}
+		if r.eff.DeletionPolicy == "" {
+			return r.policyUnresolved(ctx, bk)
+		}
 	}
 	view, stateErr := r.readState(ctx, bk, lastRefresh)
 	if errors.Is(stateErr, errRetainedState) {

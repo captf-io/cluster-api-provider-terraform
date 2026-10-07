@@ -110,7 +110,10 @@ spec:
                           for a later object of the same kind, namespace and name to adopt
                           (adoptRetainedState). Unset inherits: a TerraformMachine or
                           TerraformMachinePool takes its cluster's defaults.deletionPolicy,
-                          else the TerraformCluster's own deletionPolicy; then Destroy. Mutable,
+                          else the TerraformCluster's own deletionPolicy; then Destroy. When
+                          such an object is deleted while its TerraformCluster cannot be found,
+                          the inherited policy is unknown and the deletion holds (Deleting
+                          DeletionPolicyUnresolved) until this field is set. Mutable,
                           also while the object is being deleted: Retain then releases a
                           deletion that is held on a lost or unreadable state, or whose destroy
                           failed or cannot start. A Job that is running finishes first.

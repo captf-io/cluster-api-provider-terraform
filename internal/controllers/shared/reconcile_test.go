@@ -263,9 +263,10 @@ func world(objs ...client.Object) []client.Object {
 	}, objs...)
 }
 
-// readyOwner is an OwnerInfo with a Machine ownerRef and an unpaused
-// Cluster.
-var readyOwner = OwnerInfo{HasOwnerRef: true, Cluster: cluster(false)}
+// readyOwner is an OwnerInfo with a Machine ownerRef, an unpaused Cluster
+// and its TerraformCluster, which sets no policy for its machines.
+var readyOwner = OwnerInfo{HasOwnerRef: true, Cluster: cluster(false),
+	InfraCluster: &infrav1.TerraformCluster{ObjectMeta: metav1.ObjectMeta{Namespace: testNS, Name: "c1"}}}
 
 // reconcileOnce runs one Reconcile of k against e.d, using t for context,
 // and returns the requeue duration and any error.
@@ -605,14 +606,17 @@ func TestReconcileDestroy(t *testing.T) {
 			t.Errorf("object %v, created %v", m, e.runner.created)
 		}
 	})
-	// A forged or stale ownerRef (OwnerMismatch) must behave exactly like
-	// an owner that is gone for deletion: destroy still proceeds from the
+	// A forged or stale ownerRef (OwnerMismatch) resolves no
+	// TerraformCluster, so an inherited deletionPolicy is unknown and the
+	// deletion holds; with a policy of its own the object deletes as an
+	// object whose owner is gone does: destroy still proceeds from the
 	// durable inputs, and dropping the finalizer with no state and no Job
 	// does not depend on ever resolving a real owner.
 	mismatchOwner := OwnerInfo{HasOwnerRef: true, Gate: &Gate{Status: metav1.ConditionFalse, Reason: infrav1.OwnerMismatchReason, Message: "forged"}}
+	ownDestroy := func(m *infrav1.TerraformMachine) { m.Spec.DeletionPolicy = infrav1.DeletionPolicyDestroy }
 	t.Run("OwnerMismatch, deleting with state: destroy still starts from the durable inputs", func(t *testing.T) {
 		t.Parallel()
-		e := newEnv(t, world(machine(deleting, notPaused))...)
+		e := newEnv(t, world(machine(deleting, notPaused, ownDestroy))...)
 		k := e.kindFor(t, mismatchOwner)
 		if err := inputs.Write(t.Context(), e.c, k.obj, renderMachine(t), inputs.Meta{Image: "registry.example/mod:0.9", Identity: testIdentity, ImageDigest: "registry.example/mod@sha256:abc"}); err != nil {
 			t.Fatal(err)
@@ -630,7 +634,7 @@ func TestReconcileDestroy(t *testing.T) {
 	})
 	t.Run("OwnerMismatch, deleting, no state and no Job: finalizer dropped without a Job", func(t *testing.T) {
 		t.Parallel()
-		e := newEnv(t, world(machine(deleting, notPaused))...)
+		e := newEnv(t, world(machine(deleting, notPaused, ownDestroy))...)
 		k := e.kindFor(t, mismatchOwner)
 		if _, err := reconcileOnce(t, e, k); err != nil {
 			t.Fatal(err)

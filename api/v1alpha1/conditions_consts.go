@@ -443,6 +443,17 @@ const (
 	NoDriftReason = "NoDrift"
 )
 
+// Deleting: NEGATIVE polarity; clusterv1.DeletingCondition with its
+// clusterv1 reasons, plus this CAPTF one.
+const (
+	// DeletionPolicyUnresolvedReason is the True reason while a deleting
+	// TerraformMachine or TerraformMachinePool that sets no deletionPolicy
+	// of its own cannot find the TerraformCluster it inherits one from: no
+	// destroy and no Retain runs until spec.deletionPolicy is set on the
+	// object or the TerraformCluster is found again.
+	DeletionPolicyUnresolvedReason = "DeletionPolicyUnresolved"
+)
+
 // DeletionBlocked: NEGATIVE polarity; TerraformCluster only; never in Ready.
 const (
 	// DeletionBlockedCondition reports whether a TerraformCluster's destroy
@@ -688,7 +699,7 @@ func ConditionReasons() map[string]map[metav1.ConditionStatus][]string {
 			metav1.ConditionFalse: {AutoscalingDisabledReason, AutoscalingAnnotationsInvalidReason, ReplicasManagedExternallyReason},
 		},
 		clusterv1.DeletingCondition: {
-			metav1.ConditionTrue:  {clusterv1.DeletingReason},
+			metav1.ConditionTrue:  {clusterv1.DeletingReason, DeletionPolicyUnresolvedReason},
 			metav1.ConditionFalse: {clusterv1.NotDeletingReason},
 		},
 		PlanApprovedCondition: {
