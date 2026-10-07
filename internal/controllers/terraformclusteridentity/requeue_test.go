@@ -20,12 +20,62 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+
+	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
 )
+
+// TestReconcileNotReadyRequeue proves the source Secret is re-read within
+// NotReadyRequeueAfter while it is missing or incomplete (it cannot be
+// watched), within RequeueAfter when that is shorter, and within
+// RequeueAfter once Ready is True.
+func TestReconcileNotReadyRequeue(t *testing.T) {
+	t.Parallel()
+	incomplete := sourceSecret()
+	for _, tc := range []struct {
+		name   string
+		source *corev1.Secret
+		every  time.Duration
+		keys   []string
+		want   time.Duration
+	}{
+		{"missing", nil, time.Minute, nil, NotReadyRequeueAfter},
+		{"missing, default period", nil, 0, nil, NotReadyRequeueAfter},
+		{"missing, shorter period", nil, 10 * time.Second, nil, 10 * time.Second},
+		{"incomplete", incomplete, time.Minute, []string{"A"}, NotReadyRequeueAfter},
+		{"ready", sourceSecret(), time.Minute, nil, time.Minute},
+		{"ready, default period", sourceSecret(), 0, nil, DefaultRequeueAfter},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var src *corev1.Secret
+			if tc.source != nil {
+				src = tc.source.DeepCopy()
+			}
+			e := newEnv(t, src)
+			e.r.RequeueAfter = tc.every
+			if tc.keys != nil {
+				id := &infrav1.TerraformClusterIdentity{}
+				if err := e.c.Get(t.Context(), client.ObjectKey{Name: idName}, id); err != nil {
+					t.Fatal(err)
+				}
+				id.Spec.RequiredKeys = tc.keys
+				if err := e.c.Update(t.Context(), id); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if res, _ := e.reconcile(t); res.RequeueAfter != tc.want {
+				t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, tc.want)
+			}
+		})
+	}
+}
 
 // TestReconcileCacheListError proves a failed mirror List from the cache
 // fails the pass without patching status.

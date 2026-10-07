@@ -292,7 +292,8 @@ func setupReconcilers(ctx context.Context, mgr ctrl.Manager, opts *options.Optio
 		return err
 	}
 	// Status only (Ready, status.namespaces); the source Secret is re-read
-	// every terraformclusteridentity.DefaultRequeueAfter.
+	// every terraformclusteridentity.DefaultRequeueAfter, or
+	// NotReadyRequeueAfter while it is missing or incomplete.
 	return (&terraformclusteridentity.Reconciler{
 		Client:      mgr.GetClient(),
 		Cache:       mgr.GetCache(),

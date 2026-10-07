@@ -56,6 +56,12 @@ import (
 // caller sets no RequeueAfter.
 const DefaultRequeueAfter = 5 * time.Minute
 
+// NotReadyRequeueAfter is how often the source Secret is re-read while it
+// is missing or lacks a required key, when RequeueAfter is not shorter:
+// the Secret cannot be watched (see APIReader), and the identity's users
+// start no Job until Ready is True.
+const NotReadyRequeueAfter = 30 * time.Second
+
 // Reconciler sets a TerraformClusterIdentity's status.
 type Reconciler struct {
 	// Client reads identities, updates the source Secret's ownerRefs and
@@ -72,7 +78,8 @@ type Reconciler struct {
 	APIReader client.Reader
 	// RequeueAfter re-reads the source Secret periodically. It cannot be
 	// watched for the same reason it cannot be cached, so a Secret created or
-	// deleted out of band is noticed within this period.
+	// deleted out of band is noticed within this period, or within
+	// NotReadyRequeueAfter while Ready is False.
 	RequeueAfter time.Duration
 	// WatchFilter is the cluster.x-k8s.io/watch-filter label value.
 	WatchFilter string
@@ -123,8 +130,9 @@ func MirrorToIdentity(_ context.Context, o client.Object) []reconcile.Request {
 // Reconcile sets Ready (SecretFound or SecretNotFound) and
 // status.namespaces of the TerraformClusterIdentity named by req, using
 // ctx for every call it makes. It returns a Result requeuing after
-// RequeueAfter (or DefaultRequeueAfter), and an error only from a failed
-// read or status patch.
+// RequeueAfter (or DefaultRequeueAfter), at most NotReadyRequeueAfter
+// while Ready is False, and an error only from a failed read or status
+// patch.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	id := &infrav1.TerraformClusterIdentity{}
 	if err := r.Client.Get(ctx, req.NamespacedName, id); err != nil {
@@ -182,6 +190,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	after := r.RequeueAfter
 	if after <= 0 {
 		after = DefaultRequeueAfter
+	}
+	if ready.Status != metav1.ConditionTrue {
+		after = min(after, NotReadyRequeueAfter)
 	}
 	return ctrl.Result{RequeueAfter: after}, nil
 }
