@@ -68,6 +68,21 @@ const (
 	DefaultSourceMemory     = "2Gi"
 )
 
+// Ephemeral storage bounds. The work volume holds the rendered root,
+// .terraform (init copies the providers from the image's mirror, several
+// hundred MiB each for the large clouds) and the plan; tmp is the
+// runtime's scratch; runner holds the runner binary. Bounded, a runaway
+// module (a local-exec writing without end, a provider filling a cache) is
+// evicted on its own, instead of filling the node's disk under every
+// other pod there. The request lets the scheduler place the pod where the
+// work volume fits.
+const (
+	WorkVolumeSizeLimit           = "8Gi"
+	TmpVolumeSizeLimit            = "1Gi"
+	RunnerVolumeSizeLimit         = "128Mi"
+	DefaultSourceEphemeralStorage = "1Gi"
+)
+
 // TerminationGracePeriodSeconds is the Job pod's grace period. A deletion,
 // drain or activeDeadlineSeconds sends the runner SIGTERM; it interrupts
 // the runtime, which finishes in-flight provider calls (a VM being
@@ -443,8 +458,8 @@ func pullSecrets(refs []corev1.LocalObjectReference) []corev1.LocalObjectReferen
 // per-run Secret.
 func volumes(runSecret, credsSecret string, restore []string, planKey string) []corev1.Volume {
 	mode := credsMode
-	empty := func(name string) corev1.Volume {
-		return corev1.Volume{Name: name, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}
+	empty := func(name, limit string) corev1.Volume {
+		return corev1.Volume{Name: name, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: new(resource.MustParse(limit))}}}
 	}
 	config := corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: runSecret, DefaultMode: &mode}}
 	if len(restore) > 0 {
@@ -458,9 +473,9 @@ func volumes(runSecret, credsSecret string, restore []string, planKey string) []
 		config = corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{Sources: sources, DefaultMode: &mode}}
 	}
 	vols := []corev1.Volume{
-		empty("runner"),
-		empty("work"),
-		empty("tmp"),
+		empty("runner", RunnerVolumeSizeLimit),
+		empty("work", WorkVolumeSizeLimit),
+		empty("tmp", TmpVolumeSizeLimit),
 		{Name: "config", VolumeSource: config},
 		{Name: "creds", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: credsSecret, DefaultMode: &mode}}},
 	}
@@ -535,8 +550,9 @@ func initContainerResources() corev1.ResourceRequirements {
 func defaultSourceResources() corev1.ResourceRequirements {
 	return corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{
-			corev1.ResourceCPU:    resource.MustParse(DefaultSourceCPURequest),
-			corev1.ResourceMemory: resource.MustParse(DefaultSourceMemory),
+			corev1.ResourceCPU:              resource.MustParse(DefaultSourceCPURequest),
+			corev1.ResourceMemory:           resource.MustParse(DefaultSourceMemory),
+			corev1.ResourceEphemeralStorage: resource.MustParse(DefaultSourceEphemeralStorage),
 		},
 		Limits: corev1.ResourceList{
 			corev1.ResourceMemory: resource.MustParse(DefaultSourceMemory),

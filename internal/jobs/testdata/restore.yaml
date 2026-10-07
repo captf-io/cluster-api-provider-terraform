@@ -74,6 +74,7 @@ spec:
             memory: 2Gi
           requests:
             cpu: 250m
+            ephemeral-storage: 1Gi
             memory: 2Gi
         securityContext:
           allowPrivilegeEscalation: false
@@ -131,11 +132,14 @@ spec:
       serviceAccountName: captf-runner
       terminationGracePeriodSeconds: 600
       volumes:
-      - emptyDir: {}
+      - emptyDir:
+          sizeLimit: 128Mi
         name: runner
-      - emptyDir: {}
+      - emptyDir:
+          sizeLimit: 8Gi
         name: work
-      - emptyDir: {}
+      - emptyDir:
+          sizeLimit: 1Gi
         name: tmp
       - name: config
         projected:
