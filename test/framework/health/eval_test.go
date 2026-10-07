@@ -22,6 +22,7 @@ import (
 	"io"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -419,12 +420,11 @@ func TestLeaseRenewing(t *testing.T) {
 
 	mustContain(t, LeaseRenewing(ctx, c, "ns", "l", 100*time.Millisecond), "not renewing")
 
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		time.Sleep(30 * time.Millisecond)
+	// The lease renews after the baseline read and the first poll: the
+	// reactor starts the update on the third read, not after a delay.
+	done := afterNthCall(kube, "get", "leases", 3, func() {
 		_, _ = kube.CoordinationV1().Leases("ns").Update(ctx, lease("h", ptrTime(t0.Add(time.Second))), metav1.UpdateOptions{})
-	}()
+	})
 	if err := LeaseRenewing(ctx, c, "ns", "l", 5*time.Second); err != nil {
 		t.Fatalf("renewing lease: %v", err)
 	}
@@ -437,6 +437,26 @@ func TestLeaseRenewing(t *testing.T) {
 
 	noRenew := wait.Clients{Kube: fake.NewSimpleClientset(lease("h", nil))}
 	mustContain(t, LeaseRenewing(ctx, noRenew, "ns", "l", 50*time.Millisecond), "not renewing")
+}
+
+// afterNthCall runs fn in its own goroutine when the n-th call of verb on
+// resource reaches k, and returns a channel closed once fn returned. The
+// call itself goes on to the tracker first (fn takes the same lock), so
+// the change fn makes is visible from the next call on: tests order a
+// change after the code under test read, instead of sleeping.
+func afterNthCall(k *fake.Clientset, verb, resource string, n int, fn func()) <-chan struct{} {
+	done := make(chan struct{})
+	var calls atomic.Int32
+	k.PrependReactor(verb, resource, func(clienttesting.Action) (bool, runtime.Object, error) {
+		if calls.Add(1) == int32(n) {
+			go func() {
+				defer close(done)
+				fn()
+			}()
+		}
+		return false, nil, nil
+	})
+	return done
 }
 
 // ptrTime returns a pointer to t.

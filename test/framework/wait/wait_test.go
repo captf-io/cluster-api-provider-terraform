@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -300,10 +301,16 @@ func TestDeploymentsAvailable(t *testing.T) {
 		t.Parallel()
 		kube := kubefake.NewSimpleClientset()
 		c := Clients{Kube: kube}
-		go func() {
-			time.Sleep(20 * time.Millisecond)
-			_, _ = kube.AppsV1().Deployments("a").Create(context.Background(), deployment("a", "x"), metav1.CreateOptions{})
-		}()
+		// The Deployment appears after the first poll found none.
+		var lists atomic.Int32
+		kube.PrependReactor("list", "deployments", func(k8stesting.Action) (bool, runtime.Object, error) {
+			if lists.Add(1) == 2 {
+				go func() {
+					_, _ = kube.AppsV1().Deployments("a").Create(context.Background(), deployment("a", "x"), metav1.CreateOptions{})
+				}()
+			}
+			return false, nil, nil
+		})
 		o := fast(nil)
 		o.Timeout = 5 * time.Second
 		if err := DeploymentsAvailable(context.Background(), c, []string{"a"}, o); err != nil {

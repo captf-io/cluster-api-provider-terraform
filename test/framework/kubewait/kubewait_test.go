@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -42,6 +43,14 @@ func fast(out *bytes.Buffer) Options {
 	if out != nil {
 		o.Out = out
 	}
+	return o
+}
+
+// progressEveryPoll returns o reporting progress on every poll: a
+// ReportEvery no clock reading is ever below, so a test need not wait for
+// it to elapse.
+func progressEveryPoll(o Options) Options {
+	o.ReportEvery = time.Nanosecond
 	return o
 }
 
@@ -101,9 +110,8 @@ func TestUntil(t *testing.T) {
 	var out bytes.Buffer
 	u, err := Until(context.Background(), dyn, widgets, "ns", "a", "ready", func(*unstructured.Unstructured) (bool, string) {
 		calls++
-		time.Sleep(2 * time.Millisecond) // let ReportEvery elapse
 		return calls >= 3, "call count"
-	}, fast(&out))
+	}, progressEveryPoll(fast(&out)))
 	if err != nil || u.GetName() != "a" {
 		t.Fatalf("Until = %v, %v", u, err)
 	}
@@ -242,11 +250,15 @@ func TestGone(t *testing.T) {
 		t.Errorf("read error: %v", err)
 	}
 
+	// The object goes away after the first read finds it, not after a delay.
 	dyn := fakeDyn(widget("ns", "d", nil))
-	go func() {
-		time.Sleep(5 * time.Millisecond)
-		_ = dyn.Resource(widgets).Namespace("ns").Delete(ctx, "d", metav1.DeleteOptions{})
-	}()
+	var reads atomic.Int32
+	dyn.PrependReactor("get", "widgets", func(clienttesting.Action) (bool, runtime.Object, error) {
+		if reads.Add(1) == 2 {
+			return true, nil, apierrors.NewNotFound(widgets.GroupResource(), "d")
+		}
+		return false, nil, nil
+	})
 	o := fast(nil)
 	o.Timeout = 5 * time.Second
 	if err := Gone(ctx, dyn, widgets, "ns", "d", o); err != nil {

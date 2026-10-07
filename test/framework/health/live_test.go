@@ -200,14 +200,12 @@ func TestStable(t *testing.T) {
 		}
 	})
 
-	// mutate runs fn on the fake after 10ms, while Stable watches 2s.
+	// run runs fn on the fake after Stable's baseline and first poll (its
+	// third pod list), while Stable watches 2s.
 	run := func(t *testing.T, base *corev1.Pod, fn func(k *fake.Clientset)) error {
 		t.Helper()
 		k := fake.NewSimpleClientset(base)
-		go func() {
-			time.Sleep(10 * time.Millisecond)
-			fn(k)
-		}()
+		afterNthCall(k, "list", "pods", 3, func() { fn(k) })
 		return Stable(ctx, wait.Clients{Kube: k}, []string{"ns"}, 2*time.Second, interval, &bytes.Buffer{})
 	}
 	pods := func(k *fake.Clientset) typedcorev1.PodInterface {
@@ -251,12 +249,16 @@ func TestStable(t *testing.T) {
 		t.Parallel()
 		done := pod("job-1", corev1.PodSucceeded, false)
 		k := fake.NewSimpleClientset(stablePod("a", "1", 0, true))
-		go func() {
-			time.Sleep(10 * time.Millisecond)
+		added := afterNthCall(k, "list", "pods", 2, func() {
 			_, _ = k.CoreV1().Pods("ns").Create(ctx, done, metav1.CreateOptions{})
-		}()
+		})
 		if err := Stable(ctx, wait.Clients{Kube: k}, []string{"ns"}, 80*time.Millisecond, interval, &bytes.Buffer{}); err != nil {
 			t.Fatal(err)
+		}
+		select {
+		case <-added:
+		default:
+			t.Error("the pod was never added: the window ended before the change")
 		}
 	})
 	t.Run("canceled", func(t *testing.T) {
