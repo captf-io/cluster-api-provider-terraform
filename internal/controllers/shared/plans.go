@@ -37,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
+	captfconds "github.com/captf-io/cluster-api-provider-terraform/internal/conditions"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/jobs"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/metrics"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/runner"
@@ -753,6 +754,7 @@ func (r *reconciler) writePlan(ctx context.Context, p *infrav1.TerraformPlan, ph
 	}
 	before := p.DeepCopy()
 	p.Status = status
+	captfconds.ClampMessages(p)
 	if err := r.d.Client.Status().Patch(ctx, p, client.MergeFrom(before)); err != nil {
 		return client.IgnoreNotFound(fmt.Errorf("update the status of TerraformPlan %s: %w", p.Name, err))
 	}

@@ -109,7 +109,9 @@ func ReconcileWithOwner(ctx context.Context, d Deps, k Kind) (_ ctrl.Result, _ O
 	}
 	r := &reconciler{d: d, k: k, obj: obj, owner: pre.Owner, st: k.Status(), before: snapshot(obj), logger: klog.FromContext(ctx), isPaused: pre.Paused}
 	defer func() {
-		// The helper tolerates NotFound once the finalizer is gone.
+		// The helper tolerates NotFound once the finalizer is gone. A
+		// message over the API's limit would fail the whole write.
+		captfconds.ClampMessages(obj)
 		if err := helper.Patch(ctx, obj,
 			patch.WithOwnedConditions{Conditions: OwnedConditions()},
 			patch.WithStatusObservedGeneration{},

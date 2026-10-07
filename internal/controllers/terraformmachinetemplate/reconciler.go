@@ -44,6 +44,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
+	captfconds "github.com/captf-io/cluster-api-provider-terraform/internal/conditions"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/contract"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/controllers/shared"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/imageinspect"
@@ -87,6 +88,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Re
 		return ctrl.Result{}, fmt.Errorf("patch helper: %w", err)
 	}
 	defer func() {
+		// The messages quote image labels and registry errors.
+		captfconds.ClampMessages(t)
 		if err := helper.Patch(ctx, t, patch.WithOwnedConditions{Conditions: []string{infrav1.CapacityResolvedCondition, infrav1.VariablesValidCondition}}); err != nil {
 			reterr = kerrors.NewAggregate([]error{reterr, fmt.Errorf("patch: %w", err)})
 		}

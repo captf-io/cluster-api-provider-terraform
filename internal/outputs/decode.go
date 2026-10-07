@@ -30,6 +30,7 @@ import (
 	"github.com/captf-io/cluster-api-provider-terraform/internal/contract"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/hash"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/state"
+	"github.com/captf-io/cluster-api-provider-terraform/internal/strutil"
 )
 
 // Violation is one output that breaks a rule.
@@ -167,6 +168,34 @@ func decode(res *Result, name, want string, raw json.RawMessage, v any) bool {
 	return true
 }
 
+// Bounds on the free text a module reports in its health output, which
+// the InfrastructureHealthy condition message carries: unbounded, a long
+// message or reason list pushes that message past the API's limit, and
+// every status write of the object is then rejected.
+const (
+	// MaxHealthMessage bounds health.message, in bytes.
+	MaxHealthMessage = 1024
+	// MaxHealthReasons bounds how many health.reasons are kept.
+	MaxHealthReasons = 16
+	// MaxHealthReason bounds each kept health.reasons entry, in bytes.
+	MaxHealthReason = 128
+)
+
+// boundReasons returns reasons cut to MaxHealthReasons entries of at most
+// MaxHealthReason bytes each, the last saying how many more were left
+// out; an empty slice for none.
+func boundReasons(reasons []string) []string {
+	out := make([]string, 0, min(len(reasons), MaxHealthReasons))
+	for i, r := range reasons {
+		if i == MaxHealthReasons-1 && len(reasons) > MaxHealthReasons {
+			out = append(out, fmt.Sprintf("and %d more", len(reasons)-i))
+			break
+		}
+		out = append(out, strutil.Truncate(r, MaxHealthReason))
+	}
+	return out
+}
+
 // healthJSON is the wire shape of the health output, with Healthy left a
 // pointer so a missing boolean can be told apart from false.
 type healthJSON struct {
@@ -189,9 +218,10 @@ func decodeHealth(s *state.State, res *Result) contract.Health {
 	if !decode(res, "health", "an object {state, healthy, message, reasons}", raw, &h) {
 		return contract.Health{}
 	}
-	out := contract.Health{State: h.State, Message: h.Message, Reasons: h.Reasons}
-	if out.Reasons == nil {
-		out.Reasons = []string{}
+	out := contract.Health{State: h.State, Message: h.Message, Reasons: boundReasons(h.Reasons)}
+	if h.Message != nil {
+		m := strutil.Truncate(*h.Message, MaxHealthMessage)
+		out.Message = &m
 	}
 	if h.Healthy == nil {
 		res.Violations = append(res.Violations, invalid("health", "healthy must be a boolean"))

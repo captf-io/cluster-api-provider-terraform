@@ -44,6 +44,27 @@ func TestParseCapacity(t *testing.T) {
 	}
 }
 
+// TestParseCapacityMessageStable proves a label with several bad entries
+// always reports the same one, and quotes a long key cut short.
+func TestParseCapacityMessageStable(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("k", 40_000)
+	label := `{"b b":"1","a a":"x","` + long + `":"1"}`
+	_, first := ParseCapacity(label)
+	for range 50 {
+		if _, err := ParseCapacity(label); err == nil || first == nil || err.Error() != first.Error() {
+			t.Fatalf("messages differ: %v / %v", err, first)
+		}
+	}
+	if !strings.Contains(first.Error(), `"a a"`) {
+		t.Errorf("message %q does not report the first key in order", first)
+	}
+	_, err := ParseCapacity(`{"` + long + `":"1"}`)
+	if err == nil || len(err.Error()) > 512 {
+		t.Errorf("long key message is %d bytes", len(err.Error()))
+	}
+}
+
 // TestParseNodeInfo proves ParseNodeInfo decodes a valid node-info label
 // into the expected NodeInfo and returns ErrInvalidLabel for an all-empty
 // object, an unknown architecture, an unrecognized field or an

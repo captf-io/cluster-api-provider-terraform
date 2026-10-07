@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -29,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 
 	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
+	"github.com/captf-io/cluster-api-provider-terraform/internal/strutil"
 )
 
 // Capacity labels.
@@ -61,17 +63,34 @@ func ParseCapacity(label string) (corev1.ResourceList, error) {
 		return nil, fmt.Errorf("%w: %s is empty", ErrInvalidLabel, CapacityLabel)
 	}
 	out := corev1.ResourceList{}
-	for k, v := range m {
+	// Sorted, so a label with several bad entries always reports the same
+	// one: a message that changed every pass would rewrite the status, and
+	// wake the object again, every pass.
+	for _, k := range slices.Sorted(maps.Keys(m)) {
+		v := m[k]
 		if errs := validation.IsQualifiedName(k); len(errs) > 0 {
-			return nil, fmt.Errorf("%w: %s: %q is not a valid resource name: %s", ErrInvalidLabel, CapacityLabel, k, strings.Join(errs, "; "))
+			return nil, fmt.Errorf("%w: %s: %q is not a valid resource name: %s", ErrInvalidLabel, CapacityLabel, quoted(k), strings.Join(errs, "; "))
 		}
 		q, err := resource.ParseQuantity(v)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %s: %q is not a quantity for %q", ErrInvalidLabel, CapacityLabel, v, k)
+			return nil, fmt.Errorf("%w: %s: %q is not a quantity for %q", ErrInvalidLabel, CapacityLabel, quoted(v), quoted(k))
 		}
 		out[corev1.ResourceName(k)] = q
 	}
 	return out, nil
+}
+
+// maxQuoted bounds a label value quoted in an error message: the label is
+// the image author's, up to the size of the image config.
+const maxQuoted = 64
+
+// quoted returns s cut to maxQuoted bytes, marked "..." when cut, for an
+// error message.
+func quoted(s string) string {
+	if len(s) <= maxQuoted {
+		return s
+	}
+	return strutil.Truncate(s, maxQuoted) + "..."
 }
 
 // ParseNodeInfo parses label, the io.captf.node-info value:

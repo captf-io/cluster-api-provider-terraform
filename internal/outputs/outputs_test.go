@@ -113,6 +113,17 @@ func TestDecodeMachine(t *testing.T) {
 					t.Errorf("health = %+v, want reasons []", o.Health)
 				}
 			}},
+		// Health text is bounded, so a long one cannot overflow the
+		// InfrastructureHealthy condition message.
+		{name: "health text bounded", overrides: map[string]string{"health": fmt.Sprintf(`{"state":"degraded","healthy":false,"message":%q,"reasons":[%s]}`,
+			strings.Repeat("m", 100_000), strings.TrimSuffix(strings.Repeat(`"`+strings.Repeat("r", 500)+`",`, 100), ","))}, reason: infrav1.OutputsValidReason,
+			check: func(t *testing.T, o *contract.MachineOutputs) {
+				h := o.Health
+				if h.Message == nil || len(*h.Message) != MaxHealthMessage || len(h.Reasons) != MaxHealthReasons ||
+					len(h.Reasons[0]) != MaxHealthReason || h.Reasons[MaxHealthReasons-1] != "and 85 more" {
+					t.Errorf("health message %d bytes, %d reasons (%q last)", len(*h.Message), len(h.Reasons), h.Reasons[len(h.Reasons)-1])
+				}
+			}},
 		{name: "unknown address type", overrides: map[string]string{"addresses": `[{"type":"PrivateIP","address":"10.0.0.1"}]`}, reason: infrav1.OutputsInvalidReason, mentions: `type "PrivateIP"`},
 		{name: "empty address", overrides: map[string]string{"addresses": `[{"type":"InternalIP","address":""}]`}, reason: infrav1.OutputsInvalidReason},
 		{name: "address too long", overrides: map[string]string{"addresses": fmt.Sprintf(`[{"type":"Hostname","address":%q}]`, strings.Repeat("h", 257))}, reason: infrav1.OutputsInvalidReason},
