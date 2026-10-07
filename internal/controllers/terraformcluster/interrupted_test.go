@@ -148,6 +148,21 @@ type clusterEnv struct {
 // Cluster's version v1.36.2. t fails the test on any error.
 func newClusterEnv(t *testing.T) *clusterEnv {
 	t.Helper()
+	e := newUnappliedClusterEnv(t)
+	first := e.reconcileStarts()
+	e.succeed(first)
+	e.reconcileNoApply()
+	if c := e.applyCondition(); c.Reason != infrav1.ApplySucceededReason {
+		t.Fatalf("after the first apply: ApplyJobSucceeded = %+v", c)
+	}
+	return e
+}
+
+// newUnappliedClusterEnv returns a TerraformCluster that has not applied
+// yet: finalizer and Paused condition set, no Job, no state. t fails the
+// test on any error.
+func newUnappliedClusterEnv(t *testing.T) *clusterEnv {
+	t.Helper()
 	tc := testTC(owned, func(tc *infrav1.TerraformCluster) {
 		tc.Finalizers = []string{Finalizer}
 		tc.Status.Conditions = []metav1.Condition{{
@@ -179,12 +194,6 @@ func newClusterEnv(t *testing.T) *clusterEnv {
 		Client: c, APIReader: c, Scheme: s, Jobs: e.runner, State: e.st, Recorder: &recorder{},
 		Clock: e.clock, RunnerImage: "registry.example/captf:dev", DriftDefault: 30 * time.Minute,
 	}}
-	first := e.reconcileStarts()
-	e.succeed(first)
-	e.reconcileNoApply()
-	if c := e.applyCondition(); c.Reason != infrav1.ApplySucceededReason {
-		t.Fatalf("after the first apply: ApplyJobSucceeded = %+v", c)
-	}
 	return e
 }
 
