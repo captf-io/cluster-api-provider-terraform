@@ -22,6 +22,7 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -98,11 +99,31 @@ func Recovered(tm *infrav1.TerraformMachine) bool {
 // and the Machine is not being deleted, so a blip that recovered does not
 // get the Machine replaced the next time a MachineHealthCheck looks; an
 // annotation someone else set is never removed. A nil machine is ignored.
-// It returns an error only from a failed patch.
+// It returns an error only from a failed patch. The patch carries
+// machine's resourceVersion, so a stale cached machine (the change may
+// already be on the server) fails with a Conflict: it is then re-read
+// uncached (shared.LiveReader), re-decided once, and no event or metric
+// is emitted for a change that was not made.
 func SyncRemediation(ctx context.Context, d shared.Deps, machine *clusterv1.Machine, tm *infrav1.TerraformMachine, cluster *infrav1.TerraformCluster) error {
 	if machine == nil {
 		return nil
 	}
+	err := syncRemediation(ctx, d, machine, tm, cluster)
+	if !apierrors.IsConflict(err) {
+		return err
+	}
+	fresh := &clusterv1.Machine{}
+	if getErr := shared.LiveReader(d).Get(ctx, client.ObjectKeyFromObject(machine), fresh); getErr != nil {
+		return client.IgnoreNotFound(getErr)
+	}
+	*machine = *fresh
+	return syncRemediation(ctx, d, machine, tm, cluster)
+}
+
+// syncRemediation is one decide-and-patch pass of SyncRemediation, with
+// the same ctx, d, machine, tm and cluster. It returns an error only from
+// a failed patch, a Conflict included.
+func syncRemediation(ctx context.Context, d shared.Deps, machine *clusterv1.Machine, tm *infrav1.TerraformMachine, cluster *infrav1.TerraformCluster) error {
 	_, annotated := machine.Annotations[clusterv1.RemediateMachineAnnotation]
 	reason := RemediationReason(tm, cluster)
 	switch {
@@ -131,7 +152,7 @@ func patchRemediation(ctx context.Context, d shared.Deps, machine *clusterv1.Mac
 		delete(after.Annotations, clusterv1.RemediateMachineAnnotation)
 		delete(after.Annotations, RequestedByAnnotation)
 	}
-	err := d.Client.Patch(ctx, after, client.MergeFrom(machine), client.FieldOwner(FieldOwner))
+	err := d.Client.Patch(ctx, after, client.MergeFromWithOptions(machine, client.MergeFromWithOptimisticLock{}), client.FieldOwner(FieldOwner))
 	if err != nil {
 		if client.IgnoreNotFound(err) == nil {
 			klog.FromContext(ctx).V(shared.LogDebug).Info("Machine is gone, skipped the remediation annotation patch", "Machine", klog.KObj(machine))
@@ -139,7 +160,7 @@ func patchRemediation(ctx context.Context, d shared.Deps, machine *clusterv1.Mac
 		}
 		return fmt.Errorf("update the remediation annotation of Machine %s: %w", machine.Name, err)
 	}
-	machine.Annotations = after.Annotations
+	machine.Annotations, machine.ResourceVersion = after.Annotations, after.ResourceVersion
 	logger := klog.LoggerWithValues(klog.FromContext(ctx), "Machine", klog.KObj(machine))
 	if reason == "" {
 		d.Metrics.RemediationRequest(metrics.RemediationWithdrawn)

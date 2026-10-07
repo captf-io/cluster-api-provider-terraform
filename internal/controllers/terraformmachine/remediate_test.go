@@ -298,6 +298,9 @@ func TestSyncRemediationWithdraws(t *testing.T) {
 				machine.DeletionTimestamp = new(metav1.Now())
 			}
 			c := fake.NewClientBuilder().WithScheme(scheme(t)).WithObjects(machine.DeepCopy()).Build()
+			if err := c.Get(t.Context(), client.ObjectKeyFromObject(machine), machine); err != nil {
+				t.Fatal(err)
+			}
 			rec := &recorder{}
 			m, reg := metricsRecorder(t)
 			if err := SyncRemediation(t.Context(), shared.Deps{Client: c, Recorder: rec, Metrics: m}, machine, tt.tm, nil); err != nil {

@@ -22,6 +22,7 @@ import (
 	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/klog/v2"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/util/annotations"
@@ -60,12 +61,31 @@ func foreignReplicasOwner(mp *clusterv1.MachinePool) (string, bool) {
 // and spec.replicas is never written. A nil mp, a pool or MachinePool
 // being deleted, and a paused or externally managed pool are skipped. It
 // returns an error only from a failed patch; a MachinePool gone by then
-// is not one.
+// is not one. The patch carries mp's resourceVersion, so a stale cached
+// mp (the write-back may already be on the server) fails with a Conflict:
+// mp is then re-read uncached (shared.LiveReader), re-decided once, and no
+// event is emitted for a write that was not made.
 func SyncReplicas(ctx context.Context, d shared.Deps, mp *clusterv1.MachinePool, tmp *infrav1.TerraformMachinePool) error {
 	if mp == nil || !mp.DeletionTimestamp.IsZero() || !tmp.DeletionTimestamp.IsZero() ||
 		conditions.IsTrue(tmp, clusterv1.PausedCondition) || annotations.IsExternallyManaged(tmp) {
 		return nil
 	}
+	err := syncReplicas(ctx, d, mp, tmp)
+	if !apierrors.IsConflict(err) {
+		return err
+	}
+	fresh := &clusterv1.MachinePool{}
+	if getErr := shared.LiveReader(d).Get(ctx, client.ObjectKeyFromObject(mp), fresh); getErr != nil {
+		return client.IgnoreNotFound(getErr)
+	}
+	*mp = *fresh
+	return syncReplicas(ctx, d, mp, tmp)
+}
+
+// syncReplicas is one decide-and-patch pass of SyncReplicas, with the same
+// ctx, d, mp and tmp. It returns an error only from a failed patch, a
+// Conflict included.
+func syncReplicas(ctx context.Context, d shared.Deps, mp *clusterv1.MachinePool, tmp *infrav1.TerraformMachinePool) error {
 	current, annotated := mp.Annotations[clusterv1.ReplicasManagedByAnnotation]
 	after := mp.DeepCopy()
 	autoscaling, _, _ := ParseAutoscaling(mp)
@@ -96,7 +116,7 @@ func SyncReplicas(ctx context.Context, d shared.Deps, mp *clusterv1.MachinePool,
 	if current == after.Annotations[clusterv1.ReplicasManagedByAnnotation] && !written {
 		return nil
 	}
-	if err := d.Client.Patch(ctx, after, client.MergeFrom(mp), client.FieldOwner(shared.FieldOwner)); err != nil {
+	if err := d.Client.Patch(ctx, after, client.MergeFromWithOptions(mp, client.MergeFromWithOptimisticLock{}), client.FieldOwner(shared.FieldOwner)); err != nil {
 		if client.IgnoreNotFound(err) == nil {
 			klog.FromContext(ctx).V(shared.LogDebug).Info("MachinePool is gone, skipped the replicas write-back", "MachinePool", klog.KObj(mp))
 			return nil
@@ -111,7 +131,7 @@ func SyncReplicas(ctx context.Context, d shared.Deps, mp *clusterv1.MachinePool,
 		d.Emit(tmp, corev1.EventTypeNormal, shared.EventReplicasWrittenBack, "WriteBackReplicas",
 			"MachinePool spec.replicas %s → %d", replicasText(mp.Spec.Replicas), *after.Spec.Replicas)
 	}
-	mp.Annotations, mp.Spec.Replicas = after.Annotations, after.Spec.Replicas
+	mp.Annotations, mp.Spec.Replicas, mp.ResourceVersion = after.Annotations, after.Spec.Replicas, after.ResourceVersion
 	return nil
 }
 
