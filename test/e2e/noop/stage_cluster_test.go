@@ -104,8 +104,8 @@ func (s *suite) cluster(ctx context.Context, t *testing.T) {
 // the bare version `<command> version -json` reports, so the version is
 // what tells the runtimes apart.
 var runtimeVersions = map[framework.NoopRuntime]string{
-	framework.RuntimeTerraform: "1.16.4",
-	framework.RuntimeOpenTofu:  "1.12.6",
+	framework.RuntimeTerraform: "1.16.5",
+	framework.RuntimeOpenTofu:  "1.12.7",
 }
 
 // expectRuntime fails t unless status.source.runtimeVersion of u, the
