@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -434,13 +435,24 @@ func terminatingEnv(t *testing.T, objs ...client.Object) (*env, *atomic.Bool) {
 	var closed atomic.Bool
 	e := newEnvWith(t, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
 		if closed.Load() && obj.GetNamespace() == testNS {
-			return apierrors.NewForbidden(schema.GroupResource{Resource: "objects"}, obj.GetName(),
-				errors.New("unable to create new content in namespace "+testNS+" because it is being terminated"))
+			return terminatingErr(obj.GetName())
 		}
 		return c.Create(ctx, obj, opts...)
 	}}, objs...)
 	e.d.Jobs, e.d.State = &clientRunner{c: e.c}, state.NewReader(e.c)
 	return e, &closed
+}
+
+// terminatingErr returns the error NamespaceLifecycle refuses a create of
+// name in testNS with while the namespace is terminating, its
+// NamespaceTerminating cause included.
+func terminatingErr(name string) error {
+	err := apierrors.NewForbidden(schema.GroupResource{Resource: "objects"}, name,
+		errors.New("unable to create new content in namespace "+testNS+" because it is being terminated"))
+	err.ErrStatus.Details.Causes = append(err.ErrStatus.Details.Causes, metav1.StatusCause{
+		Type: corev1.NamespaceTerminatingCause, Message: "namespace " + testNS + " is being terminated", Field: "metadata.namespace",
+	})
+	return err
 }
 
 // TestDeletionInTerminatingNamespace: in a terminating namespace, where
@@ -496,6 +508,30 @@ func TestDeletionInTerminatingNamespace(t *testing.T) {
 		c := conditions.Get(m, clusterv1.DeletingCondition)
 		if c == nil || c.Status != metav1.ConditionTrue || !strings.Contains(c.Message, "destroy Job waits for its credentials") ||
 			!strings.Contains(c.Message, "being terminated") {
+			t.Errorf("Deleting = %+v", c)
+		}
+	})
+	t.Run("ready credentials: the destroy waits, saying why", func(t *testing.T) {
+		t.Parallel()
+		// The runner RBAC and mirror exist already; only the run lease,
+		// which the destroy takes first, is refused.
+		e := newEnvWith(t, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, ok := obj.(*coordinationv1.Lease); ok {
+				return terminatingErr(obj.GetName())
+			}
+			return c.Create(ctx, obj, opts...)
+		}}, world(machine(deleting, notPaused, provisioned))...)
+		e.d.Jobs, e.d.State = &clientRunner{c: e.c}, state.NewReader(e.c)
+		e.writeDurable(t, e.get(t))
+		e.setState(t, suffixOf(t, state.KindTerraformMachine, testName), 3, "h1:x")
+		res, err := Reconcile(t.Context(), e.d, healthyKind(t, e, testName))
+		if err != nil || res.RequeueAfter != GateRequeue {
+			t.Fatalf("Reconcile = %+v, %v; want no error and a requeue at %s", res, err, GateRequeue)
+		}
+		m := e.get(t)
+		keepsFinalizer(t, m)
+		c := conditions.Get(m, clusterv1.DeletingCondition)
+		if c == nil || !strings.Contains(c.Message, "is terminating, so the destroy Job cannot be created") || !strings.Contains(c.Message, retainHint) {
 			t.Errorf("Deleting = %+v", c)
 		}
 	})

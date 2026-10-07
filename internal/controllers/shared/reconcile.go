@@ -837,6 +837,9 @@ func (r *reconciler) startOp(ctx context.Context, bk *Bookkeeping, dec Decision,
 	// The leases name the Job about to be created, so they come after
 	// everything that goes into its name, and before anything is written.
 	wait, err := r.takeLeases(ctx, req, JobName(r.k, req))
+	if namespaceTerminating(err) {
+		return r.namespaceTerminatingHold(ctx, bk, op, err)
+	}
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -848,6 +851,9 @@ func (r *reconciler) startOp(ctx context.Context, bk *Bookkeeping, dec Decision,
 	if errors.Is(err, ErrStartDeferred) {
 		return r.startDeferred(ctx, bk, op, err)
 	}
+	if namespaceTerminating(err) {
+		return r.namespaceTerminatingHold(ctx, bk, op, err)
+	}
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -856,6 +862,32 @@ func (r *reconciler) startOp(ctx context.Context, bk *Bookkeeping, dec Decision,
 		captfconds.SetInfrastructureHealthy(r.obj, nil, captfconds.HealthApplyStarted)
 	}
 	return r.finish(bk, nil, ctrl.Result{RequeueAfter: ActiveJobRequeue})
+}
+
+// namespaceTerminating reports whether err is the API server refusing a
+// create because the namespace is being deleted (NamespaceLifecycle).
+func namespaceTerminating(err error) bool {
+	return err != nil && apierrors.HasStatusCause(err, corev1.NamespaceTerminatingCause)
+}
+
+// namespaceTerminatingHold ends, logging with ctx, a pass whose op could
+// not start because its namespace is terminating (err): no lease, Job or
+// run Secret can be created there any more, so retrying with backoff only
+// hides why. A deletion says so in Deleting, with Retain as the way out;
+// any other op in ApplyJobSucceeded. bk is the pass's bookkeeping. It
+// requeues at GateRequeue and returns the result and error from finish.
+func (r *reconciler) namespaceTerminatingHold(ctx context.Context, bk *Bookkeeping, op jobs.Op, err error) (ctrl.Result, error) {
+	klog.FromContext(ctx).Info("The namespace is terminating; no Job can start", "op", op, "err", err.Error())
+	msg := fmt.Sprintf("Namespace %s is terminating, so the %s Job cannot be created", r.obj.GetNamespace(), op)
+	if r.deleting {
+		conditions.Set(r.obj, metav1.Condition{
+			Type: clusterv1.DeletingCondition, Status: metav1.ConditionTrue, Reason: clusterv1.DeletingReason,
+			Message: msg + "; the namespace's deletion will remove the state Secrets as well. To release the object without a destroy, keeping the state for adoption elsewhere first, set " + retainHint,
+		})
+		return r.finish(bk, nil, ctrl.Result{RequeueAfter: GateRequeue})
+	}
+	c := metav1.Condition{Type: infrav1.ApplyJobSucceededCondition, Status: metav1.ConditionFalse, Reason: infrav1.ApplyFailedReason, Message: msg}
+	return r.finish(bk, &c, ctrl.Result{RequeueAfter: GateRequeue})
 }
 
 // startDeferred ends, logging with ctx, a pass whose start of op's Job
