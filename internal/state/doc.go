@@ -26,8 +26,12 @@ limitations under the License.
 // data. Adopt re-labels state Secrets with an ownerReference after every
 // successful apply, since Terraform's own chunk writes carry only the
 // backend's labels; State.Metadata lets the reconciler re-own a chunk
-// between applies without listing the chunks again. Cleanup removes every state Secret and the lock Lease
-// after a successful destroy, since neither backend does that itself.
+// between applies without listing the chunks again. Cleanup removes every
+// state Secret, every backup and the lock Lease after a successful
+// destroy, since neither backend does that itself. ProtectionFinalizer
+// keeps the base state Secret, the backups and the inputs records readable
+// when a cascading deletion reaches them first; DeleteSecret takes it off
+// before every delete CAPTF itself makes.
 // TakeBackup, ListBackups, FindBackup and PruneBackups copy state Secrets
 // verbatim into captf-state-backup-* Secrets and manage their retention.
 //

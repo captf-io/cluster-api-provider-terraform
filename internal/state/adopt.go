@@ -28,7 +28,8 @@ import (
 
 // Adopt marks every state Secret of suffix as owned by owner (ownerRef with
 // blockOwnerDeletion=false, so state moves with the cluster and is garbage
-// collected with the object) and records inputsHash on the base Secret,
+// collected with the object), protects the base Secret
+// (ProtectionFinalizer) and records inputsHash on it,
 // or removes the hash there when inputsHash is "" (a restored backup that
 // was taken without one: the state no longer shows what applied it). It
 // uses ctx for the list and patch calls through c and returns any error from
@@ -55,6 +56,9 @@ func Adopt(ctx context.Context, c client.Client, owner client.Object, suffix, in
 		orig := s.DeepCopy()
 		if err := controllerutil.SetOwnerReference(owner, s, c.Scheme(), noBlockOwnerDeletion); err != nil {
 			return fmt.Errorf("state: owner reference on %s: %w", s.Name, err)
+		}
+		if s.Name == base {
+			Protect(&s.ObjectMeta)
 		}
 		switch {
 		case s.Name != base:

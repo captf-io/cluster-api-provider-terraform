@@ -214,6 +214,10 @@ func writeChunks(t *testing.T, e *env, suffix string, ref metav1.OwnerReference,
 		}
 		s.Data[state.DataKey] = payload[min(i*size, len(payload)):min((i+1)*size, len(payload))]
 		s.OwnerReferences = []metav1.OwnerReference{ref}
+		if i == 0 {
+			// As Adopt leaves it.
+			state.Protect(&s.ObjectMeta)
+		}
 		if err := e.c.Create(t.Context(), s); err != nil {
 			t.Fatal(err)
 		}

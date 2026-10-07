@@ -165,7 +165,7 @@ func (e *env) backupOf(t *testing.T, kind, name string, serial int64, hash strin
 	if err != nil || !created {
 		t.Fatalf("backup: %v, %v", created, err)
 	}
-	if err := state.Cleanup(t.Context(), e.c, testNS, suffix); err != nil {
+	if err := state.DeleteState(t.Context(), e.c, testNS, suffix); err != nil {
 		t.Fatal(err)
 	}
 	return b

@@ -57,6 +57,8 @@ type PreambleResult struct {
 
 // Preamble runs the following stages, in this fixed order:
 //
+//  0. deleting with foreground propagation → drop the foregroundDeletion
+//     finalizer (convertForeground) and carry on;
 //  1. externally managed → stop before any write;
 //  2. owner lookup: no ownerRef of the expected kind and not deleting →
 //     DependenciesReady=Unknown and requeue; no ownerRef and deleting with
@@ -79,6 +81,9 @@ type PreambleResult struct {
 // and any error from the steps.
 func Preamble(ctx context.Context, d Deps, k Kind) (PreambleResult, error) {
 	obj := k.Object()
+	if err := convertForeground(ctx, d, obj); err != nil {
+		return conflictRequeue(err)
+	}
 	if annotations.IsExternallyManaged(obj) {
 		if obj.GetDeletionTimestamp().IsZero() {
 			klog.FromContext(ctx).V(LogDebug).Info("Object is externally managed, skipping")
@@ -213,6 +218,32 @@ func conflictRequeue(err error) (PreambleResult, error) {
 		return PreambleResult{Stop: true, Result: ctrl.Result{RequeueAfter: time.Second}}, nil
 	}
 	return PreambleResult{}, err
+}
+
+// convertForeground turns a foreground deletion of obj into a background
+// one, using ctx and the shared dependencies d: it removes the
+// foregroundDeletion finalizer the API server adds for
+// propagationPolicy Foreground (kubectl delete --cascade=foreground, Argo
+// CD's default prune, a Cluster deleted that way). While that finalizer is
+// on obj, the garbage collector deletes every dependent of it at once,
+// whatever obj's own finalizer: the Job running the destroy, the state
+// Secrets and the inputs records. Without it the dependents are collected
+// only once obj is gone, after the destroy, as with background
+// propagation. Whatever the collector deleted before this pass keeps its
+// data under state.ProtectionFinalizer. It returns any patch error.
+func convertForeground(ctx context.Context, d Deps, obj Object) error {
+	if obj.GetDeletionTimestamp().IsZero() || !controllerutil.ContainsFinalizer(obj, metav1.FinalizerDeleteDependents) {
+		return nil
+	}
+	removed, err := dropFinalizer(ctx, d.Client, obj, metav1.FinalizerDeleteDependents)
+	if err != nil || !removed {
+		return err
+	}
+	klog.FromContext(ctx).Info("Converted a foreground deletion to background", "finalizer", metav1.FinalizerDeleteDependents)
+	d.Emit(obj, corev1.EventTypeNormal, EventForegroundDeletionConverted, "Delete",
+		"Removed finalizer %s: a foreground deletion would garbage-collect this object's Jobs and state before its destroy; they go with the object instead",
+		metav1.FinalizerDeleteDependents)
+	return nil
 }
 
 // dropFinalizer removes the finalizer with a merge patch under an

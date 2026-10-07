@@ -223,12 +223,19 @@ func TestPruneBackups(t *testing.T) {
 		if _, _, err := TakeBackup(ctx, c, backupOpts(owner, suffix, backupT0.Add(time.Duration(serial)*time.Hour))); err != nil {
 			t.Fatal(err)
 		}
-		if err := Cleanup(ctx, c, ns, suffix); err != nil {
+		// Only the live state goes: Cleanup would take the backups too.
+		var live corev1.SecretList
+		if err := c.List(ctx, &live, client.InNamespace(ns), client.MatchingLabelsSelector{Selector: Selector(suffix)}); err != nil {
 			t.Fatal(err)
+		}
+		for i := range live.Items {
+			if err := DeleteSecret(ctx, c, &live.Items[i].ObjectMeta); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	// Serial 2 loses a chunk.
-	if err := c.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: BackupName(suffix, 2) + "-part-1"}}); err != nil {
+	if err := DeleteSecretNamed(ctx, c, ns, BackupName(suffix, 2)+"-part-1"); err != nil {
 		t.Fatal(err)
 	}
 	list, err := ListBackups(ctx, c, ns, suffix)

@@ -310,8 +310,9 @@ func Promote(ctx context.Context, c client.Client, owner client.Object, rec Reco
 
 // setRecord sets what WriteAttempt and Promote own on s: refs as the
 // owner references, rec's files as the data, kind and ownerName as the
-// owner-kind/owner-name labels, and rec's image, identity, inputs-hash
-// and job annotations.
+// owner-kind/owner-name labels, state.ProtectionFinalizer (a record is
+// what a destroy renders, so a cascading deletion must not take it), and
+// rec's image, identity, inputs-hash and job annotations.
 func setRecord(s *corev1.Secret, refs []metav1.OwnerReference, kind, ownerName string, rec Record) {
 	s.OwnerReferences = refs
 	s.Data = fileData(rec.Files)
@@ -321,6 +322,7 @@ func setRecord(s *corev1.Secret, refs []metav1.OwnerReference, kind, ownerName s
 	s.Labels[state.ManagedLabel] = "true"
 	s.Labels[state.OwnerKindLabel] = kind
 	s.Labels[state.OwnerNameLabel] = state.LabelValue(ownerName)
+	state.Protect(&s.ObjectMeta)
 	setAnnotations(&s.ObjectMeta, rec)
 	metav1.SetMetaDataAnnotation(&s.ObjectMeta, JobAnnotation, rec.Job)
 }
@@ -465,6 +467,7 @@ func ClearInterruptedApply(ctx context.Context, c client.Client, owner client.Ob
 }
 
 // Delete removes owner's durable and applied Secrets through c using ctx,
+// taking state.ProtectionFinalizer off each first (state.DeleteSecretNamed),
 // and returns any error other than a Secret already being gone.
 func Delete(ctx context.Context, c client.Client, owner client.Object) error {
 	durable, _, err := ownerName(c, owner)
@@ -476,8 +479,7 @@ func Delete(ctx context.Context, c client.Client, owner client.Object) error {
 		return err
 	}
 	for _, name := range []string{durable, applied} {
-		s := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: owner.GetNamespace(), Name: name}}
-		if err := client.IgnoreNotFound(c.Delete(ctx, s)); err != nil {
+		if err := state.DeleteSecretNamed(ctx, c, owner.GetNamespace(), name); err != nil {
 			return fmt.Errorf("inputs: delete %s: %w", name, err)
 		}
 	}

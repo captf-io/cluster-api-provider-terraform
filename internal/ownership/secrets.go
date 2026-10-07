@@ -128,38 +128,51 @@ func LabeledFor(labels map[string]string, kind, name string) bool {
 // NeedsRepair reports whether the Secret whose metadata is meta is labeled
 // for want's object (LabeledFor), is not retained
 // (state.RetainedFromUIDLabel: only Unretain gives such a Secret an owner
-// again), and lacks exactly one owner reference to it with its current
-// UID (EnsureRef would change it).
-func NeedsRepair(meta *metav1.ObjectMeta, want metav1.OwnerReference) bool {
+// again), and either lacks exactly one owner reference to it with its
+// current UID (EnsureRef would change it) or, when protect is true, lacks
+// state.ProtectionFinalizer while not being deleted (state.Protect would
+// add it). protect is true for the Secrets that finalizer guards: the
+// base state Secret, the state backups and the inputs records.
+func NeedsRepair(meta *metav1.ObjectMeta, want metav1.OwnerReference, protect bool) bool {
 	if !LabeledFor(meta.Labels, want.Kind, want.Name) || state.RetainedFrom(meta.Labels) != "" {
 		return false
 	}
-	_, change := EnsureRef(meta.OwnerReferences, want)
-	return change != RefUnchanged
+	if _, change := EnsureRef(meta.OwnerReferences, want); change != RefUnchanged {
+		return true
+	}
+	return protect && state.Protect(meta.DeepCopy())
 }
 
 // RepairSecret makes the Secret whose metadata is meta, as read with its
 // resourceVersion, hold exactly one owner reference to want's object
-// (EnsureRef), using ctx and c. It patches only metadata.ownerReferences,
-// with a merge patch locked to meta's resourceVersion, and only when
-// NeedsRepair holds, so a Secret labeled for another object is never
-// touched. It reports whether it patched. A Secret gone since it was read
-// is false with a nil error; a conflict (the Secret changed since) and
-// every other patch error are returned for the caller to skip or retry.
-func RepairSecret(ctx context.Context, c client.Writer, meta *metav1.ObjectMeta, want metav1.OwnerReference) (bool, error) {
-	if !NeedsRepair(meta, want) {
+// (EnsureRef) and, when protect is true, state.ProtectionFinalizer, using
+// ctx and c. It patches only metadata.ownerReferences and
+// metadata.finalizers, with a merge patch locked to meta's
+// resourceVersion, and only when NeedsRepair holds, so a Secret labeled
+// for another object is never touched. It reports whether it patched. A
+// Secret gone since it was read is false with a nil error; a conflict
+// (the Secret changed since) and every other patch error are returned for
+// the caller to skip or retry.
+func RepairSecret(ctx context.Context, c client.Writer, meta *metav1.ObjectMeta, want metav1.OwnerReference, protect bool) (bool, error) {
+	if !NeedsRepair(meta, want, protect) {
 		return false, nil
 	}
 	refs, _ := EnsureRef(meta.OwnerReferences, want)
-	return patchMeta(ctx, c, meta, func(s *corev1.Secret) { s.OwnerReferences = refs })
+	return patchMeta(ctx, c, meta, func(s *corev1.Secret) {
+		s.OwnerReferences = refs
+		if protect {
+			state.Protect(&s.ObjectMeta)
+		}
+	})
 }
 
 // Retain makes the Secret whose metadata is meta, as read with its
 // resourceVersion, outlive want's object, for deletionPolicy Retain: it
 // drops every owner reference to that object, whatever its UID, and
-// labels the Secret state.RetainedFromUIDLabel with want's UID, with one
-// merge patch of its metadata through c using ctx, locked to meta's
-// resourceVersion. References to other owners are kept, and a Secret
+// labels the Secret state.RetainedFromUIDLabel with want's UID, and takes
+// state.ProtectionFinalizer off it unless it is being deleted already,
+// with one merge patch of its metadata through c using ctx, locked to
+// meta's resourceVersion. References to other owners are kept, and a Secret
 // already retained by want's UID with no reference to the object is left
 // as it is. The caller finds the Secret by the object's deterministic
 // names and selectors; unlike RepairSecret, Retain does not require the
@@ -179,12 +192,20 @@ func Retain(ctx context.Context, c client.Writer, meta *metav1.ObjectMeta, want 
 		}
 	}
 	uid := string(want.UID)
-	if len(refs) == len(meta.OwnerReferences) && state.RetainedFrom(meta.Labels) == uid {
+	// A retained Secret outlives the object and anyone may delete it, so it
+	// loses state.ProtectionFinalizer; one being deleted already (a
+	// cascading deletion got to it first) keeps it, since dropping it then
+	// would delete the very data Retain keeps.
+	unprotect := meta.DeletionTimestamp == nil && state.Protected(meta)
+	if len(refs) == len(meta.OwnerReferences) && state.RetainedFrom(meta.Labels) == uid && !unprotect {
 		return false, nil
 	}
 	return patchMeta(ctx, c, meta, func(s *corev1.Secret) {
 		s.OwnerReferences = refs
 		metav1.SetMetaDataLabel(&s.ObjectMeta, state.RetainedFromUIDLabel, uid)
+		if unprotect {
+			state.Unprotect(&s.ObjectMeta)
+		}
 	})
 }
 

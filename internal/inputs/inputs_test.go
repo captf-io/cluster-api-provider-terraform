@@ -288,7 +288,7 @@ func TestPromote(t *testing.T) {
 		t.Errorf("after a second promotion applied = %+v, want j2 without a digest", d.Applied)
 	}
 
-	if err := c.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: Name("m", "m")}}); err != nil {
+	if err := state.DeleteSecretNamed(ctx, c, ns, Name("m", "m")); err != nil {
 		t.Fatal(err)
 	}
 	d, err = Read(ctx, c, ns, "m", "m")

@@ -24,28 +24,55 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // Cleanup deletes, in namespace through c using ctx, every state Secret of
-// suffix and its lock Lease, after a successful destroy, and returns any
-// error from those calls. Neither backend does this itself: destroy only
-// empties the state and the default workspace cannot be deleted. Objects
-// already gone are fine.
+// suffix, every backup of it and its lock Lease, after a successful
+// destroy, and returns any error from those calls. Neither backend does
+// this itself: destroy only empties the state and the default workspace
+// cannot be deleted. The backups are deleted here rather than left to
+// garbage collection: they carry ProtectionFinalizer, and an object of
+// the same name created next would otherwise take them for a lost state
+// of its own. Objects already gone are fine.
 //
 // Secrets are listed and deleted one by one: DeleteAllOf needs the
 // deletecollection verb, which the manager role does not have.
 func Cleanup(ctx context.Context, c client.Client, namespace, suffix string) error {
-	var list corev1.SecretList
-	if err := c.List(ctx, &list, client.InNamespace(namespace), client.MatchingLabelsSelector{Selector: Selector(suffix)}); err != nil {
-		return fmt.Errorf("state: list Secrets: %w", err)
+	if err := DeleteState(ctx, c, namespace, suffix); err != nil {
+		return err
 	}
-	for i := range list.Items {
-		if err := client.IgnoreNotFound(c.Delete(ctx, &list.Items[i])); err != nil {
-			return fmt.Errorf("state: delete Secret %s: %w", list.Items[i].Name, err)
-		}
+	if err := deleteMatching(ctx, c, namespace, "backup", BackupSelector(suffix)); err != nil {
+		return err
 	}
 	return DeleteLock(ctx, c, namespace, suffix)
+}
+
+// DeleteState deletes, in namespace through c using ctx, every state
+// Secret of suffix (DeleteSecret, so the base Secret's
+// ProtectionFinalizer goes first), and leaves its backups and its lock
+// Lease. It returns any error from those calls; Secrets already gone are
+// fine.
+func DeleteState(ctx context.Context, c client.Client, namespace, suffix string) error {
+	return deleteMatching(ctx, c, namespace, "state", Selector(suffix))
+}
+
+// deleteMatching deletes, in namespace through c using ctx, every Secret
+// sel matches (DeleteSecret), listing metadata only; what names them in
+// errors. It returns any error from the list or a delete.
+func deleteMatching(ctx context.Context, c client.Client, namespace, what string, sel labels.Selector) error {
+	var list metav1.PartialObjectMetadataList
+	list.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("SecretList"))
+	if err := c.List(ctx, &list, client.InNamespace(namespace), client.MatchingLabelsSelector{Selector: sel}); err != nil {
+		return fmt.Errorf("state: list %s Secrets: %w", what, err)
+	}
+	for i := range list.Items {
+		if err := DeleteSecret(ctx, c, &list.Items[i].ObjectMeta); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // DeleteLock deletes, in namespace through c using ctx, the lock Lease of

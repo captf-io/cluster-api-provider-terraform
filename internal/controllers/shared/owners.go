@@ -45,11 +45,17 @@ const (
 type ownedSecret struct {
 	what string
 	meta *metav1.ObjectMeta
+	// protect is whether the Secret carries state.ProtectionFinalizer: the
+	// base state Secret, the backups and the inputs records.
+	protect bool
 }
 
 // repairOwners makes the Secrets that belong to the object carry exactly
-// one owner reference to its current UID (ownership.RepairSecret), using
-// ctx: after a management-cluster restore the object has a new UID, and
+// one owner reference to its current UID (ownership.RepairSecret), and
+// the base state Secret, the backups and the inputs records
+// state.ProtectionFinalizer as well, using ctx: a Secret written before
+// the finalizer existed, or a base state Secret the backend created
+// anew, gets it here. After a management-cluster restore the object has a new UID, and
 // its Secrets come back with their references stripped or naming the old
 // one; a state chunk a refresh or drift Job wrote has none. Without the
 // repair they are never garbage-collected with the object, or are
@@ -91,15 +97,15 @@ func (r *reconciler) repairOwners(ctx context.Context, chunks []metav1.ObjectMet
 	var due []ownedSecret
 	if r.durable != nil {
 		for _, m := range []*metav1.ObjectMeta{&r.durable.Secret, &r.durable.AppliedSecret} {
-			if ownership.NeedsRepair(m, want) {
-				due = append(due, ownedSecret{what: ownedInputs, meta: m})
+			if ownership.NeedsRepair(m, want, true) {
+				due = append(due, ownedSecret{what: ownedInputs, meta: m, protect: true})
 			}
 		}
 	}
 	var stateDue []ownedSecret
 	for i := range chunks {
-		if ownership.NeedsRepair(&chunks[i], want) {
-			stateDue = append(stateDue, ownedSecret{what: ownedState, meta: &chunks[i]})
+		if protect := chunks[i].Name == state.SecretName(r.suffix); ownership.NeedsRepair(&chunks[i], want, protect) {
+			stateDue = append(stateDue, ownedSecret{what: ownedState, meta: &chunks[i], protect: protect})
 		}
 	}
 	if len(due) == 0 && len(stateDue) == 0 {
@@ -124,7 +130,7 @@ func (r *reconciler) repairOwners(ctx context.Context, chunks []metav1.ObjectMet
 	}
 	counts := map[string]int{}
 	for _, s := range due {
-		ok, err := ownership.RepairSecret(ctx, r.d.Client, s.meta, want)
+		ok, err := ownership.RepairSecret(ctx, r.d.Client, s.meta, want, s.protect)
 		if err != nil {
 			logger.Info("Repairing an owner reference failed; the next reconcile tries again", "secret", s.meta.Name, "reason", err.Error())
 			break
@@ -150,8 +156,8 @@ func (r *reconciler) ownedByName(ctx context.Context, want metav1.OwnerReference
 	}
 	var out []ownedSecret
 	for i := range backups.Items {
-		if m := &backups.Items[i].ObjectMeta; ownership.NeedsRepair(m, want) {
-			out = append(out, ownedSecret{what: ownedBackup, meta: m})
+		if m := &backups.Items[i].ObjectMeta; ownership.NeedsRepair(m, want, true) {
+			out = append(out, ownedSecret{what: ownedBackup, meta: m, protect: true})
 		}
 	}
 	key := client.ObjectKey{Namespace: ns, Name: plankey.Name(kindShort(r.k), r.obj.GetName())}
@@ -161,7 +167,7 @@ func (r *reconciler) ownedByName(ctx context.Context, want metav1.OwnerReference
 	case apierrors.IsNotFound(err):
 	case err != nil:
 		return nil, fmt.Errorf("get plan key %s: %w", key.Name, err)
-	case ownership.NeedsRepair(&pk.ObjectMeta, want):
+	case ownership.NeedsRepair(&pk.ObjectMeta, want, false):
 		out = append(out, ownedSecret{what: ownedPlanKey, meta: &pk.ObjectMeta})
 	}
 	return out, nil

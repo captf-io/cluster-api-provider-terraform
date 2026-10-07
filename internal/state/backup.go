@@ -209,7 +209,9 @@ func TakeBackup(ctx context.Context, c client.Client, o BackupOptions) (Backup, 
 }
 
 // backupSecret returns chunk i of n of b, a verbatim copy of src's data,
-// labeled for o's owner and object identity.
+// labeled for o's owner and object identity, and protected
+// (ProtectionFinalizer): a backup is what a state lost to a cascading
+// deletion is restored from.
 func backupSecret(o BackupOptions, b Backup, i, n int, src *corev1.Secret) *corev1.Secret {
 	lbls := BackendLabels(o.OwnerKind, o.Owner.GetName(), o.ClusterName)
 	lbls[BackupLabel] = "true"
@@ -233,6 +235,7 @@ func backupSecret(o BackupOptions, b Backup, i, n int, src *corev1.Secret) *core
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: o.Owner.GetNamespace(), Name: chunkName(b.Name, i), Labels: lbls, Annotations: ann,
+			Finalizers: []string{ProtectionFinalizer},
 		},
 		Type: corev1.SecretTypeOpaque,
 		Data: maps.Clone(src.Data),
@@ -377,7 +380,9 @@ func pruneCandidates(backups []Backup, keep int) []Backup {
 // deleted. Only complete sets count toward keep, so a partial set never
 // displaces a good one: complete sets beyond the newest keep are deleted, and
 // so is every incomplete set except the newest set overall when it is
-// incomplete (it may still be being written). Secrets already gone are fine.
+// incomplete (it may still be being written). Each Secret loses
+// ProtectionFinalizer before it is deleted (DeleteSecretNamed). Secrets
+// already gone are fine.
 func PruneBackups(ctx context.Context, c client.Client, namespace string, backups []Backup, keep int) ([]Backup, error) {
 	if keep < 0 {
 		return nil, nil
@@ -385,8 +390,7 @@ func PruneBackups(ctx context.Context, c client.Client, namespace string, backup
 	var pruned []Backup
 	for _, b := range pruneCandidates(backups, keep) {
 		for _, name := range b.Secrets {
-			s := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name}}
-			if err := client.IgnoreNotFound(c.Delete(ctx, s)); err != nil {
+			if err := DeleteSecretNamed(ctx, c, namespace, name); err != nil {
 				return pruned, fmt.Errorf("state: delete backup %s: %w", name, err)
 			}
 		}

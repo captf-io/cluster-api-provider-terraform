@@ -383,6 +383,14 @@ func TestAdoptAndCleanup(t *testing.T) {
 		if has != (sec.Name == SecretName(s)) {
 			t.Errorf("%s: inputs hash annotation present = %v", sec.Name, has)
 		}
+		// Only the base Secret is protected: Terraform deletes surplus parts.
+		if Protected(&sec.ObjectMeta) != (sec.Name == SecretName(s)) {
+			t.Errorf("%s: finalizers = %v", sec.Name, sec.Finalizers)
+		}
+	}
+	// Cleanup takes the protected backups too.
+	if _, _, err := TakeBackup(ctx, c, backupOpts(owner, s, backupT0)); err != nil {
+		t.Fatalf("TakeBackup: %v", err)
 	}
 	if h, ok := HasInputsHash(list.Items, s); !ok || h != "h1:second" {
 		t.Errorf("HasInputsHash = %q, %v", h, ok)

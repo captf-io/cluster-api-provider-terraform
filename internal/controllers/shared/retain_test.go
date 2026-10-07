@@ -140,6 +140,9 @@ func assertRetained(t *testing.T, e *env, uid string) {
 		if got := state.RetainedFrom(s.meta.Labels); got != uid {
 			t.Errorf("%s Secret %s: retained from %q, want %q", s.what, s.meta.Name, got, uid)
 		}
+		if state.Protected(s.meta) {
+			t.Errorf("%s Secret %s kept the protection finalizer: %v", s.what, s.meta.Name, s.meta.Finalizers)
+		}
 		for _, ref := range s.meta.OwnerReferences {
 			if ref.Kind == state.KindTerraformMachine {
 				t.Errorf("%s Secret %s still has owner reference %+v", s.what, s.meta.Name, ref)
@@ -403,7 +406,7 @@ func foreignRetainedEnv(t *testing.T, mut ...func(*infrav1.TerraformMachine)) *e
 	if _, _, err := state.TakeBackup(t.Context(), e.c, state.BackupOptions{Owner: old, OwnerKind: state.KindTerraformMachine, ClusterName: "c1", Suffix: suffix, Now: t0}); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.Cleanup(t.Context(), e.c, testNS, suffix); err != nil {
+	if err := state.DeleteState(t.Context(), e.c, testNS, suffix); err != nil {
 		t.Fatal(err)
 	}
 	e.writeChunkedState(t, 3, "h1:x", old)
@@ -474,7 +477,7 @@ func TestReconcileRetainedStateFound(t *testing.T) {
 func TestReconcileRetainedStateFoundWithoutState(t *testing.T) {
 	t.Parallel()
 	e := foreignRetainedEnv(t)
-	if err := state.Cleanup(t.Context(), e.c, testNS, suffixOf(t, state.KindTerraformMachine, testName)); err != nil {
+	if err := state.DeleteState(t.Context(), e.c, testNS, suffixOf(t, state.KindTerraformMachine, testName)); err != nil {
 		t.Fatal(err)
 	}
 	if err := inputs.Delete(t.Context(), e.c, e.get(t)); err != nil {

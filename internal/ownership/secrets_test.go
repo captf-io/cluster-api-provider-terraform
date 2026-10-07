@@ -119,7 +119,7 @@ func TestLabeledForAndNeedsRepair(t *testing.T) {
 	}
 	for _, tt := range tests {
 		meta := &metav1.ObjectMeta{Labels: tt.labels, OwnerReferences: tt.refs}
-		if got := NeedsRepair(meta, wantRef); got != tt.want {
+		if got := NeedsRepair(meta, wantRef, false); got != tt.want {
 			t.Errorf("%s: NeedsRepair = %v, want %v", tt.name, got, tt.want)
 		}
 	}
@@ -184,7 +184,7 @@ func TestRepairSecret(t *testing.T) {
 	).Build()
 
 	s := read(t, c, "stale")
-	if ok, err := RepairSecret(t.Context(), c, &s.ObjectMeta, wantRef); !ok || err != nil {
+	if ok, err := RepairSecret(t.Context(), c, &s.ObjectMeta, wantRef, false); !ok || err != nil {
 		t.Fatalf("stale: %v, %v", ok, err)
 	}
 	if got := read(t, c, "stale"); !reflect.DeepEqual(got.OwnerReferences, []metav1.OwnerReference{other, wantRef}) || string(got.Data["k"]) != "v" {
@@ -192,7 +192,7 @@ func TestRepairSecret(t *testing.T) {
 	}
 	for _, name := range []string{"correct", "foreign"} {
 		s := read(t, c, name)
-		if ok, err := RepairSecret(t.Context(), c, &s.ObjectMeta, wantRef); ok || err != nil {
+		if ok, err := RepairSecret(t.Context(), c, &s.ObjectMeta, wantRef, false); ok || err != nil {
 			t.Errorf("%s: %v, %v", name, ok, err)
 		}
 	}
@@ -204,12 +204,12 @@ func TestRepairSecret(t *testing.T) {
 	conflict := read(t, c, "stale")
 	conflict.OwnerReferences = nil
 	conflict.ResourceVersion = "1"
-	if _, err := RepairSecret(t.Context(), c, &conflict.ObjectMeta, wantRef); !apierrors.IsConflict(err) {
+	if _, err := RepairSecret(t.Context(), c, &conflict.ObjectMeta, wantRef, false); !apierrors.IsConflict(err) {
 		t.Errorf("stale resourceVersion: %v, want a conflict", err)
 	}
 	gone := secret("gone", true)
 	gone.ResourceVersion = "1"
-	if ok, err := RepairSecret(t.Context(), c, &gone.ObjectMeta, wantRef); ok || err != nil {
+	if ok, err := RepairSecret(t.Context(), c, &gone.ObjectMeta, wantRef, false); ok || err != nil {
 		t.Errorf("gone: %v, %v", ok, err)
 	}
 }
@@ -225,7 +225,7 @@ func TestRepairSecretPatchError(t *testing.T) {
 		},
 	}).Build()
 	s := secret("s", true)
-	if _, err := RepairSecret(t.Context(), c, &s.ObjectMeta, wantRef); !errors.Is(err, boom) {
+	if _, err := RepairSecret(t.Context(), c, &s.ObjectMeta, wantRef, false); !errors.Is(err, boom) {
 		t.Errorf("err = %v, want boom", err)
 	}
 }
@@ -265,8 +265,8 @@ func TestRetainAndUnretain(t *testing.T) {
 			t.Errorf("%s retained again: %v, %v", name, ok, err)
 		}
 	}
-	if got := read(t, c, "owned"); !reflect.DeepEqual(got.OwnerReferences, []metav1.OwnerReference{other}) || NeedsRepair(&got.ObjectMeta, wantRef) {
-		t.Errorf("retained owners %+v, NeedsRepair %v", got.OwnerReferences, NeedsRepair(&got.ObjectMeta, wantRef))
+	if got := read(t, c, "owned"); !reflect.DeepEqual(got.OwnerReferences, []metav1.OwnerReference{other}) || NeedsRepair(&got.ObjectMeta, wantRef, false) {
+		t.Errorf("retained owners %+v, NeedsRepair %v", got.OwnerReferences, NeedsRepair(&got.ObjectMeta, wantRef, false))
 	}
 	if patches != 2 {
 		t.Errorf("patches = %d, want 2", patches)
@@ -277,8 +277,8 @@ func TestRetainAndUnretain(t *testing.T) {
 		t.Fatalf("Unretain: %v, %v", ok, err)
 	}
 	got := read(t, c, "owned")
-	if _, ok := got.Labels[state.RetainedFromUIDLabel]; ok || !NeedsRepair(&got.ObjectMeta, wantRef) {
-		t.Errorf("unretained labels %v, NeedsRepair %v", got.Labels, NeedsRepair(&got.ObjectMeta, wantRef))
+	if _, ok := got.Labels[state.RetainedFromUIDLabel]; ok || !NeedsRepair(&got.ObjectMeta, wantRef, false) {
+		t.Errorf("unretained labels %v, NeedsRepair %v", got.Labels, NeedsRepair(&got.ObjectMeta, wantRef, false))
 	}
 	if ok, err := Unretain(t.Context(), c, &got.ObjectMeta); ok || err != nil || patches != 3 {
 		t.Errorf("Unretain without the label: %v, %v, patches %d", ok, err, patches)
@@ -302,5 +302,60 @@ func TestRetainAndUnretain(t *testing.T) {
 	}
 	if _, err := Retain(t.Context(), failing, &metav1.ObjectMeta{Name: "x"}, metav1.OwnerReference{APIVersion: "a/b/c"}); err == nil {
 		t.Error("malformed apiVersion accepted")
+	}
+}
+
+// TestProtection proves RepairSecret with protect adds
+// state.ProtectionFinalizer to an owned Secret that lacks it, never to one
+// being deleted (the API server would reject it) nor without protect, and
+// that Retain takes the finalizer off a live Secret but keeps it on one a
+// cascading deletion already marked, whose data it would otherwise lose.
+func TestProtection(t *testing.T) {
+	t.Parallel()
+	read := func(t *testing.T, c client.Client, name string) *corev1.Secret {
+		t.Helper()
+		s := &corev1.Secret{}
+		if err := c.Get(t.Context(), client.ObjectKey{Namespace: "ns", Name: name}, s); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	deleting := secret("deleting", true, wantRef)
+	deleting.Finalizers = []string{"other"}
+	deleting.DeletionTimestamp = new(metav1.Now())
+	c := fake.NewClientBuilder().WithObjects(secret("owned", true, wantRef), deleting).Build()
+
+	owned := read(t, c, "owned")
+	if NeedsRepair(&owned.ObjectMeta, wantRef, false) {
+		t.Error("an owned Secret needs no repair without protect")
+	}
+	if ok, err := RepairSecret(t.Context(), c, &owned.ObjectMeta, wantRef, true); !ok || err != nil {
+		t.Fatalf("protect: %v, %v", ok, err)
+	}
+	owned = read(t, c, "owned")
+	if !state.Protected(&owned.ObjectMeta) || NeedsRepair(&owned.ObjectMeta, wantRef, true) {
+		t.Errorf("finalizers = %v after the repair", owned.Finalizers)
+	}
+	if d := read(t, c, "deleting"); NeedsRepair(&d.ObjectMeta, wantRef, true) {
+		t.Error("a Secret being deleted is never given the finalizer")
+	}
+
+	if ok, err := Retain(t.Context(), c, &owned.ObjectMeta, wantRef); !ok || err != nil {
+		t.Fatalf("Retain: %v, %v", ok, err)
+	}
+	if got := read(t, c, "owned"); state.Protected(&got.ObjectMeta) {
+		t.Errorf("a retained live Secret keeps finalizers %v", got.Finalizers)
+	}
+
+	marked := secret("marked", true, wantRef)
+	marked.Finalizers = []string{state.ProtectionFinalizer}
+	marked.DeletionTimestamp = new(metav1.Now())
+	c = fake.NewClientBuilder().WithObjects(marked).Build()
+	m := read(t, c, "marked")
+	if ok, err := Retain(t.Context(), c, &m.ObjectMeta, wantRef); !ok || err != nil {
+		t.Fatalf("Retain marked: %v, %v", ok, err)
+	}
+	if got := read(t, c, "marked"); !state.Protected(&got.ObjectMeta) || state.RetainedFrom(got.Labels) != "new" {
+		t.Errorf("a marked Secret: finalizers %v, labels %v; want it protected and retained", got.Finalizers, got.Labels)
 	}
 }
