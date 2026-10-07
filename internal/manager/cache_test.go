@@ -27,6 +27,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	toolscache "k8s.io/client-go/tools/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 
@@ -34,8 +35,10 @@ import (
 )
 
 // TestCacheOptions proves CacheOptions scopes DefaultNamespaces to the
-// given namespace (or leaves it nil for every namespace) and applies the
-// Secret and Job label selectors, and strips the data of cached Secrets.
+// given namespace (or leaves it nil for every namespace), applies the
+// Secret and Job label selectors, keys the Secret entry by its metadata
+// projection with no Transform of its own, and strips managedFields from
+// every cached object through DefaultTransform.
 func TestCacheOptions(t *testing.T) {
 	t.Parallel()
 	scoped := CacheOptions("tenant-a")
@@ -45,34 +48,29 @@ func TestCacheOptions(t *testing.T) {
 	if all := CacheOptions(""); all.DefaultNamespaces != nil {
 		t.Errorf("cluster-wide DefaultNamespaces = %v, want nil (all namespaces)", all.DefaultNamespaces)
 	}
+	assertStripsManagedFields(t, scoped.DefaultTransform)
 
 	selectors := map[string]labels.Selector{}
 	for obj, by := range scoped.ByObject {
-		switch obj.(type) {
-		case *corev1.Secret:
-			selectors["secret"] = by.Label
+		switch o := obj.(type) {
+		case *metav1.PartialObjectMetadata:
 			// The managed Secrets hold state chunks, backups and inputs;
-			// the informer must keep only their metadata.
-			if by.Transform == nil {
-				t.Error("managed Secret informer has no Transform: it would hold every payload")
-				break
+			// keyed by the metadata projection, the informer never
+			// receives them.
+			if gvk := o.GroupVersionKind(); gvk != corev1.SchemeGroupVersion.WithKind("Secret") {
+				t.Errorf("metadata ByObject entry has GVK %v, want v1 Secret", gvk)
 			}
-			got, err := by.Transform(&corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{Name: "s", Labels: map[string]string{"captf.io/managed": "true"}},
-				Data:       map[string][]byte{"state": []byte("payload")},
-				StringData: map[string]string{"k": "v"},
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			sec := got.(*corev1.Secret)
-			if sec.Data != nil || sec.StringData != nil || sec.Name != "s" || sec.Labels["captf.io/managed"] != "true" {
-				t.Errorf("Secret Transform = %+v, want data stripped and metadata kept", sec)
+			selectors["secret"] = by.Label
+			if by.Transform != nil {
+				t.Error("Secret ByObject sets a Transform: it would replace DefaultTransform")
 			}
 		case *batchv1.Job:
 			selectors["job"] = by.Label
+			if by.Transform != nil {
+				t.Error("Job ByObject sets a Transform: it would replace DefaultTransform")
+			}
 		default:
-			t.Errorf("unexpected ByObject entry %T", obj)
+			t.Errorf("unexpected ByObject entry %T (a typed Secret entry would cache every payload)", obj)
 		}
 	}
 	if s := selectors["secret"]; s == nil || !s.Matches(labels.Set{"captf.io/managed": "true"}) ||
@@ -84,6 +82,46 @@ func TestCacheOptions(t *testing.T) {
 		s.Matches(labels.Set{"captf.io/managed": "true"}) ||
 		s.Matches(labels.Set{JobOwnerKindLabel: "TerraformMachine", "captf.io/managed": "false"}) {
 		t.Errorf("Job selector = %v, want %s present and captf.io/managed=true", s, JobOwnerKindLabel)
+	}
+}
+
+// assertStripsManagedFields fails t unless transform is set and drops the
+// managedFields of a typed object and of a metadata-only one, keeping the
+// rest of their metadata.
+func assertStripsManagedFields(t *testing.T, transform toolscache.TransformFunc) {
+	t.Helper()
+	if transform == nil {
+		t.Fatal("no DefaultTransform: cached objects keep their managedFields")
+	}
+	mf := []metav1.ManagedFieldsEntry{{Manager: "kubectl"}}
+	meta := SecretMeta()
+	meta.Name, meta.ManagedFields = "s", mf
+	for _, obj := range []metav1.Object{
+		&batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "s", ManagedFields: mf}},
+		meta,
+	} {
+		got, err := transform(obj)
+		if err != nil {
+			t.Fatal(err)
+		}
+		o := got.(metav1.Object)
+		if o.GetManagedFields() != nil || o.GetName() != "s" {
+			t.Errorf("DefaultTransform(%T) = %+v, want managedFields dropped and the name kept", obj, o)
+		}
+	}
+}
+
+// TestPartialMeta proves SecretMeta and ConfigMapMeta carry the core v1
+// GVK the client and cache derive the informer from.
+func TestPartialMeta(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		got  *metav1.PartialObjectMetadata
+		kind string
+	}{{SecretMeta(), "Secret"}, {ConfigMapMeta(), "ConfigMap"}} {
+		if gvk := tc.got.GroupVersionKind(); gvk != corev1.SchemeGroupVersion.WithKind(tc.kind) {
+			t.Errorf("%s meta GVK = %v", tc.kind, gvk)
+		}
 	}
 }
 

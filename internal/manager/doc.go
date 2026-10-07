@@ -27,8 +27,9 @@ limitations under the License.
 // options for the manager's two caches (CAPD's DefaultNamespaces): the main
 // cache scopes Secrets and Jobs to the labels CAPTF itself sets, and the
 // second, label-scoped cache backs the spec.variablesFrom watches over
-// operator-labeled ConfigMaps and Secrets, stripping their data with
-// StripData before it is ever held in memory. UncachedObjects lists the
+// operator-labeled ConfigMaps and Secrets. Both hold Secrets and ConfigMaps
+// as metadata only (SecretMeta, ConfigMapMeta), so no payload is ever sent
+// to the manager's informers. UncachedObjects lists the
 // types the default client reads straight from the API server instead of
 // starting a cluster-wide informer for them, so code that must see objects
 // outside the cache scope takes mgr.GetAPIReader() explicitly.

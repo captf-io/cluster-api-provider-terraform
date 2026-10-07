@@ -26,6 +26,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/cluster-api/util/conditions"
 	"sigs.k8s.io/controller-runtime/pkg/cache/informertest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -258,8 +259,9 @@ func TestVariablesSourceIndexAndMappers(t *testing.T) {
 		WithIndex(&infrav1.TerraformMachine{}, VariablesSourceIndex, MachineVariablesSourceIndexer).
 		WithIndex(&infrav1.TerraformMachinePool{}, VariablesSourceIndex, PoolVariablesSourceIndexer).Build()
 
-	cm := configMap("vars", varsLabel, nil)
-	sec := varSecret("vars", varsLabel, nil)
+	// The variables cache holds metadata only: the watches see these.
+	cm := configMapMeta(metav1.ObjectMeta{Namespace: testNS, Name: "vars", Labels: varsLabel})
+	sec := secretMeta(metav1.ObjectMeta{Namespace: testNS, Name: "vars", Labels: varsLabel})
 	if got := names(VariablesSourceToClusters(c)(t.Context(), cm)); !slices.Equal(got, []string{testNS + "/uses-both", testNS + "/uses-cm"}) {
 		t.Errorf("ConfigMap -> clusters = %v", got)
 	}
@@ -279,10 +281,15 @@ func TestVariablesSourceIndexAndMappers(t *testing.T) {
 	if got := names(VariablesSourceToPools(c)(t.Context(), sec)); !slices.Equal(got, []string{testNS + "/p-secret"}) {
 		t.Errorf("Secret -> pools = %v", got)
 	}
-	other := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Namespace: testNS, Name: "vars"}}
-	if VariablesSourceToClusters(c)(t.Context(), other) != nil || VariablesSourceToMachines(c)(t.Context(), other) != nil ||
-		VariablesSourceToPools(c)(t.Context(), other) != nil {
-		t.Error("a non-source object maps to requests")
+	other := &metav1.PartialObjectMetadata{ObjectMeta: metav1.ObjectMeta{Namespace: testNS, Name: "vars"}}
+	other.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("ServiceAccount"))
+	foreign := secretMeta(metav1.ObjectMeta{Namespace: testNS, Name: "vars"})
+	foreign.SetGroupVersionKind(schema.GroupVersionKind{Group: "example.com", Version: "v1", Kind: "Secret"})
+	for _, o := range []client.Object{other, foreign} {
+		if VariablesSourceToClusters(c)(t.Context(), o) != nil || VariablesSourceToMachines(c)(t.Context(), o) != nil ||
+			VariablesSourceToPools(c)(t.Context(), o) != nil {
+			t.Errorf("non-source %v maps to requests", o.GetObjectKind().GroupVersionKind())
+		}
 	}
 	if ClusterVariablesSourceIndexer(&infrav1.TerraformMachine{}) != nil || MachineVariablesSourceIndexer(&infrav1.TerraformCluster{}) != nil ||
 		PoolVariablesSourceIndexer(&infrav1.TerraformMachine{}) != nil {

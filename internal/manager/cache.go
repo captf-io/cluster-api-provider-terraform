@@ -27,6 +27,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/selection"
@@ -55,14 +56,21 @@ const (
 //   - ns restricts every informer to one namespace; empty watches all;
 //   - Secrets are cached only with captf.io/managed=true (state, inputs,
 //     credential mirrors), so not every Secret of the cluster is held in
-//     memory, and with their data stripped (StripData): the Secret watches
-//     use only the name, namespace, labels and annotations, and every Get
-//     or List of a Secret goes to the API server (UncachedObjects), so the
-//     state chunks, backups and inputs payloads are never held by the
-//     informer;
+//     memory, and only as metadata: the ByObject entry is keyed by
+//     SecretMeta, so the Secret watches (builder WatchesMetadata) start a
+//     metadata informer, and the API server never sends the state chunks,
+//     backups and inputs payloads to the manager. Every typed Get or List
+//     of a Secret goes to the API server (UncachedObjects). The entry is
+//     per GVK, not per projection: a typed Secret watch or cached read
+//     would start a second informer under the same selector that holds
+//     every payload, so none may exist;
 //   - Jobs are cached only with the owner-kind label and captf.io/managed=true
 //     that every CAPTF Job carries, so a Job anyone else creates in a watched
-//     namespace is never held or counted.
+//     namespace is never held or counted;
+//   - every cached object has its managedFields dropped
+//     (TransformStripManagedFields): nothing reads them, and they are often
+//     the larger part of an object's metadata. A ByObject Transform would
+//     replace this default, so none is set.
 //
 // The sync period is set by ManagerOptions. It returns the resulting
 // ctrlcache.Options, scoped to ns.
@@ -73,24 +81,25 @@ func CacheOptions(ns string) ctrlcache.Options {
 	}
 	return ctrlcache.Options{
 		DefaultNamespaces: namespaces,
+		DefaultTransform:  ctrlcache.TransformStripManagedFields(),
 		ByObject: map[client.Object]ctrlcache.ByObject{
-			&corev1.Secret{}: {Label: labels.SelectorFromSet(labels.Set{ManagedSecretLabel: "true"}), Transform: StripData},
-			&batchv1.Job{}:   {Label: jobSelector()},
+			SecretMeta():   {Label: labels.SelectorFromSet(labels.Set{ManagedSecretLabel: "true"})},
+			&batchv1.Job{}: {Label: jobSelector()},
 		},
 	}
 }
 
 // VariablesCacheOptions scopes the second cache that backs the
 // spec.variablesFrom watches: only ConfigMaps and Secrets labeled
-// captf.io/variables=true, in ns (all namespaces when empty), with their
-// data stripped before they are stored. The main cache cannot hold them:
-// its Secret informer selects captf.io/managed=true, and a cache has one
-// label selector per GVK. The data is read through the API reader when
-// the variables are resolved, so no value is ever held in memory here. ns
-// scopes the cache as CacheOptions does; scheme, mapper and httpClient are
-// passed through unchanged to the underlying ctrlcache.Options, from the
-// manager's own Scheme, RESTMapper and HTTP client. It returns the resulting
-// ctrlcache.Options.
+// captf.io/variables=true, in ns (all namespaces when empty), as metadata
+// only (ConfigMapMeta, SecretMeta) and without managedFields. The main
+// cache cannot hold them: its Secret informer selects captf.io/managed=true,
+// and a cache has one label selector per GVK. The data is read through the
+// API reader when the variables are resolved, so no value is ever sent to
+// this cache. ns scopes the cache as CacheOptions does; scheme, mapper and
+// httpClient are passed through unchanged to the underlying
+// ctrlcache.Options, from the manager's own Scheme, RESTMapper and HTTP
+// client. It returns the resulting ctrlcache.Options.
 func VariablesCacheOptions(ns string, scheme *runtime.Scheme, mapper meta.RESTMapper, httpClient *http.Client) ctrlcache.Options {
 	var namespaces map[string]ctrlcache.Config
 	if ns != "" {
@@ -102,26 +111,33 @@ func VariablesCacheOptions(ns string, scheme *runtime.Scheme, mapper meta.RESTMa
 		Scheme:            scheme,
 		Mapper:            mapper,
 		DefaultNamespaces: namespaces,
+		DefaultTransform:  ctrlcache.TransformStripManagedFields(),
 		ByObject: map[client.Object]ctrlcache.ByObject{
-			&corev1.Secret{}:    {Label: sel, Transform: StripData},
-			&corev1.ConfigMap{}: {Label: sel, Transform: StripData},
+			SecretMeta():    {Label: sel},
+			ConfigMapMeta(): {Label: sel},
 		},
 	}
 }
 
-// StripData drops the data of obj before a cache stores it, when obj is a
-// *corev1.Secret or *corev1.ConfigMap; both caches' watches need only the
-// object's metadata (name, namespace, labels, annotations). It returns obj unchanged, mutated in place, and a nil
-// error: it implements the ctrlcache.TransformFunc signature, which never
-// fails for this transform.
-func StripData(obj any) (any, error) {
-	switch o := obj.(type) {
-	case *corev1.Secret:
-		o.Data, o.StringData = nil, nil
-	case *corev1.ConfigMap:
-		o.Data, o.BinaryData = nil, nil
-	}
-	return obj, nil
+// SecretMeta returns an empty metav1.PartialObjectMetadata carrying the v1
+// Secret GVK: the object to watch, index or list Secrets with through a
+// cache, so only their metadata is ever fetched and held.
+func SecretMeta() *metav1.PartialObjectMetadata {
+	return partialMeta("Secret")
+}
+
+// ConfigMapMeta returns an empty metav1.PartialObjectMetadata carrying the
+// v1 ConfigMap GVK, as SecretMeta does for Secrets.
+func ConfigMapMeta() *metav1.PartialObjectMetadata {
+	return partialMeta("ConfigMap")
+}
+
+// partialMeta returns an empty metav1.PartialObjectMetadata carrying the
+// core v1 kind.
+func partialMeta(kind string) *metav1.PartialObjectMetadata {
+	m := &metav1.PartialObjectMetadata{}
+	m.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind(kind))
+	return m
 }
 
 // VariablesCache wraps the variables cache for mgr.Add: GetCache puts it in
@@ -140,7 +156,11 @@ func (v VariablesCache) GetCache() ctrlcache.Cache { return v.Cache }
 // override ServiceAccounts) takes mgr.GetAPIReader() explicitly; this list
 // keeps the default client from starting cluster-wide informers by accident:
 //
-//   - Secret, ConfigMap: reads outside the captf.io/managed selector;
+//   - Secret, ConfigMap: reads outside the captf.io/managed selector, and
+//     every read of their data. The client derives the GVK of a
+//     PartialObjectMetadata from its TypeMeta, so a metadata Get or List
+//     through the default client is live too; a cached metadata read must
+//     go through mgr.GetCache() (SecretMeta);
 //   - Pod: Job pod status is read on demand, no watch needs it;
 //   - Lease: internal/locks reads lock Leases on demand; a cached Get would
 //     start a cluster-wide Lease informer;

@@ -36,6 +36,7 @@ import (
 
 	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/contract"
+	"github.com/captf-io/cluster-api-provider-terraform/internal/manager"
 )
 
 // Kinds of a variablesFrom source, as messages and the source index name
@@ -204,15 +205,17 @@ func variablesInvalid(msg string) *Gate {
 
 // VariablesSourceWatches returns the ConfigMap and Secret watches on d's
 // VariablesCache that enqueue what mapFn maps a labeled source to; none
-// without the cache (unit tests).
+// without the cache (unit tests). They watch metadata only
+// (manager.ConfigMapMeta, manager.SecretMeta), as the cache is scoped: a
+// typed watch would start an informer that holds every value.
 func VariablesSourceWatches(d Deps, mapFn handler.MapFunc) []source.TypedSource[reconcile.Request] {
 	if d.VariablesCache == nil {
 		return nil
 	}
 	h := handler.EnqueueRequestsFromMapFunc(mapFn)
 	return []source.TypedSource[reconcile.Request]{
-		source.Kind[client.Object](d.VariablesCache, &corev1.ConfigMap{}, h),
-		source.Kind[client.Object](d.VariablesCache, &corev1.Secret{}, h),
+		source.Kind[client.Object](d.VariablesCache, manager.ConfigMapMeta(), h),
+		source.Kind[client.Object](d.VariablesCache, manager.SecretMeta(), h),
 	}
 }
 

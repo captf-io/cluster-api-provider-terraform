@@ -62,7 +62,8 @@ func ClusterPredicates(scheme *runtime.Scheme, logger klog.Logger) predicate.Fun
 // using ctx to build them and applying opts to the underlying controller.
 // The watch-filter predicate is only on For and the Cluster watch: Jobs,
 // Secrets, identities and Namespaces never carry the label, and a global
-// event filter would drop Job completions. It returns an error if the
+// event filter would drop Job completions. Managed Secrets are watched as
+// metadata only (manager.CacheOptions). It returns an error if the
 // controller could not be built.
 func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, opts controller.Options) error {
 	logger := klog.FromContext(ctx)
@@ -80,7 +81,7 @@ func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, opt
 		// An approval is a spec change; the controller's own phase labels
 		// and status writes are not.
 		Owns(&infrav1.TerraformPlan{}, predicate.GenerationChangedPredicate{}).
-		Watches(&corev1.Secret{},
+		WatchesMetadata(&corev1.Secret{},
 			handler.EnqueueRequestsFromMapFunc(shared.SecretToOwner(state.KindTerraformCluster)), shared.ManagedSecret()).
 		Watches(&infrav1.TerraformClusterIdentity{}, handler.EnqueueRequestsFromMapFunc(shared.IdentityToClusters(c))).
 		Watches(&corev1.Namespace{},

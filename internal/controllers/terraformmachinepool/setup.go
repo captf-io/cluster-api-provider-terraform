@@ -63,13 +63,15 @@ func SecretToPools(c client.Reader) handler.MapFunc {
 // SetupWithManager registers the controller with mgr and its watches,
 // using ctx to build them and applying opts to the underlying controller.
 // The watch-filter predicate is only on For and the MachinePool, Cluster
-// and TerraformCluster watches. A controller write to the pool (spec.providerIDList,
-// status) re-triggers a reconcile but no apply: inputs are compared by
-// hash, and they hold none of the mapped outputs. The bootstrap data
-// Secret is deliberately not watched yet (it is not captf.io/managed, so
-// the cache does not hold it): a rotated token reaches the pool at its
-// next reconcile, at the latest the membership refresh interval later. It
-// returns an error if the controller could not be built.
+// and TerraformCluster watches. A controller write to the pool
+// (spec.providerIDList, status) re-triggers a reconcile but no apply:
+// inputs are compared by hash, and they hold none of the mapped outputs.
+// The bootstrap data Secret is deliberately not watched yet (it is not
+// captf.io/managed, so the cache does not hold it): a rotated token
+// reaches the pool at its next reconcile, at the latest the membership
+// refresh interval later. Managed Secrets are watched as metadata only
+// (manager.CacheOptions). It returns an error if the controller could not
+// be built.
 func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, opts controller.Options) error {
 	logger := klog.FromContext(ctx)
 	scheme, c := mgr.GetScheme(), mgr.GetClient()
@@ -94,7 +96,7 @@ func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, opt
 		// An approval is a spec change; the controller's own phase labels
 		// and status writes are not.
 		Owns(&infrav1.TerraformPlan{}, predicate.GenerationChangedPredicate{}).
-		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(SecretToPools(c)), shared.ManagedSecret()).
+		WatchesMetadata(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(SecretToPools(c)), shared.ManagedSecret()).
 		Watches(&infrav1.TerraformClusterIdentity{}, handler.EnqueueRequestsFromMapFunc(shared.IdentityToPools(c))).
 		Watches(&corev1.Namespace{},
 			handler.EnqueueRequestsFromMapFunc(shared.NamespaceToObjects(c, func() client.ObjectList { return &infrav1.TerraformMachinePoolList{} })),

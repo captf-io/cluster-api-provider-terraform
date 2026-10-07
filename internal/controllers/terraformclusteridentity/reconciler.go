@@ -77,16 +77,17 @@ type Reconciler struct {
 }
 
 // SetupWithManager registers the controller with mgr, applying opts to the
-// underlying controller: identities (spec changes) and mirror Secrets,
-// mapped to their identity through inputs.IdentityAnnotation. It returns an
-// error if the controller could not be built.
+// underlying controller: identities (spec changes) and the metadata of
+// mirror Secrets, mapped to their identity through
+// inputs.IdentityAnnotation. It returns an error if the controller could
+// not be built.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager, opts controller.Options) error {
 	err := ctrl.NewControllerManagedBy(mgr).
 		For(&infrav1.TerraformClusterIdentity{}, builder.WithPredicates(
 			predicates.ResourceHasFilterLabel(mgr.GetScheme(), mgr.GetLogger(), r.WatchFilter),
 			predicate.GenerationChangedPredicate{},
 		)).
-		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(MirrorToIdentity),
+		WatchesMetadata(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(MirrorToIdentity),
 			builder.WithPredicates(predicate.NewPredicateFuncs(isMirror))).
 		Named("terraformclusteridentity").
 		WithOptions(opts).

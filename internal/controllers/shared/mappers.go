@@ -204,12 +204,18 @@ func fallbackClusters(ctx context.Context, c client.Reader, name string) []infra
 }
 
 // variablesSourceKey returns the VariablesSourceIndex value of o, a
-// labeled ConfigMap or Secret; "" for anything else.
+// labeled ConfigMap or Secret; "" for anything else. The variables cache
+// holds them as metadata only, so o is a metav1.PartialObjectMetadata and
+// is told apart by the core v1 GVK its informer sets on it.
 func variablesSourceKey(o client.Object) string {
-	switch o.(type) {
-	case *corev1.ConfigMap:
+	gvk := o.GetObjectKind().GroupVersionKind()
+	if gvk.Group != corev1.GroupName || gvk.Version != corev1.SchemeGroupVersion.Version {
+		return ""
+	}
+	switch gvk.Kind {
+	case kindConfigMap:
 		return kindConfigMap + "/" + o.GetName()
-	case *corev1.Secret:
+	case kindSecret:
 		return kindSecret + "/" + o.GetName()
 	}
 	return ""

@@ -66,9 +66,9 @@ type Deps struct {
 	// (io.captf.variables-schema), by image digest. The admission webhook
 	// reads the same cache. nil validates no variables.
 	Schemas *imageinspect.SchemaCache
-	// VariablesCache holds the ConfigMaps and Secrets labeled
-	// captf.io/variables=true, without their data
-	// (manager.VariablesCacheOptions), for the variablesFrom watches. The
+	// VariablesCache holds the metadata of the ConfigMaps and Secrets
+	// labeled captf.io/variables=true (manager.VariablesCacheOptions), for
+	// the variablesFrom watches. The
 	// main cache cannot: its Secret informer is scoped to captf.io/managed,
 	// and one GVK has one label selector. nil registers no such watch.
 	VariablesCache ctrlcache.Cache

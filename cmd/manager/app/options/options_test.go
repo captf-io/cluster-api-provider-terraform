@@ -24,6 +24,7 @@ import (
 	"github.com/spf13/pflag"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 
@@ -216,9 +217,12 @@ func TestManagerOptions(t *testing.T) {
 
 	selectors := map[string]labels.Selector{}
 	for obj, by := range m.Cache.ByObject {
-		switch obj.(type) {
-		case *corev1.Secret:
-			selectors["secret"] = by.Label
+		switch o := obj.(type) {
+		case *metav1.PartialObjectMetadata:
+			// Secrets are cached as metadata only.
+			if o.GroupVersionKind() == corev1.SchemeGroupVersion.WithKind("Secret") {
+				selectors["secret"] = by.Label
+			}
 		case *batchv1.Job:
 			selectors["job"] = by.Label
 		default:

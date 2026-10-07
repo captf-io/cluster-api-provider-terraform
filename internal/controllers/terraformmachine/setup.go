@@ -63,8 +63,9 @@ func SecretToMachines(c client.Reader) handler.MapFunc {
 // SetupWithManager registers the controller with mgr and its watches,
 // using ctx to build them and applying opts to the underlying controller.
 // The watch-filter predicate is only on For and the Machine, Cluster and
-// TerraformCluster watches. It returns an error if the controller could
-// not be built.
+// TerraformCluster watches. Managed Secrets are watched as metadata only
+// (manager.CacheOptions). It returns an error if the controller could not
+// be built.
 func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, opts controller.Options) error {
 	logger := klog.FromContext(ctx)
 	scheme, c := mgr.GetScheme(), mgr.GetClient()
@@ -86,7 +87,7 @@ func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, opt
 			handler.EnqueueRequestsFromMapFunc(shared.TerraformClusterToObjects(c, func() client.ObjectList { return &infrav1.TerraformMachineList{} })),
 			shared.InheritedPolicyChanged(), filter).
 		Owns(&batchv1.Job{}).
-		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(SecretToMachines(c)), shared.ManagedSecret()).
+		WatchesMetadata(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(SecretToMachines(c)), shared.ManagedSecret()).
 		Watches(&infrav1.TerraformClusterIdentity{}, handler.EnqueueRequestsFromMapFunc(shared.IdentityToMachines(c))).
 		Watches(&corev1.Namespace{},
 			handler.EnqueueRequestsFromMapFunc(shared.NamespaceToObjects(c, func() client.ObjectList { return &infrav1.TerraformMachineList{} })),

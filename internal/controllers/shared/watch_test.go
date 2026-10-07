@@ -264,9 +264,9 @@ func TestMappers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: testNS, Name: state.SecretName(suffix), Labels: map[string]string{
+	base := secretMeta(metav1.ObjectMeta{Namespace: testNS, Name: state.SecretName(suffix), Labels: map[string]string{
 		state.OwnerKindLabel: state.KindTerraformCluster, clusterv1.ClusterNameLabel: "c1", state.BackendSuffixLabel: suffix,
-	}}}
+	}})
 	if got := names(ClusterStateSecretToMachines(c)(ctx, base)); !slices.Equal(got, []string{"team-a/m-inherit", "team-a/m-own"}) {
 		t.Errorf("ClusterStateSecretToMachines = %v", got)
 	}
@@ -303,16 +303,16 @@ func TestSecretToOwner(t *testing.T) {
 	ref := func(kind, name string) metav1.OwnerReference {
 		return metav1.OwnerReference{APIVersion: infrav1.GroupVersion.String(), Kind: kind, Name: name}
 	}
-	mirror := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: testNS, OwnerReferences: []metav1.OwnerReference{
+	mirror := secretMeta(metav1.ObjectMeta{Namespace: testNS, OwnerReferences: []metav1.OwnerReference{
 		ref("TerraformMachine", "m1"), ref("TerraformMachine", "m2"), ref("TerraformCluster", "c1"),
 		{APIVersion: "other.example/v1", Kind: "TerraformMachine", Name: "foreign"},
-	}}}
+	}})
 	if got := names(SecretToOwner("TerraformMachine")(t.Context(), mirror)); !slices.Equal(got, []string{"team-a/m1", "team-a/m2"}) {
 		t.Errorf("mirror owners = %v", got)
 	}
-	preAdopt := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: testNS, Labels: map[string]string{
+	preAdopt := secretMeta(metav1.ObjectMeta{Namespace: testNS, Labels: map[string]string{
 		state.OwnerKindLabel: "TerraformMachine", state.OwnerNameLabel: "m3",
-	}}}
+	}})
 	if got := names(SecretToOwner("TerraformMachine")(t.Context(), preAdopt)); !slices.Equal(got, []string{"team-a/m3"}) {
 		t.Errorf("pre-adoption state = %v", got)
 	}
