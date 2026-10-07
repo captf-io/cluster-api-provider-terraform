@@ -374,7 +374,9 @@ func TestReconcileLocalSecretIdentity(t *testing.T) {
 
 	t.Run("present", func(t *testing.T) {
 		t.Parallel()
-		e := newEnv(t, ns, creds, local)
+		// Each parallel subtest gets its own copies: the fake client's
+		// builder writes resourceVersion into the objects it is given.
+		e := newEnv(t, ns.DeepCopy(), creds.DeepCopy(), local.DeepCopy())
 		k := e.kindFor(t, readyOwner)
 		k.in = machineIn()
 		if _, err := reconcileOnce(t, e, k); err != nil {
@@ -401,7 +403,7 @@ func TestReconcileLocalSecretIdentity(t *testing.T) {
 	})
 	t.Run("missing", func(t *testing.T) {
 		t.Parallel()
-		e := newEnv(t, ns, local)
+		e := newEnv(t, ns.DeepCopy(), local.DeepCopy())
 		k := e.kindFor(t, readyOwner)
 		k.in = machineIn()
 		requeue, err := reconcileOnce(t, e, k)
