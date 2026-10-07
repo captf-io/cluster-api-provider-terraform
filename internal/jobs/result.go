@@ -216,6 +216,27 @@ func SourcePullFailure(pod *corev1.Pod) (PullFailure, bool) {
 	return PullFailure{}, false
 }
 
+// containerConfigReasons are the waiting reasons of a container the
+// kubelet cannot create: a Secret or ConfigMap it mounts or reads is
+// missing (a revoked credential mirror, a per-run Secret deleted early),
+// or its configuration is invalid. Such a pod never runs, however long it
+// waits.
+var containerConfigReasons = []string{"CreateContainerConfigError", "CreateContainerError"}
+
+// ContainerConfigFailed returns the waiting reason and message of an init
+// or app container of pod the kubelet cannot create
+// (containerConfigReasons), and true; else "", "" and false.
+func ContainerConfigFailed(pod *corev1.Pod) (reason, message string, ok bool) {
+	for _, statuses := range [][]corev1.ContainerStatus{pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses} {
+		for _, cs := range statuses {
+			if w := cs.State.Waiting; w != nil && slices.Contains(containerConfigReasons, w.Reason) {
+				return w.Reason, w.Message, true
+			}
+		}
+	}
+	return "", "", false
+}
+
 // PullStartedAt returns when pod's source container started pulling its
 // image, as near as the pod tells: when the pod was initialized (the
 // runner init container finished; only then does the kubelet pull the

@@ -436,6 +436,11 @@ func (r *reconciler) paused(ctx context.Context) (ctrl.Result, error) {
 			}
 			applyCond = cmp.Or(cond, applyCond)
 		}
+		if !deleted {
+			if deleted, err = r.configStuck(ctx, bk.Active); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
 		if deleted {
 			// It never started: nothing vanished (recordVanishedApply).
 			bk.Active, r.st.ActiveJob = nil, infrav1.ActiveJob{}
@@ -486,6 +491,12 @@ func (r *reconciler) run(ctx context.Context) (ctrl.Result, error) {
 			// A non-apply Job whose module image cannot be pulled starts
 			// again on the next image it may run.
 			if deleted, applyCond, err = r.pullStuck(ctx, bk.Active, false); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+		if !deleted {
+			// A pod that cannot create its container never runs.
+			if deleted, err = r.configStuck(ctx, bk.Active); err != nil {
 				return ctrl.Result{}, err
 			}
 		}
