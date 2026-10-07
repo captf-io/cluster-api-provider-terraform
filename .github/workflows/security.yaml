@@ -75,7 +75,7 @@ jobs:
   # fails if any step did.
   checks:
     name: checks
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
@@ -254,7 +254,7 @@ jobs:
     # CodeQL results exist only in code scanning. Not on PRs: the build and
     # analysis take minutes, and main and the weekly run cover every change.
     if: ${{ github.event_name != 'pull_request' && vars.ADVANCED_SECURITY == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
@@ -294,7 +294,7 @@ jobs:
   gosec:
     name: gosec
     if: ${{ github.event_name != 'pull_request' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
@@ -343,7 +343,7 @@ jobs:
   container:
     name: container image (${{ matrix.name }})
     if: ${{ github.event_name != 'pull_request' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
@@ -433,7 +433,7 @@ jobs:
     name: ok
     if: ${{ always() }}
     needs: [checks, osv-scanner, osv-scanner-pr, codeql, gosec, container]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions: {}
     steps:

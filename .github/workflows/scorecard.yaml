@@ -44,7 +44,7 @@ jobs:
   analysis:
     name: scorecard
     if: ${{ vars.SCORECARD == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       security-events: write # upload the SARIF to code scanning

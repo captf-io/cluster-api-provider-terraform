@@ -136,7 +136,7 @@ jobs:
       github.event.workflow_run.head_repository.full_name == github.repository) ||
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')))
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45 # up to 30 minutes of waiting for ci on a tag
     permissions:
       contents: read
@@ -193,7 +193,7 @@ jobs:
   image:
     name: image (${{ matrix.name }})
     needs: gate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
@@ -350,7 +350,7 @@ jobs:
     if: >-
       github.repository == 'captf-io/cluster-api-provider-terraform' &&
       github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: write # create the GitHub Release and upload its assets

@@ -67,7 +67,7 @@ env:
 jobs:
   test:
     name: unit tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
@@ -162,7 +162,7 @@ jobs:
 
   envtest:
     name: envtest
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
@@ -255,7 +255,7 @@ jobs:
 
   lint:
     name: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
@@ -356,7 +356,7 @@ jobs:
 
   verify:
     name: verify
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
@@ -474,7 +474,7 @@ jobs:
   build-arm64:
     name: build (linux/arm64)
     if: ${{ github.event_name != 'pull_request' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
@@ -543,7 +543,7 @@ jobs:
 
   release-snapshot:
     name: tfcapi-lint release snapshot and action
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
@@ -710,7 +710,7 @@ jobs:
     name: ok
     if: ${{ always() }}
     needs: [test, envtest, lint, verify, build-arm64, release-snapshot]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions: {}
     steps:
