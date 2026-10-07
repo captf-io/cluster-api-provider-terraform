@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
@@ -71,6 +72,12 @@ func validateJobPolicy(fldPath *field.Path, p *infrav1.JobPolicy) field.ErrorLis
 	var errs field.ErrorList
 	errs = append(errs, validateContainerSecurityContext(fldPath.Child("securityContext"), p.SecurityContext)...)
 	errs = append(errs, validatePodSecurityContext(fldPath.Child("podSecurityContext"), p.PodSecurityContext)...)
+	for i, e := range p.Env {
+		if jobs.ReservedEnv(e.Name) {
+			errs = append(errs, field.Forbidden(fldPath.Child("env").Index(i).Child("name"),
+				"the name is reserved: the runner owns TF_*, KUBE_* and KUBERNETES_* variables, HOME, TMPDIR and CHECKPOINT_DISABLE"))
+		}
+	}
 	lock, deadline := p.LockTimeoutSeconds, p.ActiveDeadlineSeconds
 	switch {
 	case lock != nil && deadline != 0:
@@ -115,8 +122,9 @@ func priorSpec[S any](old, cur *S, deleting bool) *S {
 // validateContainerSecurityContext checks the Job container's security
 // context sc at scPath: the container holds cloud credentials, so it may not
 // be privileged, escalate privileges, add capabilities, run as root, have a
-// writable root filesystem, an unconfined seccomp profile, an unmasked
-// /proc or a Windows host process. It returns the field errors found, or
+// writable root filesystem, an unconfined seccomp or AppArmor profile, a
+// SELinux type outside the baseline set (or a SELinux user or role), an
+// unmasked /proc or a Windows host process. It returns the field errors found, or
 // nil when sc is nil or valid.
 func validateContainerSecurityContext(scPath *field.Path, sc *corev1.SecurityContext) field.ErrorList {
 	if sc == nil {
@@ -139,27 +147,62 @@ func validateContainerSecurityContext(scPath *field.Path, sc *corev1.SecurityCon
 	if sc.ProcMount != nil && *sc.ProcMount == corev1.UnmaskedProcMount {
 		errs = append(errs, field.Forbidden(scPath.Child("procMount"), holds+"may not unmask /proc"))
 	}
-	errs = append(errs, validateIdentity(scPath, "container", sc.RunAsNonRoot, sc.RunAsUser, sc.SeccompProfile, sc.WindowsOptions)...)
+	errs = append(errs, validateIdentity(scPath, "container", sc.RunAsNonRoot, sc.RunAsUser, sc.SeccompProfile, sc.AppArmorProfile, sc.SELinuxOptions, sc.WindowsOptions)...)
 	return errs
 }
 
 // validatePodSecurityContext checks the Job pod's security context sc at
-// scPath: the same seccomp, root and host process rules as the container's,
-// since a pod-level setting is inherited by it. It returns the field errors
+// scPath: the same seccomp, AppArmor, SELinux, root and host process rules as the
+// container's, since a pod-level setting is inherited by it, and only
+// sysctls from the baseline safe set. It returns the field errors
 // found, or nil when sc is nil or valid.
 func validatePodSecurityContext(scPath *field.Path, sc *corev1.PodSecurityContext) field.ErrorList {
 	if sc == nil {
 		return nil
 	}
-	return validateIdentity(scPath, "pod", sc.RunAsNonRoot, sc.RunAsUser, sc.SeccompProfile, sc.WindowsOptions)
+	errs := validateIdentity(scPath, "pod", sc.RunAsNonRoot, sc.RunAsUser, sc.SeccompProfile, sc.AppArmorProfile, sc.SELinuxOptions, sc.WindowsOptions)
+	for i, sysctl := range sc.Sysctls {
+		if !safeSysctls.Has(sysctl.Name) {
+			errs = append(errs, field.Forbidden(scPath.Child("sysctls").Index(i).Child("name"),
+				"the Job pod holds cloud credentials and may set only the sysctls the Pod Security Standards baseline allows"))
+		}
+	}
+	return errs
 }
 
+// safeSysctls is the sysctl allowlist of the Pod Security Standards
+// baseline profile, which equals the kubelet's safe set. Copied from
+// k8s.io/pod-security-admission policy/check_sysctls.go (Kubernetes 1.36)
+// rather than imported, to avoid the dependency; refresh it when the
+// Kubernetes minor version is bumped.
+var safeSysctls = sets.New(
+	"kernel.shm_rmid_forced",
+	"net.ipv4.ip_local_port_range",
+	"net.ipv4.tcp_syncookies",
+	"net.ipv4.ping_group_range",
+	"net.ipv4.ip_unprivileged_port_start",
+	"net.ipv4.ip_local_reserved_ports",
+	"net.ipv4.tcp_keepalive_time",
+	"net.ipv4.tcp_fin_timeout",
+	"net.ipv4.tcp_keepalive_intvl",
+	"net.ipv4.tcp_keepalive_probes",
+	"net.ipv4.tcp_rmem",
+	"net.ipv4.tcp_wmem",
+)
+
+// baselineSELinuxTypes is the SELinux type allowlist of the Pod Security
+// Standards baseline profile (k8s.io/pod-security-admission
+// policy/check_seLinuxOptions.go, Kubernetes 1.36); the empty type is the
+// runtime default.
+var baselineSELinuxTypes = sets.New("", "container_t", "container_init_t", "container_kvm_t", "container_engine_t")
+
 // validateIdentity checks the fields a pod and a container security context
-// share, rooted at scPath: nonRoot and user (running as root), seccomp (an
-// unconfined profile) and win (a Windows host process). scope names the
+// share, rooted at scPath: nonRoot and user (running as root), seccomp and
+// apparmor (an unconfined profile), selinux (a type outside the baseline
+// set, or a user or role) and win (a Windows host process). scope names the
 // context in messages ("pod" or "container"). It returns the field errors
 // found.
-func validateIdentity(scPath *field.Path, scope string, nonRoot *bool, user *int64, seccomp *corev1.SeccompProfile, win *corev1.WindowsSecurityContextOptions) field.ErrorList {
+func validateIdentity(scPath *field.Path, scope string, nonRoot *bool, user *int64, seccomp *corev1.SeccompProfile, apparmor *corev1.AppArmorProfile, selinux *corev1.SELinuxOptions, win *corev1.WindowsSecurityContextOptions) field.ErrorList {
 	holds := "the Job " + scope + " holds cloud credentials and "
 	var errs field.ErrorList
 	if nonRoot != nil && !*nonRoot {
@@ -170,6 +213,20 @@ func validateIdentity(scPath *field.Path, scope string, nonRoot *bool, user *int
 	}
 	if seccomp != nil && seccomp.Type == corev1.SeccompProfileTypeUnconfined {
 		errs = append(errs, field.Forbidden(scPath.Child("seccompProfile", "type"), holds+"may not run with an Unconfined seccomp profile"))
+	}
+	if apparmor != nil && apparmor.Type == corev1.AppArmorProfileTypeUnconfined {
+		errs = append(errs, field.Forbidden(scPath.Child("appArmorProfile", "type"), holds+"may not run with an Unconfined AppArmor profile"))
+	}
+	if selinux != nil {
+		if !baselineSELinuxTypes.Has(selinux.Type) {
+			errs = append(errs, field.Forbidden(scPath.Child("seLinuxOptions", "type"), holds+"may set only a SELinux type the Pod Security Standards baseline allows"))
+		}
+		if selinux.User != "" {
+			errs = append(errs, field.Forbidden(scPath.Child("seLinuxOptions", "user"), holds+"may not set a SELinux user"))
+		}
+		if selinux.Role != "" {
+			errs = append(errs, field.Forbidden(scPath.Child("seLinuxOptions", "role"), holds+"may not set a SELinux role"))
+		}
 	}
 	if win != nil && win.HostProcess != nil && *win.HostProcess {
 		errs = append(errs, field.Forbidden(scPath.Child("windowsOptions", "hostProcess"), holds+"may not run as a Windows host process"))
