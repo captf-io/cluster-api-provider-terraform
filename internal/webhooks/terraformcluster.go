@@ -128,20 +128,21 @@ func validateCluster(specPath *field.Path, spec, old *infrav1.TerraformClusterSp
 // validateClusterSpec checks what a TerraformCluster and a
 // TerraformClusterTemplate have in common: the source, every jobs policy
 // and the variables. specPath is rooted at spec's parent field; old is the
-// stored spec on an update (a jobs policy is checked only when it changed
-// from there), or nil on create. It returns the field errors found, or nil
+// stored spec on an update (a jobs policy, the source and the variables
+// are each checked only when they changed from there: validateWorkspace),
+// or nil on create. It returns the field errors found, or nil
 // when spec is valid.
 func validateClusterSpec(specPath *field.Path, spec, old *infrav1.TerraformClusterSpec) field.ErrorList {
 	var oldJobs, oldDefaultJobs *infrav1.JobPolicy
+	var oldWS *infrav1.WorkspaceSpec
 	if old != nil {
-		oldJobs = old.Jobs
+		oldJobs, oldWS = old.Jobs, &old.WorkspaceSpec
 		if old.Defaults != nil {
 			oldDefaultJobs = old.Defaults.Jobs
 		}
 	}
-	errs := validateSource(specPath.Child("source"), &spec.Source)
+	errs := validateWorkspace(specPath, contract.RoleCluster, &spec.WorkspaceSpec, oldWS)
 	errs = append(errs, validateJobPolicyChange(specPath.Child("jobs"), oldJobs, spec.Jobs)...)
-	errs = append(errs, validateVariables(specPath, contract.RoleCluster, spec.Variables, spec.VariablesFrom)...)
 	if spec.Defaults != nil {
 		errs = append(errs, validateJobPolicyChange(specPath.Child("defaults", "jobs"), oldDefaultJobs, spec.Defaults.Jobs)...)
 	}

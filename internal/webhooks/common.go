@@ -314,9 +314,30 @@ func validateWorkloadSpec(specPath *field.Path, role contract.Role, spec, old *i
 	if old != nil {
 		oldJobs = old.Jobs
 	}
-	errs := validateSource(specPath.Child("source"), &spec.Source)
-	errs = append(errs, validateJobPolicyChange(specPath.Child("jobs"), oldJobs, spec.Jobs)...)
-	return append(errs, validateVariables(specPath, role, spec.Variables, spec.VariablesFrom)...)
+	errs := validateJobPolicyChange(specPath.Child("jobs"), oldJobs, spec.Jobs)
+	return append(errs, validateWorkspace(specPath, role, spec, old)...)
+}
+
+// validateWorkspace checks ws's source (validateSource) and variables for
+// role (validateVariables), each on a create (old nil) or when it changed
+// from old, the stored workspace on an update. Those rules are versioned:
+// a later release may reserve a variable name, lower MaxVariables or
+// tighten the image reference syntax. Checked on every update, a value
+// stored under an older release would block every write to an object
+// whose variables are immutable, the controller's own metadata patches
+// and its finalizer removal among them, and wedge its deletion. A
+// deleting object's old is its new spec (priorSpec), so nothing is
+// checked then. specPath is rooted at ws's parent field. It returns the
+// field errors found, or nil when ws is valid.
+func validateWorkspace(specPath *field.Path, role contract.Role, ws, old *infrav1.WorkspaceSpec) field.ErrorList {
+	var errs field.ErrorList
+	if old == nil || ws.Source.Image != old.Source.Image {
+		errs = append(errs, validateSource(specPath.Child("source"), &ws.Source)...)
+	}
+	if old == nil || !equalVariables(ws.Variables, old.Variables) || !equality.Semantic.DeepEqual(ws.VariablesFrom, old.VariablesFrom) {
+		errs = append(errs, validateVariables(specPath, role, ws.Variables, ws.VariablesFrom)...)
+	}
+	return errs
 }
 
 // requestUser returns the username of the admission request carried by ctx,

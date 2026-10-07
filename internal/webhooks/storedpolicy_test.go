@@ -22,6 +22,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
 )
@@ -133,6 +134,50 @@ func TestStoredWeakJobPolicy(t *testing.T) {
 		t.Run(k.name+"/deleting object stays updatable", func(t *testing.T) {
 			t.Parallel()
 			wantInvalid(t, k.update(weakPolicy(), otherWeakPolicy(), true), false)
+		})
+	}
+}
+
+// TestStoredReservedVariable proves an update never re-rejects variables
+// or a source that did not change, though a later release would reject
+// them (here a variable name the contract reserves): a metadata-only
+// update and any update of a deleting object pass, so the controller's
+// finalizer removal does. Changing the variables still checks them.
+func TestStoredReservedVariable(t *testing.T) {
+	t.Parallel()
+	stored := runtime.RawExtension{Raw: []byte(`{"captf_reserved":1}`)}
+	changed := runtime.RawExtension{Raw: []byte(`{"captf_reserved":1,"size":2}`)}
+	for _, k := range []struct {
+		name   string
+		update func(old, cur runtime.RawExtension, deleting bool) error
+	}{
+		{"TerraformCluster", func(old, cur runtime.RawExtension, deleting bool) error {
+			o, n := endpointCluster(nil), endpointCluster(nil)
+			o.Spec.Variables, n.Spec.Variables = old, cur
+			touch(&n.ObjectMeta, deleting)
+			_, err := (&TerraformCluster{}).ValidateUpdate(dryRunContext(false), o, n)
+			return err
+		}},
+		{"TerraformMachine", func(old, cur runtime.RawExtension, deleting bool) error {
+			o, n := machine(""), machine("")
+			o.Spec.Variables, n.Spec.Variables = old, cur
+			touch(&n.ObjectMeta, deleting)
+			_, err := (&TerraformMachine{ManagerUser: testManagerUser}).ValidateUpdate(userContext("someone"), o, n)
+			return err
+		}},
+		{"TerraformMachinePool", func(old, cur runtime.RawExtension, deleting bool) error {
+			o, n := pool(""), pool("")
+			o.Spec.Variables, n.Spec.Variables = old, cur
+			touch(&n.ObjectMeta, deleting)
+			_, err := (&TerraformMachinePool{}).ValidateUpdate(context.Background(), o, n)
+			return err
+		}},
+	} {
+		t.Run(k.name, func(t *testing.T) {
+			t.Parallel()
+			wantInvalid(t, k.update(stored, stored, false), false)
+			wantInvalid(t, k.update(stored, stored, true), false)
+			wantInvalid(t, k.update(stored, changed, false), true)
 		})
 	}
 }
