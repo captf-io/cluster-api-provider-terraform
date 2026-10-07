@@ -22,6 +22,7 @@ import (
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
+	"k8s.io/klog/v2"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -90,17 +91,20 @@ func (r *reconciler) clusterLimit() int {
 // informer cache without locking, so concurrent passes may overshoot by a
 // few; a Job already created is counted at once only once the cache has
 // seen it. A zero leaseWait means a slot is free; otherwise the wait says
-// which limit is reached, WaitingForJobSlot. It returns that leaseWait, or
-// the error from counting the Jobs.
+// which limit is reached, WaitingForJobSlot. The message leaves out the
+// number of running Jobs, which is logged instead: it changes with every
+// Job that starts or ends, and each waiter would rewrite its status for
+// it. It returns that leaseWait, or the error from counting the Jobs.
 func (r *reconciler) takeJobSlot(ctx context.Context, op jobs.Op) (leaseWait, error) {
 	wait := func(what string, active, limit int) leaseWait {
 		share := ""
 		if background(op) {
 			share = fmt.Sprintf(" (a %s starts below %d%% of it)", op, backgroundSharePercent)
 		}
+		klog.FromContext(ctx).V(LogFlow).Info("Waiting for a Job slot", "op", op, "scope", what, "active", active, "limit", limit)
 		return leaseWait{
 			reason:  infrav1.WaitingForJobSlotReason,
-			message: fmt.Sprintf("Waiting for a Job slot: %d Jobs are running %s, the limit is %d%s; the %s starts once one finishes", active, what, limit, share, op),
+			message: fmt.Sprintf("Waiting for a Job slot: the limit of %d Jobs running %s is reached%s; the %s starts once one finishes", limit, what, share, op),
 			requeue: SlotRequeue + Jitter(string(r.obj.GetUID()), SlotRequeue),
 		}
 	}
