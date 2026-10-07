@@ -219,8 +219,8 @@ type DecideInput struct {
 	// StateHeld is true while a deleting object's state is lost (it applied
 	// before) or unreadable: no destroy can run against it, and dropping
 	// the finalizer would orphan the infrastructure, so the deletion waits
-	// for a restore (which Restore then starts) or for the infrastructure
-	// to be abandoned.
+	// for a restore (which Restore then starts) or for deletionPolicy
+	// Retain, which keeps the state for a later adoption.
 	StateHeld bool
 	// Retain is deletionPolicy Retain: a deletion keeps the
 	// infrastructure, and with it the state, instead of destroying it.

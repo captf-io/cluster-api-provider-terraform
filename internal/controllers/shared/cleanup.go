@@ -28,7 +28,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/identity"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/inputs"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/plankey"
@@ -58,12 +57,6 @@ func Cleanup(ctx context.Context, d Deps, k Kind, suffix, identityName string) e
 	if err != nil {
 		return err
 	}
-	if len(backups) > 0 && abandonedUID(obj) {
-		// The finalizer was released without a destroy: the backups were the
-		// only way back to the state of the infrastructure left running.
-		logger.Info("Deleting the state backups of an abandoned infrastructure: the recovery path is lost",
-			"object", klog.KObj(obj), "annotation", infrav1.AbandonInfrastructureAnnotation, "backups", backups)
-	}
 	if err := state.Cleanup(ctx, d.Client, obj.GetNamespace(), suffix); err != nil {
 		return err
 	}
@@ -72,7 +65,7 @@ func Cleanup(ctx context.Context, d Deps, k Kind, suffix, identityName string) e
 	}
 	logger.Info("Deleted the object's state",
 		"object", klog.KObj(obj), "stateSecrets", states, "stateBackups", backups,
-		"durableInputs", inputs.Name(kindShort(k), obj.GetName()), "abandoned", abandonedUID(obj))
+		"durableInputs", inputs.Name(kindShort(k), obj.GetName()))
 	return release(ctx, d, k, identityName)
 }
 
@@ -155,13 +148,6 @@ func stateObjects(ctx context.Context, c client.Client, namespace, suffix string
 	}
 	slices.Sort(backups)
 	return secrets, backups, nil
-}
-
-// abandonedUID reports whether obj carries the abandon annotation with its
-// own uid, the value that releases a deletion without a destroy.
-func abandonedUID(obj Object) bool {
-	v, ok := obj.GetAnnotations()[infrav1.AbandonInfrastructureAnnotation]
-	return ok && v == string(obj.GetUID())
 }
 
 // SweepRBAC removes, using ctx and the shared dependencies d, the runner

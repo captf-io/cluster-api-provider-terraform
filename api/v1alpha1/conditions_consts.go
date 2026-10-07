@@ -297,7 +297,7 @@ const (
 	// move) is missing, or carries no inputs hash for an immutable kind: no
 	// Job runs until the state is restored. A deleting object keeps its
 	// finalizer until the state is restored (RestoreStateAnnotation) or the
-	// infrastructure is abandoned (AbandonInfrastructureAnnotation).
+	// object's deletionPolicy is set to Retain.
 	StateLostReason = "StateLost"
 	// StateLockedReason is the False reason while the state lock is held by
 	// something other than the object's own runner, such as a workstation;

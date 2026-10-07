@@ -293,111 +293,57 @@ func TestReconcileHeldDeletionRestores(t *testing.T) {
 	}
 }
 
-// TestReconcileAbandon: the abandon annotation naming the object's uid
-// releases a held deletion without a destroy, with a Warning; any other
-// value is ignored, and StateReadable says so.
-func TestReconcileAbandon(t *testing.T) {
-	t.Parallel()
-	t.Run("the object's uid drops the finalizer", func(t *testing.T) {
-		t.Parallel()
-		e := heldEnv(t)
-		e.annotate(t, infrav1.AbandonInfrastructureAnnotation, string(e.get(t).UID))
-		if _, err := Reconcile(t.Context(), e.d, healthyKind(t, e, testName)); err != nil {
-			t.Fatal(err)
-		}
-		if m := e.get(t); m != nil || len(e.jobsOf(t)) != 0 {
-			t.Errorf("object %+v, Jobs %d", m, len(e.jobsOf(t)))
-		}
-		ev := e.rec.only(EventInfrastructureAbandoned)
-		if len(ev) != 1 || ev[0].eventType != corev1.EventTypeWarning {
-			t.Errorf("InfrastructureAbandoned events = %+v", ev)
-		}
-	})
-	t.Run("a pending restore that cannot start does not hide it", func(t *testing.T) {
-		t.Parallel()
-		// No identity: the restore's credentials are never ready.
-		e := newEnv(t, without[*infrav1.TerraformClusterIdentity](world(machine(deleting, notPaused, provisioned, restoring("5"))))...)
-		jr := &clientRunner{c: e.c}
-		e.d.Jobs, e.d.State = jr, state.NewReader(e.c)
-		e.backupOf(t, state.KindTerraformMachine, testName, 5, "h1:backup")
-		e.annotate(t, infrav1.AbandonInfrastructureAnnotation, string(e.get(t).UID))
-		if _, err := Reconcile(t.Context(), e.d, healthyKind(t, e, testName)); err != nil {
-			t.Fatal(err)
-		}
-		if m := e.get(t); m != nil || jr.created.Load() != 0 {
-			t.Errorf("object %+v, Jobs created %d", m, jr.created.Load())
-		}
-	})
-	t.Run("a readable state destroys; a failed destroy can be abandoned", func(t *testing.T) {
-		t.Parallel()
-		e := newEnv(t, world(machine(deleting, notPaused, provisioned))...)
-		e.writeDurable(t, e.get(t))
-		e.state.st = &state.State{Serial: 3, InputsHash: "h1:x"}
-		e.annotate(t, infrav1.AbandonInfrastructureAnnotation, string(e.get(t).UID))
-		k := healthyKind(t, e, testName)
-		k.owner = readyOwner
-		if _, err := reconcileOnce(t, e, k); err != nil {
-			t.Fatal(err)
-		}
-		if len(e.runner.created) != 1 || !strings.Contains(e.runner.created[0], "-destroy-") || e.get(t) == nil {
-			t.Fatalf("created %v; the abandon annotation must not skip a destroy that did not fail", e.runner.created)
-		}
-
-		e.runner.jobs[0].Status.Conditions = job("", jobs.OpDestroy, jobs.Failed, t0).Status.Conditions
-		k = healthyKind(t, e, testName)
-		k.owner = readyOwner
-		if _, err := reconcileOnce(t, e, k); err != nil {
-			t.Fatal(err)
-		}
-		if m := e.get(t); m != nil || len(e.runner.created) != 1 {
-			t.Errorf("object %+v, created %v", m, e.runner.created)
-		}
-		ev := e.rec.only(EventInfrastructureAbandoned)
-		if len(ev) != 1 || !strings.Contains(ev[0].note, "the last destroy failed") {
-			t.Errorf("InfrastructureAbandoned events = %+v", ev)
-		}
-	})
-	t.Run("another value is ignored", func(t *testing.T) {
-		t.Parallel()
-		e := heldEnv(t)
-		e.annotate(t, infrav1.AbandonInfrastructureAnnotation, "yes")
-		for range 2 {
-			res, err := Reconcile(t.Context(), e.d, healthyKind(t, e, testName))
-			if err != nil {
-				t.Fatal(err)
-			}
-			assertHeld(t, e, res.RequeueAfter, infrav1.StateLostReason)
-		}
-		if c := conditions.Get(e.get(t), infrav1.StateReadableCondition); !strings.Contains(c.Message, `"yes" is ignored`) {
-			t.Errorf("StateReadable message %q does not name the ignored value", c.Message)
-		}
-		if e.rec.count(EventInfrastructureAbandoned) != 0 || e.rec.count(EventStateLost) != 1 {
-			t.Errorf("events %v", e.rec.reasons)
-		}
-	})
+// setRetain sets the stored machine's deletionPolicy to Retain, failing t
+// on error.
+func (e *env) setRetain(t *testing.T) {
+	t.Helper()
+	m := e.get(t)
+	m.Spec.DeletionPolicy = infrav1.DeletionPolicyRetain
+	if err := e.c.Update(t.Context(), m); err != nil {
+		t.Fatal(err)
+	}
 }
 
-// abandonedWith fails t unless e's machine is gone with no Job started
-// and exactly one InfrastructureAbandoned Warning whose note contains
-// want.
-func abandonedWith(t *testing.T, e *env, want string) {
+// retainedWith fails t unless e's machine is gone with no Job started
+// and exactly one InfrastructureRetained event.
+func retainedWith(t *testing.T, e *env) {
 	t.Helper()
 	if m := e.get(t); m != nil || len(e.runner.created) != 0 || len(e.jobsOf(t)) != 0 {
 		t.Fatalf("object %+v, created %v", m, e.runner.created)
 	}
-	ev := e.rec.only(EventInfrastructureAbandoned)
-	if len(ev) != 1 || ev[0].eventType != corev1.EventTypeWarning || !strings.Contains(ev[0].note, want) {
-		t.Errorf("InfrastructureAbandoned events = %+v, want a note containing %q", ev, want)
+	if n := e.rec.count(EventInfrastructureRetained); n != 1 {
+		t.Errorf("InfrastructureRetained events = %d, want 1 (%v)", n, e.rec.reasons)
 	}
 }
 
-// TestReconcileAbandonDestroyCannotStart: the abandon annotation releases
-// a deletion whose state reads but whose destroy can never start: the
-// durable inputs are gone, the identity does not allow the namespace or
-// is gone, or the credentials cannot be created. It is honored where the
-// destroy stops, and on a later pass from the ApplyJobSucceeded reason
-// that stop left.
-func TestReconcileAbandonDestroyCannotStart(t *testing.T) {
+// TestReconcileHeldDeletionNamesRetain: a deletion held on a lost state
+// says how to release it with deletionPolicy Retain, and setting it does.
+func TestReconcileHeldDeletionNamesRetain(t *testing.T) {
+	t.Parallel()
+	e := heldEnv(t)
+	res, err := Reconcile(t.Context(), e.d, healthyKind(t, e, testName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertHeld(t, e, res.RequeueAfter, infrav1.StateLostReason)
+	if c := conditions.Get(e.get(t), infrav1.StateReadableCondition); !strings.Contains(c.Message, "spec.deletionPolicy: Retain") {
+		t.Errorf("StateReadable message %q does not name deletionPolicy Retain", c.Message)
+	}
+	e.setRetain(t)
+	if _, err := Reconcile(t.Context(), e.d, healthyKind(t, e, testName)); err != nil {
+		t.Fatal(err)
+	}
+	if m := e.get(t); m != nil || e.rec.count(EventInfrastructureRetained) != 1 {
+		t.Errorf("object %+v, events %v", m, e.rec.reasons)
+	}
+}
+
+// TestReconcileDestroyCannotStartNamesRetain: a deletion whose state reads
+// but whose destroy can never start (the durable inputs are gone, the
+// identity does not allow the namespace or is gone, or the credentials
+// cannot be created) says how to release it with deletionPolicy Retain,
+// and setting it releases it without a Job.
+func TestReconcileDestroyCannotStartNamesRetain(t *testing.T) {
 	t.Parallel()
 	disallowed := func() []client.Object {
 		objs := world(machine(deleting, notPaused, provisioned))
@@ -409,17 +355,12 @@ func TestReconcileAbandonDestroyCannotStart(t *testing.T) {
 		objs []client.Object
 		// durable writes the durable inputs Secret.
 		durable bool
-		// first runs a pass before the annotation is set, and stop is the
-		// ApplyJobSucceeded reason it must leave.
-		first bool
-		stop  string
-		want  string
+		// stop is the ApplyJobSucceeded reason the first pass leaves.
+		stop string
 	}{
-		{"durable inputs missing", world(machine(deleting, notPaused, provisioned)), false, false, "", "the durable inputs Secret is missing"},
-		{"durable inputs missing, annotated later", world(machine(deleting, notPaused, provisioned)), false, true, infrav1.DestroyFailedReason, "ApplyJobSucceeded DestroyFailed"},
-		{"identity does not allow the namespace", disallowed(), true, false, "", "IdentityAllowed is False (" + infrav1.NamespaceNotAllowedReason + ")"},
-		{"identity does not allow the namespace, annotated later", disallowed(), true, true, infrav1.IdentityNotAllowedReason, "ApplyJobSucceeded IdentityNotAllowed"},
-		{"identity deleted", without[*infrav1.TerraformClusterIdentity](world(machine(deleting, notPaused, provisioned))), true, false, "", "IdentityAllowed is False (" + infrav1.IdentityNotFoundReason + ")"},
+		{"durable inputs missing", world(machine(deleting, notPaused, provisioned)), false, infrav1.DestroyFailedReason},
+		{"identity does not allow the namespace", disallowed(), true, infrav1.IdentityNotAllowedReason},
+		{"identity deleted", without[*infrav1.TerraformClusterIdentity](world(machine(deleting, notPaused, provisioned))), true, infrav1.IdentityNotAllowedReason},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -428,21 +369,23 @@ func TestReconcileAbandonDestroyCannotStart(t *testing.T) {
 				e.writeDurable(t, e.get(t))
 			}
 			e.state.st = &state.State{Serial: 3, InputsHash: "h1:x"}
-			if tt.first {
-				if _, err := reconcileOnce(t, e, e.kindFor(t, readyOwner)); err != nil {
-					t.Fatal(err)
-				}
-				m := e.get(t)
-				keepsFinalizer(t, m)
-				if c := conditions.Get(m, infrav1.ApplyJobSucceededCondition); c == nil || c.Status != metav1.ConditionFalse || c.Reason != tt.stop {
-					t.Fatalf("ApplyJobSucceeded = %+v, want False/%s", c, tt.stop)
-				}
-			}
-			e.annotate(t, infrav1.AbandonInfrastructureAnnotation, string(e.get(t).UID))
 			if _, err := reconcileOnce(t, e, e.kindFor(t, readyOwner)); err != nil {
 				t.Fatal(err)
 			}
-			abandonedWith(t, e, tt.want)
+			m := e.get(t)
+			keepsFinalizer(t, m)
+			c := conditions.Get(m, infrav1.ApplyJobSucceededCondition)
+			if c == nil || c.Status != metav1.ConditionFalse || c.Reason != tt.stop {
+				t.Fatalf("ApplyJobSucceeded = %+v, want False/%s", c, tt.stop)
+			}
+			if !strings.Contains(c.Message, "spec.deletionPolicy: Retain") {
+				t.Errorf("ApplyJobSucceeded message %q does not name deletionPolicy Retain", c.Message)
+			}
+			e.setRetain(t)
+			if _, err := reconcileOnce(t, e, e.kindFor(t, readyOwner)); err != nil {
+				t.Fatal(err)
+			}
+			retainedWith(t, e)
 		})
 	}
 	t.Run("credentials that cannot be created", func(t *testing.T) {
@@ -450,27 +393,31 @@ func TestReconcileAbandonDestroyCannotStart(t *testing.T) {
 		e, closed := terminatingEnv(t, world(machine(deleting, notPaused, provisioned))...)
 		e.writeDurable(t, e.get(t))
 		e.setState(t, suffixOf(t, state.KindTerraformMachine, testName), 3, "h1:x")
-		e.annotate(t, infrav1.AbandonInfrastructureAnnotation, string(e.get(t).UID))
 		closed.Store(true)
 		if _, err := Reconcile(t.Context(), e.d, healthyKind(t, e, testName)); err != nil {
 			t.Fatal(err)
 		}
-		abandonedWith(t, e, "waits for its credentials")
+		if c := conditions.Get(e.get(t), clusterv1.DeletingCondition); c == nil || !strings.Contains(c.Message, "spec.deletionPolicy: Retain") {
+			t.Errorf("Deleting = %+v, want it to name deletionPolicy Retain", c)
+		}
+		e.setRetain(t)
+		if _, err := Reconcile(t.Context(), e.d, healthyKind(t, e, testName)); err != nil {
+			t.Fatal(err)
+		}
+		if m := e.get(t); m != nil || len(e.jobsOf(t)) != 0 || e.rec.count(EventInfrastructureRetained) != 1 {
+			t.Errorf("object %+v, events %v", m, e.rec.reasons)
+		}
 	})
-	t.Run("a destroy that can start is not skipped", func(t *testing.T) {
+	t.Run("a destroy that can start is not skipped without Retain", func(t *testing.T) {
 		t.Parallel()
 		e := newEnv(t, world(machine(deleting, notPaused, provisioned))...)
 		e.writeDurable(t, e.get(t))
 		e.state.st = &state.State{Serial: 3, InputsHash: "h1:x"}
-		e.annotate(t, infrav1.AbandonInfrastructureAnnotation, string(e.get(t).UID))
 		if _, err := reconcileOnce(t, e, e.kindFor(t, readyOwner)); err != nil {
 			t.Fatal(err)
 		}
 		if len(e.runner.created) != 1 || !strings.Contains(e.runner.created[0], "-destroy-") || e.get(t) == nil {
 			t.Errorf("created %v", e.runner.created)
-		}
-		if n := e.rec.count(EventInfrastructureAbandoned); n != 0 {
-			t.Errorf("InfrastructureAbandoned events = %d", n)
 		}
 	})
 }
@@ -496,7 +443,7 @@ func terminatingEnv(t *testing.T, objs ...client.Object) (*env, *atomic.Bool) {
 // TestDeletionInTerminatingNamespace: in a terminating namespace, where
 // the runner ServiceAccount, RoleBinding and mirror cannot be created, a
 // deletion that needs no Job still drops the finalizer (no state, or
-// abandoned), and a destroy waits on the Deleting condition instead of
+// retained), and a destroy waits on the Deleting condition instead of
 // failing the reconcile.
 func TestDeletionInTerminatingNamespace(t *testing.T) {
 	t.Parallel()
@@ -511,16 +458,15 @@ func TestDeletionInTerminatingNamespace(t *testing.T) {
 			t.Errorf("object kept: %+v", m.Finalizers)
 		}
 	})
-	t.Run("held and abandoned: finalizer dropped", func(t *testing.T) {
+	t.Run("held and retained: finalizer dropped", func(t *testing.T) {
 		t.Parallel()
-		e, closed := terminatingEnv(t, world(machine(deleting, notPaused, provisioned))...)
+		e, closed := terminatingEnv(t, world(machine(deleting, notPaused, provisioned, retainPolicy))...)
 		e.backupOf(t, state.KindTerraformMachine, testName, 5, "h1:backup")
-		e.annotate(t, infrav1.AbandonInfrastructureAnnotation, string(e.get(t).UID))
 		closed.Store(true)
 		if _, err := Reconcile(t.Context(), e.d, healthyKind(t, e, testName)); err != nil {
 			t.Fatal(err)
 		}
-		if m := e.get(t); m != nil || e.rec.count(EventInfrastructureAbandoned) != 1 {
+		if m := e.get(t); m != nil || e.rec.count(EventInfrastructureRetained) != 1 {
 			t.Errorf("object %+v, events %v", m, e.rec.reasons)
 		}
 	})

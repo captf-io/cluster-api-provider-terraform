@@ -103,11 +103,6 @@ const (
 	EventDestroyed = "Destroyed"
 	// EventFinalizerRemoved: the finalizer was removed; the object goes.
 	EventFinalizerRemoved = "FinalizerRemoved"
-	// EventInfrastructureAbandoned: a deletion held on a lost or unreadable
-	// state, or whose destroy failed or cannot start, was released by
-	// captf.io/abandon-infrastructure naming the object's uid; the
-	// finalizer was removed without a destroy.
-	EventInfrastructureAbandoned = "InfrastructureAbandoned"
 	// EventInfrastructureRetained: a deletion with deletionPolicy Retain
 	// removed the finalizer without a destroy and kept the state, its
 	// backups and the durable inputs, labeled captf.io/retained-from-uid,
@@ -243,7 +238,7 @@ func DocumentedEvents() []string {
 		EventStuckJobDeleted, EventDestructivePlanBlocked,
 		EventPlanReady, EventPlanApproved, EventPlanApplied, EventPlanChanged, EventPlanSuperseded,
 		EventWaitingForRunLease, EventWaitingForClusterOperation, EventWaitingForMachineOperations,
-		EventDeletionStarted, EventDestroyed, EventFinalizerRemoved, EventInfrastructureAbandoned,
+		EventDeletionStarted, EventDestroyed, EventFinalizerRemoved,
 		EventInfrastructureRetained, EventRetainedStateFound, EventRetainedStateAdopted, EventPaused, EventResumed, EventProvisioned,
 		EventProviderIDSet, EventControlPlaneEndpointSet, EventFailureDomainsChanged, EventExportsNotPublished,
 		EventInputsChanged, EventDigestPinned, EventDigestUnknown, EventForceUnlocked, EventStateAdopted,

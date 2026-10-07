@@ -49,21 +49,6 @@ const (
 // destroy follows.
 const RestoreStateAnnotation = "captf.io/restore-state"
 
-// AbandonInfrastructureAnnotation releases a deleting TerraformCluster,
-// TerraformMachine or TerraformMachinePool whose deletion is held because
-// its state is missing or unreadable (StateReadable False), whose last
-// destroy Job failed, or whose destroy cannot start: the durable inputs
-// it renders from are gone (ApplyJobSucceeded False/DestroyFailed), the
-// identity does not allow the namespace or no longer exists
-// (IdentityNotAllowed), or the runner credentials cannot be prepared
-// (the Deleting condition says the destroy waits for them). Its value
-// must be the object's metadata.uid; any other value is ignored. The
-// controller then removes the finalizer without a destroy Job, records a
-// Warning event, and leaves whatever the module created running and
-// untracked. An object whose state reads and whose destroy can start is
-// destroyed as usual.
-const AbandonInfrastructureAnnotation = "captf.io/abandon-infrastructure"
-
 // TerraformClusterSpec is the desired state of a TerraformCluster: the
 // cluster-role module image and how to run it.
 // +kubebuilder:validation:MinProperties=1

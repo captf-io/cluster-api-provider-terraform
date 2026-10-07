@@ -18,9 +18,7 @@ package shared
 
 import (
 	"context"
-	"fmt"
 
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-api/util/conditions"
@@ -35,12 +33,14 @@ import (
 // cannot run against it, and dropping the finalizer would leave whatever
 // the module created running with nothing tracking it. The finalizer also
 // keeps the state backups, which are owner-referenced and go with the
-// object. The hold ends with a restore (the destroy follows), with the
-// abandon annotation, or once the state reads again. The abandon
-// annotation also releases a deletion whose destroy failed (also after a
-// restore) or cannot start (it cannot be rendered, the identity does not
-// allow the namespace, or its credentials cannot be prepared), so a
-// destroy that can never succeed has an escape.
+// object. The hold ends with a restore (the destroy follows), once the
+// state reads again, or with deletionPolicy Retain, which removes the
+// finalizer and keeps the state, its backups and the durable inputs for a
+// later adoption. Retain also releases a deletion whose destroy failed
+// (also after a restore) or cannot start (it cannot be rendered, the
+// identity does not allow the namespace, or its credentials cannot be
+// prepared), so a destroy that can never succeed has an escape that loses
+// nothing.
 
 // everApplied reports, using ctx and the shared dependencies d, whether
 // k's object ever applied, so a missing state means a lost one rather
@@ -77,15 +77,18 @@ func everApplied(ctx context.Context, d Deps, k Kind, suffix string, durable *in
 }
 
 // heldNote returns what a deleting object's StateReadable message adds
-// while its deletion is held: how to restore, and how to abandon with the
-// object's uid.
+// while its deletion is held: how to restore, and how to retain.
 func (r *reconciler) heldNote() string {
-	return fmt.Sprintf("Deletion is held: no destroy runs and the finalizer stays (keeping the state backups). "+
-		"Restore a backup listed in status.stateBackups with the %s annotation, and the destroy follows; "+
-		"or set %s=%s (this object's uid) to remove the finalizer without a destroy, leaving the infrastructure running and untracked; "+
-		"see https://captf.io/docs/operator-guide/runbooks/state-restore.html",
-		infrav1.RestoreStateAnnotation, infrav1.AbandonInfrastructureAnnotation, r.obj.GetUID())
+	return "Deletion is held: no destroy runs and the finalizer stays (keeping the state backups). " +
+		"Restore a backup listed in status.stateBackups with the " + infrav1.RestoreStateAnnotation + " annotation, and the destroy follows; " +
+		"or set " + retainHint + "; see https://captf.io/docs/operator-guide/runbooks/state-restore.html"
 }
+
+// retainHint says, for a condition message, how to remove the finalizer of
+// a deletion whose destroy cannot run without losing the way back to the
+// infrastructure.
+const retainHint = "spec.deletionPolicy: Retain to remove the finalizer without a destroy, " +
+	"leaving the infrastructure running and keeping its state, backups and durable inputs for a later adoption"
 
 // lostOnDelete sets StateReadable False/StateLost for a deleting object
 // whose state is missing although it applied before.
@@ -101,89 +104,10 @@ func (r *reconciler) lostOnDelete() {
 	})
 }
 
-// abandonRequested reports whether the abandon annotation names the
-// object's uid; any other value is ignored.
-func (r *reconciler) abandonRequested() bool {
-	v, ok := r.obj.GetAnnotations()[infrav1.AbandonInfrastructureAnnotation]
-	return ok && v == string(r.obj.GetUID())
-}
-
-// abandonCause returns why a deleting object's destroy cannot run, as
-// known before it is prepared, so the abandon annotation may skip it:
-// held (the state is lost or unreadable) names StateReadable's reason,
-// otherwise destroyBlocked reads bk, the pass's bookkeeping. It returns
-// "" when the destroy may run. The run checks it before the restore and
-// destroy decisions, so neither a pending restore that cannot start nor
-// a destroy that keeps failing hides it; a destroy that is about to start
-// and cannot is checked where it stops (abandonStart). An object whose
-// state reads and whose destroy can start is destroyed regardless: the
-// annotation would only skip a teardown that may well succeed, and is
-// honored once it fails or cannot start.
-func (r *reconciler) abandonCause(held bool, bk *Bookkeeping) string {
-	if held {
-		return infrav1.StateReadableCondition + " " + stateReadableReason(r.obj)
-	}
-	return r.destroyBlocked(bk)
-}
-
-// destroyBlocked returns why the deleting object's last destroy failed or
-// could not start, read from bk, the pass's bookkeeping, or "" when
-// neither: ApplyJobSucceeded is False, and status.lastRun names a destroy
-// (a failed destroy Job; both are kept once it is pruned), or the reason
-// is DestroyFailed (also set, without a Job, when the destroy cannot be
-// rendered) or IdentityNotAllowed (the identity does not allow the
-// namespace, or is gone). A retained Job's condition replaces the latter
-// two on the next pass, so abandonStart catches them where the destroy
-// stops as well.
-func (r *reconciler) destroyBlocked(bk *Bookkeeping) string {
-	c := bk.ApplyJob
-	if c.Status != metav1.ConditionFalse {
-		return ""
-	}
-	switch {
-	case r.st.LastRun.Operation == infrav1.OperationDestroy:
-		return "the last destroy failed: " + infrav1.ApplyJobSucceededCondition + " " + c.Reason
-	case c.Reason == infrav1.DestroyFailedReason, c.Reason == infrav1.IdentityNotAllowedReason:
-		return "the destroy cannot start: " + infrav1.ApplyJobSucceededCondition + " " + c.Reason
-	}
-	return ""
-}
-
-// abandonStart reports whether the abandon annotation releases a deleting
-// object whose Job was about to start and cannot, with why saying what
-// stops it, using ctx and the pass's bookkeeping bk. When it does, it
-// returns true with the result and error from cleanup; otherwise false
-// and a zero result.
-func (r *reconciler) abandonStart(ctx context.Context, bk *Bookkeeping, why string) (bool, ctrl.Result, error) {
-	if !r.deleting || !r.abandonRequested() {
-		return false, ctrl.Result{}, nil
-	}
-	res, err := r.abandon(ctx, bk, "the destroy cannot start: "+why)
-	return true, res, err
-}
-
-// abandon removes the finalizer of a deleting object without a destroy,
-// using ctx and the pass's bookkeeping bk, with why the reason the
-// InfrastructureAbandoned event gives. It returns the result and error
-// from cleanup.
-func (r *reconciler) abandon(ctx context.Context, bk *Bookkeeping, why string) (ctrl.Result, error) {
-	r.abandonWhy = why
-	return r.cleanup(ctx, bk, cleanupAbandoned)
-}
-
 // deletionHeld ends a pass of a deleting object whose state is lost or
-// unreadable, using ctx and the pass's bookkeeping bk: an abandon
-// annotation that is not the object's uid (abandoned released the uid
-// already) is ignored, which StateReadable's message says (so the change
-// emits its Warning once). It requeues at StateRequeue, and returns the
-// result and error from finish.
+// unreadable, using ctx and the pass's bookkeeping bk. It requeues at
+// StateRequeue, and returns the result and error from finish.
 func (r *reconciler) deletionHeld(ctx context.Context, bk *Bookkeeping) (ctrl.Result, error) {
-	if v, ok := r.obj.GetAnnotations()[infrav1.AbandonInfrastructureAnnotation]; ok {
-		if c := conditions.Get(r.obj, infrav1.StateReadableCondition); c != nil {
-			c.Message += fmt.Sprintf(" %s=%q is ignored: it is not this object's uid.", infrav1.AbandonInfrastructureAnnotation, v)
-			conditions.Set(r.obj, *c)
-		}
-	}
 	klog.FromContext(ctx).V(LogFlow).Info("Deletion held on the state", "reason", stateReadableReason(r.obj))
 	return r.finish(bk, nil, ctrl.Result{RequeueAfter: StateRequeue})
 }
@@ -194,15 +118,4 @@ func stateReadableReason(obj Object) string {
 		return c.Reason
 	}
 	return ""
-}
-
-// emitAbandoned records that the finalizer of the object was removed
-// without a destroy because the abandon annotation names its uid, and
-// why it could be (abandonWhy): the held state's StateReadable reason, a
-// failed destroy, or what keeps the destroy from starting.
-func (r *reconciler) emitAbandoned() {
-	r.d.Emit(r.obj, corev1.EventTypeWarning, EventInfrastructureAbandoned, "Delete",
-		"Removed finalizer %s without a destroy (%s): %s names this object's uid. "+
-			"Whatever the module created keeps running and is no longer managed; the state backups go with the object",
-		r.k.Finalizer(), r.abandonWhy, infrav1.AbandonInfrastructureAnnotation)
 }

@@ -175,9 +175,6 @@ type reconciler struct {
 	credsReady       bool
 	serviceAccount   string
 	finalizerDropped bool
-	// abandonWhy is why the abandon annotation released the deletion, for
-	// the InfrastructureAbandoned event; "" unless abandoned this pass.
-	abandonWhy string
 	// retainedFrom is the uid of the earlier object whose retained Secrets
 	// this pass found (checkRetained); "" when none.
 	retainedFrom string
@@ -417,7 +414,7 @@ func (r *reconciler) paused(ctx context.Context) (ctrl.Result, error) {
 // bookkeeping, the active-Job check, state and inputs, the operation
 // decision, and starting it. A deleting object prepares its credentials
 // only for a Job it is about to start (deletionCredentials): dropping the
-// finalizer without a Job (no state, abandoned) never waits on them. It
+// finalizer without a Job (no state, retained) never waits on them. It
 // returns the controller-runtime result and any error from that path.
 func (r *reconciler) run(ctx context.Context) (ctrl.Result, error) {
 	r.resolveIdentity()
@@ -502,12 +499,6 @@ func (r *reconciler) run(ctx context.Context) (ctrl.Result, error) {
 	// deletionPolicy Retain releases any deletion, held or not: decide
 	// returns ActionRetain before a restore or a destroy.
 	retain := r.deleting && r.eff.DeletionPolicy == infrav1.DeletionPolicyRetain
-	// Before the restore and destroy decisions: neither may hide it.
-	if r.deleting && !retain && r.abandonRequested() {
-		if why := r.abandonCause(held, bk); why != "" {
-			return r.abandon(ctx, bk, why)
-		}
-	}
 
 	var in any
 	var gate *Gate
@@ -567,13 +558,6 @@ func (r *reconciler) run(ctx context.Context) (ctrl.Result, error) {
 	case ActionJob:
 		if r.deleting {
 			r.deletionCredentials(ctx)
-			if !r.credsReady {
-				// Covers an identity that no longer allows the namespace
-				// (or is gone) too: credsReady requires it.
-				if ok, res, err := r.abandonStart(ctx, bk, "it waits for its credentials: "+r.credentialsBlocker()); ok {
-					return res, err
-				}
-			}
 		}
 		if dec.Op == jobs.OpRestore {
 			return r.startRestore(ctx, bk, dec, backup)
@@ -648,7 +632,7 @@ func (r *reconciler) startOp(ctx context.Context, bk *Bookkeeping, dec Decision,
 	if op == jobs.OpDestroy && !r.identityAllowed {
 		c := metav1.Condition{
 			Type: infrav1.ApplyJobSucceededCondition, Status: metav1.ConditionFalse, Reason: infrav1.IdentityNotAllowedReason,
-			Message: "Destroy waits until the identity allows this namespace again",
+			Message: "Destroy waits until the identity allows this namespace again, or set " + retainHint,
 		}
 		return r.finish(bk, &c, ctrl.Result{RequeueAfter: GateRequeue})
 	}
@@ -832,12 +816,10 @@ func (r *reconciler) files(ctx context.Context, op jobs.Op, in any) (render.File
 // returns the result and error from finish.
 func (r *reconciler) noFiles(ctx context.Context, bk *Bookkeeping, op jobs.Op) (ctrl.Result, error) {
 	if op == jobs.OpDestroy {
-		if ok, res, err := r.abandonStart(ctx, bk, "the durable inputs Secret is missing"); ok {
-			return res, err
-		}
 		c := metav1.Condition{
 			Type: infrav1.ApplyJobSucceededCondition, Status: metav1.ConditionFalse, Reason: infrav1.DestroyFailedReason,
-			Message: "The durable inputs Secret is missing, so destroy cannot be rendered; see https://captf.io/docs/operator-guide/runbooks/stuck-destroy.html",
+			Message: "The durable inputs Secret is missing, so destroy cannot be rendered. Restore it, or set " + retainHint +
+				"; see https://captf.io/docs/operator-guide/runbooks/stuck-destroy.html",
 		}
 		return r.finish(bk, &c, ctrl.Result{RequeueAfter: RetryMax})
 	}
@@ -944,9 +926,6 @@ const (
 	cleanupDestroyed cleanupMode = iota
 	// cleanupNoState is a deletion without state: nothing to destroy.
 	cleanupNoState
-	// cleanupAbandoned releases a deletion whose destroy cannot run
-	// without one (AbandonInfrastructureAnnotation).
-	cleanupAbandoned
 	// cleanupRetained keeps the infrastructure and its state for a later
 	// adoption (deletionPolicy Retain).
 	cleanupRetained
@@ -956,8 +935,8 @@ const (
 )
 
 // cleanup removes the finalizer, using ctx and the pass's bookkeeping bk,
-// after a successful destroy, on deletion without state, when a deletion
-// is abandoned, with deletionPolicy Retain (Retain keeps the state), or
+// after a successful destroy, on deletion without state, with
+// deletionPolicy Retain (Retain keeps the state), or
 // for an object held on another object's retained state (release only);
 // mode says which. A live Job holding the run lease, which the Job cache
 // has not shown yet, defers it by LagRequeue, as does a credential mirror
@@ -991,14 +970,12 @@ func (r *reconciler) cleanup(ctx context.Context, bk *Bookkeeping, mode cleanupM
 		return ctrl.Result{}, err
 	}
 	r.finalizerDropped = true
-	klog.FromContext(ctx).Info("Removed the finalizer", "destroyed", mode == cleanupDestroyed, "abandoned", mode == cleanupAbandoned,
+	klog.FromContext(ctx).Info("Removed the finalizer", "destroyed", mode == cleanupDestroyed,
 		"retained", mode == cleanupRetained, "heldOnRetained", mode == cleanupReleased)
 	switch mode {
 	case cleanupDestroyed:
 		r.d.Emit(r.obj, corev1.EventTypeNormal, EventDestroyed, "Delete", "Infrastructure destroyed; state and inputs removed")
 		r.d.Emit(r.obj, corev1.EventTypeNormal, EventFinalizerRemoved, "Delete", "Removed finalizer %s after the destroy", r.k.Finalizer())
-	case cleanupAbandoned:
-		r.emitAbandoned()
 	case cleanupRetained:
 		r.d.Emit(r.obj, corev1.EventTypeNormal, EventInfrastructureRetained, "Delete",
 			"Removed finalizer %s without a destroy (deletionPolicy Retain): the infrastructure keeps running. "+
@@ -1060,7 +1037,7 @@ func (r *reconciler) waitForCredentials(bk *Bookkeeping, op jobs.Op) (ctrl.Resul
 	if r.deleting {
 		conditions.Set(r.obj, metav1.Condition{
 			Type: clusterv1.DeletingCondition, Status: metav1.ConditionTrue, Reason: clusterv1.DeletingReason,
-			Message: fmt.Sprintf("The %s Job waits for its credentials: %s", op, r.credentialsBlocker()),
+			Message: fmt.Sprintf("The %s Job waits for its credentials: %s. To delete without it, set %s", op, r.credentialsBlocker(), retainHint),
 		})
 	}
 	return r.finish(bk, nil, ctrl.Result{RequeueAfter: GateRequeue})
