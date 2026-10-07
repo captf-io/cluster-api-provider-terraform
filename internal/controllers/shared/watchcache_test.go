@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
@@ -87,6 +88,8 @@ func TestManagedSecretEvents(t *testing.T) {
 	}{
 		{"state create", p.Create(event.CreateEvent{Object: stateSecret}), true},
 		{"state update", p.Update(event.UpdateEvent{ObjectOld: stateSecret, ObjectNew: stateWritten}), true},
+		// The informer's resync replays each cached object unchanged.
+		{"state resync", p.Update(event.UpdateEvent{ObjectOld: stateSecret, ObjectNew: stateSecret.DeepCopy()}), false},
 		{"state delete", p.Delete(event.DeleteEvent{Object: stateSecret}), true},
 		{"state generic", p.Generic(event.GenericEvent{Object: stateSecret}), true},
 		{"mirror create", p.Create(event.CreateEvent{Object: mirrorOld}), false},
@@ -100,6 +103,41 @@ func TestManagedSecretEvents(t *testing.T) {
 		if tt.got != tt.want {
 			t.Errorf("%s = %v, want %v", tt.name, tt.got, tt.want)
 		}
+	}
+}
+
+// TestOwnerSpecOrMetaChanged proves a Machine's status-only update is
+// dropped, and a spec, label, annotation, owner reference or deletion
+// change passes.
+func TestOwnerSpecOrMetaChanged(t *testing.T) {
+	t.Parallel()
+	base := &clusterv1.Machine{ObjectMeta: metav1.ObjectMeta{Namespace: testNS, Name: "m", Generation: 1, ResourceVersion: "1"}}
+	p := OwnerSpecOrMetaChanged()
+	for _, tt := range []struct {
+		name   string
+		change func(m *clusterv1.Machine)
+		want   bool
+	}{
+		{"status only", func(m *clusterv1.Machine) { m.Status.Phase = "Running" }, false},
+		{"spec", func(m *clusterv1.Machine) { m.Generation = 2 }, true},
+		{"labels", func(m *clusterv1.Machine) { m.Labels = map[string]string{"a": "b"} }, true},
+		{"annotations", func(m *clusterv1.Machine) {
+			m.Annotations = map[string]string{clusterv1.RemediateMachineAnnotation: ""}
+		}, true},
+		{"owner references", func(m *clusterv1.Machine) {
+			m.OwnerReferences = []metav1.OwnerReference{{Kind: "MachineSet", Name: "ms"}}
+		}, true},
+		{"deletion", func(m *clusterv1.Machine) { m.DeletionTimestamp = new(metav1.Now()) }, true},
+	} {
+		n := base.DeepCopy()
+		n.ResourceVersion = "2"
+		tt.change(n)
+		if got := p.Update(event.UpdateEvent{ObjectOld: base, ObjectNew: n}); got != tt.want {
+			t.Errorf("%s: %v, want %v", tt.name, got, tt.want)
+		}
+	}
+	if !p.Create(event.CreateEvent{Object: base}) || !p.Delete(event.DeleteEvent{Object: base}) {
+		t.Error("create or delete dropped")
 	}
 }
 

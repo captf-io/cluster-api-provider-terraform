@@ -82,7 +82,7 @@ func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager, opt
 		WithOptions(opts).
 		Watches(&clusterv1.Machine{},
 			handler.EnqueueRequestsFromMapFunc(util.MachineToInfrastructureMapFunc(infrav1.GroupVersion.WithKind(state.KindTerraformMachine))),
-			filter).
+			shared.OwnerSpecOrMetaChanged(), filter).
 		Watches(&clusterv1.Cluster{}, handler.EnqueueRequestsFromMapFunc(clusterToMachines),
 			predicates.ClusterPausedTransitionsOrInfrastructureProvisioned(scheme, logger), filter).
 		Watches(&infrav1.TerraformCluster{},

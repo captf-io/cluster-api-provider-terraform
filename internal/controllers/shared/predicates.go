@@ -95,18 +95,37 @@ func inheritedPolicy(tc *infrav1.TerraformCluster) []any {
 // carries one ownerRef per object using the identity in its namespace, so
 // passing its updates would wake every one of them each time one is added
 // or removed. Its users read it live when they need it, so they need no
-// other event. Updates of the other Secrets all pass: the watch sees only
-// metadata, so a data change cannot be told from an ownerRef change. It
-// returns the predicate to register on a watch.
+// other event. Updates of the other Secrets pass when they wrote
+// something: the watch sees only metadata, so a data change cannot be
+// told from an ownerRef change, but either bumps the resourceVersion,
+// which the informer's periodic resync of every cached Secret does not.
+// It returns the predicate to register on a watch.
 func ManagedSecretEvents() predicate.Funcs {
 	managed := func(o client.Object) bool { return o.GetLabels()[state.ManagedLabel] == "true" }
 	mirror := func(o client.Object) bool { return o.GetLabels()[identity.MirroredLabel] == "true" }
 	return predicate.Funcs{
-		CreateFunc:  func(e event.CreateEvent) bool { return managed(e.Object) && !mirror(e.Object) },
-		UpdateFunc:  func(e event.UpdateEvent) bool { return managed(e.ObjectNew) && !mirror(e.ObjectNew) },
+		CreateFunc: func(e event.CreateEvent) bool { return managed(e.Object) && !mirror(e.Object) },
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			return managed(e.ObjectNew) && !mirror(e.ObjectNew) && e.ObjectOld.GetResourceVersion() != e.ObjectNew.GetResourceVersion()
+		},
 		GenericFunc: func(e event.GenericEvent) bool { return managed(e.Object) && !mirror(e.Object) },
 		DeleteFunc:  func(e event.DeleteEvent) bool { return managed(e.Object) },
 	}
+}
+
+// OwnerSpecOrMetaChanged passes an owner's (a CAPI Machine's) creation,
+// deletion and generic events, and its updates that change what a
+// TerraformMachine reads of it: its spec (generation), labels,
+// annotations (remediation), owner references or deletion. CAPI writes a
+// Machine's status often (conditions, addresses, nodeRef), which the
+// TerraformMachine never reads; each such write would otherwise run a
+// full reconcile. It returns the predicate to register on a watch.
+func OwnerSpecOrMetaChanged() predicate.Predicate {
+	deletion := predicate.Funcs{UpdateFunc: func(e event.UpdateEvent) bool {
+		return e.ObjectOld.GetDeletionTimestamp().IsZero() != e.ObjectNew.GetDeletionTimestamp().IsZero() ||
+			!equality.Semantic.DeepEqual(e.ObjectOld.GetOwnerReferences(), e.ObjectNew.GetOwnerReferences())
+	}}
+	return predicate.Or[client.Object](predicate.GenerationChangedPredicate{}, predicate.LabelChangedPredicate{}, predicate.AnnotationChangedPredicate{}, deletion)
 }
 
 // IdentitySpecChanged passes a TerraformClusterIdentity's creation and
