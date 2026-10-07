@@ -686,7 +686,7 @@ jobs:
           target: cmd/tfcapi-lint/testdata/good/machine
           role: machine
           strict: true
-      - name: Action on a non-conforming module
+      - name: Action on a non-conforming module (expected to fail)
         id: bad
         if: ${{ steps.rel.outputs.run == 'true' }}
         continue-on-error: true
