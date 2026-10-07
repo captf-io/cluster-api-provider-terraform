@@ -322,6 +322,15 @@ const (
 	StateLockedReason = "StateLocked"
 	// StateNotFoundReason is the Unknown reason when no state exists yet.
 	StateNotFoundReason = "StateNotFound"
+	// ApplyOutcomeUnknownReason is the False reason when no state exists,
+	// but an apply Job ended without a result after its runner started
+	// (killed: OOM, node loss), or disappeared while it ran: it may have
+	// created resources that no state records. No apply runs, since a new
+	// one would create a second set, and a deletion keeps its finalizer,
+	// until a state backup is restored (RestoreStateAnnotation), the Job
+	// is confirmed to have created nothing (ConfirmNoResourcesAnnotation),
+	// or the deleting object's deletionPolicy is set to Retain.
+	ApplyOutcomeUnknownReason = "ApplyOutcomeUnknown"
 	// RetainedStateFoundReason is the False reason when the object's state
 	// Secrets, state backups or durable inputs were kept by an earlier
 	// object of the same kind, namespace and name, deleted with
@@ -734,7 +743,7 @@ func ConditionReasons() map[string]map[metav1.ConditionStatus][]string {
 		},
 		StateReadableCondition: {
 			metav1.ConditionTrue:    {StateReadReason},
-			metav1.ConditionFalse:   {StateEncryptedReason, StateCorruptReason, StateInconsistentReason, StateLostReason, StateLockedReason, RetainedStateFoundReason},
+			metav1.ConditionFalse:   {StateEncryptedReason, StateCorruptReason, StateInconsistentReason, StateLostReason, StateLockedReason, RetainedStateFoundReason, ApplyOutcomeUnknownReason},
 			metav1.ConditionUnknown: {StateNotFoundReason},
 		},
 		RestoreJobSucceededCondition: {

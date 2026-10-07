@@ -45,6 +45,7 @@ import (
 	"github.com/captf-io/cluster-api-provider-terraform/internal/metrics"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/plankey"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/runlease"
+	"github.com/captf-io/cluster-api-provider-terraform/internal/runner"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/state"
 )
 
@@ -62,6 +63,8 @@ type clientRunner struct {
 	// creationTimestamp with it, as the API server does and the fake
 	// client does not.
 	now func() time.Time
+	// pods are the pods Pods returns, by Job name; none when unset.
+	pods map[string][]corev1.Pod
 }
 
 // apiNow returns the time of e's clock, the one its API server stamps
@@ -111,8 +114,11 @@ func (r *clientRunner) Delete(ctx context.Context, job *batchv1.Job) error {
 	return client.IgnoreNotFound(r.c.Delete(ctx, job))
 }
 
-// Pods always returns nil, nil: clientRunner tests never read pods.
-func (r *clientRunner) Pods(context.Context, *batchv1.Job) ([]corev1.Pod, error) { return nil, nil }
+// Pods returns r.pods[job.Name], none unless a test set them, and a nil
+// error.
+func (r *clientRunner) Pods(_ context.Context, job *batchv1.Job) ([]corev1.Pod, error) {
+	return r.pods[job.Name], nil
+}
 
 // named returns a machine-mutator that sets m's Name to name and derives a
 // UID from it.
@@ -612,7 +618,7 @@ func TestClusterGateErrorReleasesBothLeases(t *testing.T) {
 func TestRunLeaseReleasedOnce(t *testing.T) {
 	t.Parallel()
 	var deletes atomic.Int32
-	e, _ := leaseEnv(t, true, interceptor.Funcs{Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+	e, jr := leaseEnv(t, true, interceptor.Funcs{Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
 		if _, ok := obj.(*coordinationv1.Lease); ok {
 			deletes.Add(1)
 		}
@@ -622,6 +628,8 @@ func TestRunLeaseReleasedOnce(t *testing.T) {
 	e.reconcileNamed(t, e.d, testName)
 	first := e.jobsOf(t)[0].Name
 	e.finishJob(t, first, jobs.Failed)
+	// It failed validating, before it could change anything: retried.
+	jr.pods = map[string][]corev1.Pod{first: {*podWith(failedResult(runner.StepValidate, runner.StepInit), "")}}
 	e.d.Clock = testingclock.NewFakePassiveClock(t0.Add(10 * time.Minute)) // past the retry backoff
 	e.reconcileNamed(t, e.d, testName)
 	if n := deletes.Load(); n != 1 {

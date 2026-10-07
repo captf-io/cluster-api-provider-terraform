@@ -37,9 +37,9 @@ import (
 	"github.com/captf-io/cluster-api-provider-terraform/internal/state"
 )
 
-// writeUnapplied writes m's durable inputs with no applied marker and no
-// pinned digest, as a first apply that has not finished leaves them, and
-// records an interrupted apply of job when job is not empty, failing t on
+// writeUnapplied writes m's attempt record with no applied marker and no
+// applied record, as a first apply that has not finished leaves them, and
+// records an unconfirmed apply of job when job is not empty, failing t on
 // error.
 func (e *env) writeUnapplied(t *testing.T, m *infrav1.TerraformMachine, job string) {
 	t.Helper()
@@ -54,10 +54,11 @@ func (e *env) writeUnapplied(t *testing.T, m *infrav1.TerraformMachine, job stri
 }
 
 // TestInterruptedFirstApplyOnDelete: a deleting object whose first apply's
-// Job vanished before any state was written is held (it may have created
-// resources) with a message naming the Job; one whose apply never started
-// drops its finalizer at once, in the reconcile and in the ownerless
-// preamble alike.
+// Job vanished or ended without a result before any state was written is
+// held (it may have created resources) with ApplyOutcomeUnknown and a
+// message naming the Job and the confirmation that releases it; one whose
+// apply never started drops its finalizer at once, in the reconcile and
+// in the ownerless preamble alike.
 func TestInterruptedFirstApplyOnDelete(t *testing.T) {
 	t.Parallel()
 	t.Run("reconcile: interrupted apply holds", func(t *testing.T) {
@@ -69,9 +70,10 @@ func TestInterruptedFirstApplyOnDelete(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		assertHeld(t, e, res.RequeueAfter, infrav1.StateLostReason)
+		assertHeld(t, e, res.RequeueAfter, infrav1.ApplyOutcomeUnknownReason)
 		msg := conditions.Get(e.get(t), infrav1.StateReadableCondition).Message
-		if !strings.Contains(msg, "apply-1") || !strings.Contains(msg, "may have created resources") || strings.Contains(msg, "applied before") {
+		if !strings.Contains(msg, "apply-1") || !strings.Contains(msg, "may have created resources") || strings.Contains(msg, "applied before") ||
+			!strings.Contains(msg, infrav1.ConfirmNoResourcesAnnotation+"=apply-1") || !strings.Contains(msg, "Deletion is held") {
 			t.Errorf("message = %q", msg)
 		}
 	})

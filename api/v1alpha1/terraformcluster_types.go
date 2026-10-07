@@ -49,6 +49,18 @@ const (
 // destroy follows.
 const RestoreStateAnnotation = "captf.io/restore-state"
 
+// ConfirmNoResourcesAnnotation releases a TerraformCluster,
+// TerraformMachine or TerraformMachinePool held with StateReadable
+// False/ApplyOutcomeUnknown: an apply Job ended without a result, or
+// disappeared, before any state was written, so it may have created
+// resources nothing records. Its value is that Job's name, as the
+// condition gives it; set it once the infrastructure is checked and
+// holds nothing the Job created. The controller then forgets the Job,
+// removes the annotation, and goes on as with no state: a live object
+// applies again, a deleting one drops its finalizer. A value naming
+// another Job is ignored.
+const ConfirmNoResourcesAnnotation = "captf.io/confirm-no-resources"
+
 // TerraformClusterSpec is the desired state of a TerraformCluster: the
 // cluster-role module image and how to run it.
 // +kubebuilder:validation:MinProperties=1

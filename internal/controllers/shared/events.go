@@ -166,7 +166,9 @@ const (
 	// adopted with its new inputs hash.
 	EventStateAdopted = "StateAdopted"
 	// EventStateLost: a provisioned object's state is gone or carries no
-	// inputs hash (StateReadable False/StateLost).
+	// inputs hash (StateReadable False/StateLost), or an apply whose
+	// outcome is unconfirmed may have left resources no state records
+	// (StateReadable False/ApplyOutcomeUnknown).
 	EventStateLost = "StateLost"
 	// EventStateLocked: the state lock is held by something else
 	// (StateReadable False/StateLocked).
@@ -602,7 +604,7 @@ func badStateReason(c metav1.Condition) string {
 		return EventOutputsInvalid
 	case c.Type == infrav1.IdentityAllowedCondition:
 		return EventIdentityNotAllowed
-	case c.Reason == infrav1.StateLostReason:
+	case c.Reason == infrav1.StateLostReason, c.Reason == infrav1.ApplyOutcomeUnknownReason:
 		return EventStateLost
 	case c.Reason == infrav1.StateLockedReason:
 		return EventStateLocked

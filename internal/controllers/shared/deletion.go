@@ -18,6 +18,8 @@ package shared
 
 import (
 	"context"
+	"errors"
+	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
@@ -34,8 +36,12 @@ import (
 // cannot run against it, and dropping the finalizer would leave whatever
 // the module created running with nothing tracking it. The finalizer also
 // keeps the state backups, which are owner-referenced and go with the
-// object. The hold ends with a restore (the destroy follows), once the
-// state reads again, or with deletionPolicy Retain, which removes the
+// object. The same holds while no state exists but an apply Job's outcome
+// is unconfirmed (ApplyOutcomeUnknown): it may have created resources
+// before any state was written. The hold ends with a restore (the destroy
+// follows), once the state reads again, with the unconfirmed Job confirmed
+// to have created nothing (ConfirmNoResourcesAnnotation), or with
+// deletionPolicy Retain, which removes the
 // finalizer and keeps the state, its backups and the durable inputs for a
 // later adoption. Retain also releases a deletion whose destroy failed
 // (also after a restore) or cannot start (it cannot be rendered, the
@@ -44,30 +50,35 @@ import (
 // nothing.
 
 // everApplied reports, using ctx and the shared dependencies d, whether
-// k's object ever applied, so a missing state means a lost one rather
-// than none yet: status.initialization.provisioned (which clusterctl move
-// does not carry over), the applied marker on durable (the inputs records
-// as read, nil when none; set at the first successful apply or restore,
-// moved with the Secret and never cleared), an applied record on durable
-// (only a successful apply writes one), an
-// interrupted apply recorded on durable while k's object is deleting (the
-// first apply's Job vanished before any state was written, so it may have
-// created resources: the deletion is held, not released), or any
-// state backup of suffix (a state existed; none are kept with
-// --state-backups=0). Secrets are read live through d.Client. It returns
-// any error listing the backups.
+// k's object ever applied or may have, so a missing state is not one that
+// was never written: it applied (appliedBefore), or an apply Job whose
+// outcome is unconfirmed is recorded on durable, the inputs records as
+// read (nil when none). That Job ended without a result or vanished
+// before any state was written, so it may have created resources: for
+// every kind, a deletion is held rather than released, and no second
+// first apply runs (ApplyOutcomeUnknown). It returns any error listing
+// the backups.
 func everApplied(ctx context.Context, d Deps, k Kind, suffix string, durable *inputs.Durable) (bool, error) {
+	if durable != nil && durable.InterruptedApply != "" {
+		return true, nil
+	}
+	return appliedBefore(ctx, d, k, suffix, durable)
+}
+
+// appliedBefore reports, using ctx and the shared dependencies d, whether
+// k's object applied before, so a missing state is a lost one:
+// status.initialization.provisioned (which clusterctl move does not carry
+// over), the applied marker on durable (the inputs records as read, nil
+// when none; set at the first successful apply or restore, moved with the
+// Secret and never cleared), an applied record on durable (only a
+// successful apply writes one), or any state backup of suffix (a state
+// existed; none are kept with --state-backups=0). Secrets are read live
+// through d.Client. It returns any error listing the backups.
+func appliedBefore(ctx context.Context, d Deps, k Kind, suffix string, durable *inputs.Durable) (bool, error) {
 	if p := k.Status().Initialization.Provisioned; p != nil && *p {
 		return true, nil
 	}
 	if durable != nil && (durable.AppliedMark || durable.Applied != nil) {
-		return true, nil
-	}
-	// Only a deleting object counts an interrupted apply: a live one applies
-	// again (the vanished Job is recorded so the next apply can be told),
-	// where deleting it would drop the finalizer over resources the lost
-	// Job may have created.
-	if durable != nil && durable.InterruptedApply != "" && !k.Object().GetDeletionTimestamp().IsZero() {
 		return true, nil
 	}
 	backups, err := state.ListBackups(ctx, d.Client, k.Object().GetNamespace(), suffix)
@@ -94,15 +105,61 @@ const retainHint = "spec.deletionPolicy: Retain to remove the finalizer without 
 // lostOnDelete sets StateReadable False/StateLost for a deleting object
 // whose state is missing although it applied before.
 func (r *reconciler) lostOnDelete() {
-	msg := "The state Secret is missing although the object applied before. "
-	if r.durable != nil && r.durable.InterruptedApply != "" && !r.durable.AppliedMark {
-		msg = "The state Secret is missing and apply Job " + r.durable.InterruptedApply +
-			" disappeared before it finished, so it may have created resources. "
-	}
 	conditions.Set(r.obj, metav1.Condition{
 		Type: infrav1.StateReadableCondition, Status: metav1.ConditionFalse, Reason: infrav1.StateLostReason,
-		Message: msg + r.heldNote(),
+		Message: "The state Secret is missing although the object applied before. " + r.heldNote(),
 	})
+}
+
+// outcomeUnknown sets StateReadable False/ApplyOutcomeUnknown for an
+// object without state whose apply Job job ended without a result or
+// disappeared, so it may have created resources no state records: no
+// apply runs, and a deletion is held (heldNote). The message names the
+// Job and the ways out: a restore, confirming the Job created nothing
+// (ConfirmNoResourcesAnnotation), or, deleting, Retain.
+func (r *reconciler) outcomeUnknown(job string) {
+	msg := "No state exists, but apply Job " + job + " ended without a result or disappeared while it ran, " +
+		"so it may have created resources that no state records. "
+	if r.deleting {
+		msg += "Once the infrastructure is checked and holds nothing it created, set " + infrav1.ConfirmNoResourcesAnnotation + "=" + job +
+			" to drop the finalizer. " + r.heldNote()
+	} else {
+		msg += "No apply runs, as a new one would create a second set. Once the infrastructure is checked and holds nothing it created, set " +
+			infrav1.ConfirmNoResourcesAnnotation + "=" + job + " to apply again; or restore a backup listed in status.stateBackups with the " +
+			infrav1.RestoreStateAnnotation + " annotation; see https://captf.io/docs/operator-guide/runbooks/state-restore.html"
+	}
+	conditions.Set(r.obj, metav1.Condition{
+		Type: infrav1.StateReadableCondition, Status: metav1.ConditionFalse, Reason: infrav1.ApplyOutcomeUnknownReason, Message: msg,
+	})
+}
+
+// confirmNoResources consumes ConfirmNoResourcesAnnotation, using ctx,
+// when it names the apply Job whose outcome is unconfirmed
+// (interruptedApply): the operator checked that the Job created nothing,
+// so the record is removed (inputs.ClearInterruptedApply), then the
+// annotation (removeAnnotation), and a missing state reads as none yet in
+// this same pass. An annotation naming another Job, or set while none is
+// recorded, is left alone. It returns any error from removing either.
+func (r *reconciler) confirmNoResources(ctx context.Context) error {
+	v, job := strings.TrimSpace(r.annotation(infrav1.ConfirmNoResourcesAnnotation)), r.interruptedApply()
+	if v == "" || job == "" {
+		return nil
+	}
+	logger := klog.FromContext(ctx)
+	if v != job {
+		logger.Info("The confirmation that an apply Job created nothing names another Job; ignored",
+			"annotation", infrav1.ConfirmNoResourcesAnnotation, "names", v, "unconfirmed", job)
+		return nil
+	}
+	if err := inputs.ClearInterruptedApply(ctx, r.d.Client, r.obj); err != nil && !errors.Is(err, inputs.ErrNotFound) {
+		return err
+	}
+	r.durable.InterruptedApply = ""
+	if err := r.removeAnnotation(ctx, infrav1.ConfirmNoResourcesAnnotation); err != nil {
+		return err
+	}
+	logger.Info("The operator confirmed that an apply Job whose outcome was unconfirmed created nothing; it no longer holds the object", "Job", job)
+	return nil
 }
 
 // deletionHeld ends a pass of a deleting object whose state is lost or

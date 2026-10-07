@@ -924,7 +924,7 @@ func TestHoldExportsVanishedApply(t *testing.T) {
 			t.Errorf("interrupted apply %q, revert annotations %v; want Job %s for both", d.InterruptedApply, r.Annotations, j.Name)
 		}
 		if c := e.applyCondition(); c.Reason != infrav1.ApplyFailedReason || c.Message != "Job "+j.Name+
-			": disappeared while it ran and may have applied part of its change; an apply of the current inputs is due "+
+			": ended without a result or disappeared while it ran, and may have applied part of its change; an apply of the current inputs is due "+
 			"(it is guarded, and a plan that deletes or replaces resources waits for approval)" {
 			t.Errorf("ApplyJobSucceeded while the revert runs = %+v", c)
 		}
@@ -947,7 +947,7 @@ func TestHoldExportsVanishedApply(t *testing.T) {
 		r := e.reconcileStarts(jobs.OpApply)
 		partial(e, a, exportsE1)
 		c := e.applyCondition()
-		if c.Reason != infrav1.ApplyFailedReason || !strings.HasPrefix(c.Message, "Job "+a.Name+": disappeared while it ran") ||
+		if c.Reason != infrav1.ApplyFailedReason || !strings.HasPrefix(c.Message, "Job "+a.Name+": ended without a result or disappeared while it ran") ||
 			!strings.HasSuffix(c.Message, "(it is guarded, and a plan that deletes or replaces resources waits for approval)") {
 			t.Errorf("ApplyJobSucceeded after the approved apply vanished = %+v", c)
 		}
@@ -1013,7 +1013,7 @@ func TestInterruptedApplyUnchangedExports(t *testing.T) {
 		t.Errorf("apply after Job %s vanished: args %v, annotations %v", j.Name, e.args(r), r.Annotations)
 	}
 	if c := e.applyCondition(); c.Status != metav1.ConditionFalse || c.Reason != infrav1.ApplyFailedReason || c.Message != "Job "+j.Name+
-		": disappeared while it ran and may have applied part of its change; an apply of the current inputs is due "+
+		": ended without a result or disappeared while it ran, and may have applied part of its change; an apply of the current inputs is due "+
 		"(it is not guarded: it renders no change of the cluster's exports)" {
 		t.Errorf("ApplyJobSucceeded while the apply runs = %+v", c)
 	}

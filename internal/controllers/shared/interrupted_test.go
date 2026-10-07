@@ -17,18 +17,22 @@ limitations under the License.
 package shared
 
 import (
+	"strings"
 	"testing"
 
 	testingclock "k8s.io/utils/clock/testing"
+	"sigs.k8s.io/cluster-api/util/conditions"
 
+	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/inputs"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/runlease"
 )
 
-// TestInterruptedApplyMachine: a machine's first apply deleted while it
-// runs is recorded as interrupted by no one: an immutable kind applies
-// again anyway until its first apply succeeds, and never after, so its
-// next apply carries no record of it. A mutable kind's is recorded.
+// TestInterruptedApplyMachine: a first apply deleted while it runs is
+// recorded as unconfirmed for every kind, immutable machines included:
+// it may have created resources before any state was written. No second
+// first apply runs (ApplyOutcomeUnknown) until the operator confirms the
+// Job created nothing; the apply after that carries no record of it.
 func TestInterruptedApplyMachine(t *testing.T) {
 	t.Parallel()
 	for name, mutable := range map[string]bool{"machine": false, "mutable kind": true} {
@@ -58,15 +62,28 @@ func TestInterruptedApplyMachine(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := ""
-			if mutable {
-				want = vanished
+			if d.InterruptedApply != vanished || !d.Attempt.MayHaveApplied {
+				t.Errorf("after Job %s vanished: unconfirmed apply %q, may have applied %v", vanished, d.InterruptedApply, d.Attempt.MayHaveApplied)
 			}
-			if d.InterruptedApply != want {
-				t.Errorf("interrupted apply after Job %s vanished = %q, want %q", vanished, d.InterruptedApply, want)
+			if len(e.runner.created) != 1 {
+				t.Errorf("after Job %s vanished: created %v, want no second first apply", vanished, e.runner.created)
 			}
-			if len(e.runner.created) != 2 || e.runner.jobs[0].Annotations[AfterInterruptedApplyAnnotation] != want {
-				t.Errorf("after Job %s vanished: created %v, annotations %v", vanished, e.runner.created, e.runner.jobs)
+			if c := conditions.Get(e.get(t), infrav1.StateReadableCondition); c == nil || c.Reason != infrav1.ApplyOutcomeUnknownReason || !strings.Contains(c.Message, vanished) {
+				t.Errorf("StateReadable = %+v, want ApplyOutcomeUnknown naming %s", c, vanished)
+			}
+
+			e.annotate(t, infrav1.ConfirmNoResourcesAnnotation, vanished)
+			if _, err := reconcileOnce(t, e, kind()); err != nil {
+				t.Fatal(err)
+			}
+			if d, _ := inputs.Read(t.Context(), e.c, testNS, "m", testName); d.InterruptedApply != "" {
+				t.Errorf("unconfirmed apply after the confirmation = %q", d.InterruptedApply)
+			}
+			if _, ok := e.get(t).Annotations[infrav1.ConfirmNoResourcesAnnotation]; ok {
+				t.Error("the confirmation was not consumed")
+			}
+			if len(e.runner.created) != 2 || e.jobNamed(t, e.runner.created[1]).Annotations[AfterInterruptedApplyAnnotation] != "" {
+				t.Errorf("after the confirmation: created %v, want a first apply that names no unconfirmed Job", e.runner.created)
 			}
 		})
 	}

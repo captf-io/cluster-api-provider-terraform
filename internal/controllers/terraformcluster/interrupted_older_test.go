@@ -53,7 +53,7 @@ func TestInterruptedApplyAfterOlderBlock(t *testing.T) {
 	if r.Annotations[shared.AfterInterruptedApplyAnnotation] != a.Name {
 		t.Errorf("follow-up apply annotations %v, want the interrupted Job %s", r.Annotations, a.Name)
 	}
-	if c := e.applyCondition(); c.Reason != infrav1.ApplyFailedReason || !strings.HasPrefix(c.Message, "Job "+a.Name+": disappeared while it ran") {
+	if c := e.applyCondition(); c.Reason != infrav1.ApplyFailedReason || !strings.HasPrefix(c.Message, "Job "+a.Name+": ended without a result or disappeared while it ran") {
 		t.Errorf("ApplyJobSucceeded while the follow-up apply is due = %+v, want Job %s disappeared", c, a.Name)
 	}
 }

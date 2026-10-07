@@ -314,6 +314,9 @@ func (r *reconciler) bookkeep(ctx context.Context) (*Bookkeeping, error) {
 	if bk.PartialSet != nil && r.durable != nil {
 		r.durable.Partial = bk.PartialSet
 	}
+	if bk.InterruptedSet != "" && r.durable != nil {
+		r.durable.InterruptedApply = bk.InterruptedSet
+	}
 	if bk.InterruptedCleared && r.durable != nil {
 		r.durable.InterruptedApply = ""
 	}
@@ -1354,19 +1357,33 @@ func (r *reconciler) localSecret(ctx context.Context, set func(metav1.ConditionS
 	return true, nil
 }
 
-// errStateUnreadable marks a state that exists but cannot be read, or the
-// state that is gone of an object that ever applied (everApplied).
+// errStateUnreadable marks a state that exists but cannot be read, the
+// state that is gone of an object that ever applied (appliedBefore), or
+// a missing state an apply whose outcome is unconfirmed may have left
+// resources without (outcomeUnknown).
 var errStateUnreadable = errors.New("state unreadable")
 
-// noState handles a missing state, using ctx: lost for an object that ever
-// applied (everApplied: provisioned, or the durable Secret's marks of an
-// apply, which survive clusterctl move, or a state backup); not yet there
-// otherwise. It returns errStateUnreadable for a lost state, or any error
-// from looking for a previous apply.
+// noState handles a missing state, using ctx: lost for an object that
+// applied before (appliedBefore: provisioned, or the inputs records'
+// marks of an apply, which survive clusterctl move, or a state backup);
+// held for one whose apply Job's outcome is unconfirmed (outcomeUnknown)
+// until the operator confirms it created nothing
+// (confirmNoResources); not yet there otherwise. It returns
+// errStateUnreadable for a lost or held state, or any error from looking
+// for a previous apply or consuming the confirmation.
 func (r *reconciler) noState(ctx context.Context) error {
-	lost, err := everApplied(ctx, r.d, r.k, r.suffix, r.durable)
+	lost, err := appliedBefore(ctx, r.d, r.k, r.suffix, r.durable)
 	if err != nil {
 		return err
+	}
+	if !lost {
+		if err := r.confirmNoResources(ctx); err != nil {
+			return err
+		}
+		if job := r.interruptedApply(); job != "" {
+			r.outcomeUnknown(job)
+			return errStateUnreadable
+		}
 	}
 	switch {
 	case lost && r.deleting:

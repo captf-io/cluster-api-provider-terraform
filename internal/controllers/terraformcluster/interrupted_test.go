@@ -384,7 +384,7 @@ func TestInterruptedApply(t *testing.T) {
 		t.Errorf("apply after Job %s vanished: args %v, annotations %v; want the state's inputs %s, guarded", j.Name, args(r), r.Annotations, h0)
 	}
 	if c := e.applyCondition(); c.Status != metav1.ConditionFalse || c.Reason != infrav1.ApplyFailedReason || c.Message != "Job "+j.Name+
-		": disappeared while it ran and may have applied part of its change; an apply of the current inputs is due "+
+		": ended without a result or disappeared while it ran, and may have applied part of its change; an apply of the current inputs is due "+
 		"(it is guarded, and a plan that deletes or replaces resources waits for approval)" {
 		t.Errorf("ApplyJobSucceeded while the apply runs = %+v", c)
 	}
@@ -602,7 +602,7 @@ func TestInterruptedApplyManual(t *testing.T) {
 			if len(started) == 0 {
 				break
 			}
-			if c := e.applyCondition(); c.Reason == infrav1.ApplyFailedReason && strings.HasPrefix(c.Message, "Job "+j.Name+": disappeared") {
+			if c := e.applyCondition(); c.Reason == infrav1.ApplyFailedReason && strings.HasPrefix(c.Message, "Job "+j.Name+": ended without a result or disappeared") {
 				interruptedSeen++
 			}
 			for _, name := range started {

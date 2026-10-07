@@ -84,15 +84,18 @@ const (
 	// size still tells a change of its exports from none. A hash, never
 	// an exported value.
 	AppliedClusterOutputsHashAnnotation = "captf.io/applied-cluster-outputs-hash"
-	// InterruptedApplyAnnotation names an apply Job of a TerraformCluster
-	// or TerraformMachinePool that is gone before it finished (deleted
-	// while it ran): no result tells how far it got, and the state's
-	// inputs hash, which only a successful apply writes, does not show
-	// what it may have changed. Until an apply started after it succeeds,
-	// an apply stays due, even of the state's own inputs. It holds a Job
-	// name, nothing else; SetInterruptedApply sets it and
-	// ClearInterruptedApply removes it.
-	InterruptedApplyAnnotation = "captf.io/interrupted-apply"
+	// InterruptedApplyAnnotation names an apply Job of any kind whose
+	// outcome is unconfirmed: it failed without a result after its runner
+	// started (killed: OOM, node loss), or it is gone before it finished
+	// (deleted while it ran). No result tells how far it got, and the
+	// state's inputs hash, which only a successful apply writes, does not
+	// show what it may have changed. Until an apply started after it
+	// succeeds, an apply stays due, even of the state's own inputs; while
+	// no state exists, a missing state is one it may have left resources
+	// without (ApplyOutcomeUnknown), which holds both a new first apply
+	// and a deletion. It holds a Job name, nothing else;
+	// SetInterruptedApply sets it and ClearInterruptedApply removes it.
+	InterruptedApplyAnnotation = "captf.io/unconfirmed-apply"
 )
 
 // Data keys: the two rendered files, and on a TerraformMachinePool's

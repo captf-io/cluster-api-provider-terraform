@@ -89,13 +89,16 @@ func TestAppliedMarker(t *testing.T) {
 		if err := writeInputs(t.Context(), e.c, k.obj, renderMachine(t), testMeta{Image: "registry.example/mod:1.0", Identity: testIdentity}); err != nil {
 			t.Fatal(err)
 		}
-		e.runner.jobs = append(e.runner.jobs, job("a", jobs.OpApply, jobs.Succeeded, t0.Add(-time.Minute)))
+		e.runner.jobs = append(e.runner.jobs, job(seedJob, jobs.OpApply, jobs.Succeeded, t0.Add(-time.Minute)))
 		e.state.st = &state.State{Serial: 1}
 		if _, err := reconcileOnce(t, e, k); err != nil {
 			t.Fatal(err)
 		}
 		if !e.applied(t) {
 			t.Error("a successful apply left no applied marker")
+		}
+		if d, err := inputs.Read(t.Context(), e.c, testNS, "m", testName); err != nil || d.Applied == nil || d.Applied.Job != seedJob || d.Applied.Digest != "" {
+			t.Errorf("records = %+v, %v; want the apply promoted without a digest", d, err)
 		}
 	})
 	t.Run("a state with an inputs hash", func(t *testing.T) {

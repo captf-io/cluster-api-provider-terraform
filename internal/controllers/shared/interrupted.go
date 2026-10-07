@@ -40,8 +40,8 @@ import (
 	"github.com/captf-io/cluster-api-provider-terraform/internal/jobs"
 )
 
-// recordVanishedApply records, using ctx, an apply Job of a mutable kind
-// that is gone before bookkeeping read it finish (deleted while it ran):
+// recordVanishedApply records, using ctx, an apply Job of any kind that
+// is gone before bookkeeping read it finish (deleted while it ran):
 // status.activeJob names an apply that bk, this pass's bookkeeping, does
 // not list, and the caller found that the API server does not have it
 // either (cacheLag). Bookkeeping never sees such a Job finish, so nothing
@@ -49,12 +49,15 @@ import (
 // inputs hash, which only a successful apply writes, does not show it.
 // It records:
 //
-//   - the Job as interrupted (inputs.SetInterruptedApply), unless one is
+//   - the Job as unconfirmed (inputs.SetInterruptedApply), unless one is
 //     recorded already: the first stays, and every apply started since
 //     carries its name (AfterInterruptedApplyAnnotation). Until one of
 //     those succeeds, an apply stays due (lastApplyFailed), even of the
 //     state's own inputs, and ApplyJobSucceeded says why
-//     (interruptedCondition). Every kind's marker, the cluster's included.
+//     (interruptedCondition); while no state exists, nothing applies and
+//     a deletion is held (ApplyOutcomeUnknown), since the Job may have
+//     created resources before any state was written. Every kind's
+//     marker, the cluster's included.
 //   - the attempt record as one whose Job may have changed resources
 //     (inputs.SetMayHaveApplied), when it is the Job's: a destroy then
 //     renders it (runRecord).
@@ -67,14 +70,12 @@ import (
 // names the Job (liveActiveJob): a cache that lags the pass that deleted
 // a stuck Job, which never started, and cleared it would name it here.
 // DeleteStuckJob clears it on the server before the delete, so a status
-// write of that pass that is lost leaves it cleared there too.
-// An immutable kind (a machine) records nothing: until its first apply
-// succeeds, an apply is due anyway, and it never applies again. It sets
+// write of that pass that is lost leaves it cleared there too. It sets
 // r.durable's fields, so this pass reads them, and returns any error from
 // reading the status or recording.
 func (r *reconciler) recordVanishedApply(ctx context.Context, bk *Bookkeeping) error {
 	a, d := r.st.ActiveJob, r.durable
-	if !r.k.Mutable() || a.Name == "" || a.Operation != infrav1.Operation(jobs.OpApply) || d == nil ||
+	if a.Name == "" || a.Operation != infrav1.Operation(jobs.OpApply) || d == nil ||
 		slices.ContainsFunc(bk.Jobs, func(j batchv1.Job) bool { return j.Name == a.Name }) {
 		return nil
 	}
@@ -212,8 +213,9 @@ func releaseActiveJob(ctx context.Context, d Deps, obj client.Object, job string
 	return nil
 }
 
-// interruptedApply returns the apply Job recorded as gone before it
-// finished (inputs.Durable.InterruptedApply), or "" when none is.
+// interruptedApply returns the apply Job recorded as one whose outcome is
+// unconfirmed: it ended without a result or is gone before it finished
+// (inputs.Durable.InterruptedApply); "" when none is.
 func (r *reconciler) interruptedApply() string {
 	if r.durable == nil {
 		return ""
@@ -222,7 +224,7 @@ func (r *reconciler) interruptedApply() string {
 }
 
 // clearInterrupted removes, using ctx and d, k's record of an apply Job
-// gone before it finished (inputs.ClearInterruptedApply) once f, a newly
+// whose outcome is unconfirmed (inputs.ClearInterruptedApply) once f, a newly
 // finished successful apply, was started after it: it carries its name
 // (AfterInterruptedApplyAnnotation), so it applied the current inputs in
 // full over whatever that Job left. durable is the durable Secret as read
@@ -240,15 +242,16 @@ func (bk *Bookkeeping) clearInterrupted(ctx context.Context, d Deps, k Kind, f *
 		return err
 	}
 	bk.InterruptedCleared = true
-	klog.FromContext(ctx).Info("An apply started after an apply Job that disappeared succeeded; no apply is due for it any more",
+	klog.FromContext(ctx).Info("An apply started after an apply Job whose outcome was unconfirmed succeeded; no apply is due for it any more",
 		"Job", klog.KObj(f.job), "interrupted", durable.InterruptedApply)
 	return nil
 }
 
-// interruptedDue is what ApplyJobSucceeded says while an apply Job that
-// disappeared keeps an apply due (interruptedCondition), after its name and
-// a colon, like every Job condition, so the event dedup names the Job.
-const interruptedDue = ": disappeared while it ran and may have applied part of its change; an apply of the current inputs is due"
+// interruptedDue is what ApplyJobSucceeded says while an apply Job whose
+// outcome is unconfirmed keeps an apply due (interruptedCondition), after
+// its name and a colon, like every Job condition, so the event dedup names
+// the Job.
+const interruptedDue = ": ended without a result or disappeared while it ran, and may have applied part of its change; an apply of the current inputs is due"
 
 // Whether the due apply is guarded against a destructive plan
 // (interruptedCondition).
@@ -265,23 +268,25 @@ const (
 )
 
 // interruptedCondition returns ApplyJobSucceeded, and true, while an apply
-// Job that disappeared keeps an apply due (interruptedApply) and bk's
-// newest apply predates it: it says nothing of that Job, whose own result
-// is gone, so the condition says the Job disappeared, that it may have
-// applied part of its change, that an apply of the current inputs is due,
+// Job whose outcome is unconfirmed keeps an apply due (interruptedApply)
+// and bk's newest apply predates it: it says nothing of that Job, whose
+// own result is gone, so the condition says the Job ended without a result
+// or disappeared, that it may have applied part of its change, that an
+// apply of the current inputs is due,
 // and whether that apply is guarded (a cluster's always is; a pool's is
 // when this pass's guard says so). An apply started since carries the
 // Job's name (AfterInterruptedApplyAnnotation) and reports itself, a
 // block or a changed plan included: its condition says what the due apply
 // waits for. An older apply's block or changed plan does not: that apply
-// predates the Job, which an approval may have started since. A pass that
-// built no inputs keeps a
+// predates the Job, which an approval may have started since. The Job
+// itself, still listed (it ended without a result), reports its own
+// failure. A pass that built no inputs keeps a
 // pool's condition already reported for the Job, and a deleting object's
 // destroy says what stands instead. It returns false when the condition
 // is not this one.
 func (r *reconciler) interruptedCondition(bk *Bookkeeping) (metav1.Condition, bool) {
 	job, last := r.interruptedApply(), bk.LastApply
-	if job == "" || r.deleting || (last != nil && last.Annotations[AfterInterruptedApplyAnnotation] == job) {
+	if job == "" || r.deleting || (last != nil && (last.Name == job || last.Annotations[AfterInterruptedApplyAnnotation] == job)) {
 		return metav1.Condition{}, false
 	}
 	note := interruptedGuarded

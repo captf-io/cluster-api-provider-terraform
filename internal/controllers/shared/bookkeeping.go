@@ -176,9 +176,13 @@ type Bookkeeping struct {
 	// pass for a newly failed guarded pool apply (inputs.SetPartial); nil
 	// when none.
 	PartialSet *inputs.Partial
+	// InterruptedSet is the apply Job bookkeeping recorded as unconfirmed
+	// (inputs.SetInterruptedApply) this pass: it newly ended without a
+	// result (crashedApply). "" when none.
+	InterruptedSet string
 	// InterruptedCleared is true when bookkeeping removed the record of an
-	// apply Job that disappeared (inputs.ClearInterruptedApply) this pass,
-	// for a newly finished successful apply started after it.
+	// unconfirmed apply Job (inputs.ClearInterruptedApply) this pass, for
+	// a newly finished successful apply started after it, or a restore.
 	InterruptedCleared bool
 	// ApplyJob is the ApplyJobSucceeded condition the newest finished apply
 	// or destroy Job implies. Reconcile sets it, unless a pending destroy is
@@ -624,6 +628,9 @@ func (bk *Bookkeeping) applyDestroy(ctx context.Context, d Deps, k Kind, done []
 				if err := bk.markMayHaveApplied(ctx, d, k, f, durable); err != nil {
 					return err
 				}
+				if err := bk.recordCrashed(ctx, d, k, f, durable); err != nil {
+					return err
+				}
 			}
 		}
 		if op == jobs.OpApply && bk.LastApplyBlocked && f.job != bk.LastApply && bk.priorApply == nil && !f.blocked && !f.planChanged {
@@ -853,13 +860,28 @@ func (bk *Bookkeeping) markMayHaveApplied(ctx context.Context, d Deps, k Kind, f
 // restored clears, using ctx and d, what k's newest restore Job, newly
 // finished successful and newer than k's newest finished apply, replaced:
 // the mark on the attempt record that its Job may have changed resources
-// (inputs.ClearMayHaveApplied). The operator chose the state; a destroy
-// renders the record whose hash it carries (runRecord). durable is the
-// inputs records as read this pass. It returns any error from clearing.
+// (inputs.ClearMayHaveApplied), and the record of an apply Job whose
+// outcome is unconfirmed (inputs.ClearInterruptedApply). The operator
+// chose the state: a destroy renders the record whose hash it carries
+// (runRecord), and a missing state no longer holds on the Job. durable is
+// the inputs records as read this pass. It returns any error from
+// clearing.
 func (bk *Bookkeeping) restored(ctx context.Context, d Deps, k Kind, durable *inputs.Durable) error {
 	f := bk.lastRestore
 	if f == nil || !f.ok || f.bookkept || (bk.LastApply != nil && !jobs.FinishedAt(f.job).After(jobs.FinishedAt(bk.LastApply))) {
 		return nil
+	}
+	if durable != nil && durable.InterruptedApply != "" {
+		err := inputs.ClearInterruptedApply(ctx, d.Client, k.Object())
+		switch {
+		case errors.Is(err, inputs.ErrNotFound):
+		case err != nil:
+			return err
+		default:
+			bk.InterruptedCleared = true
+			klog.FromContext(ctx).Info("A state backup was restored; the apply Job whose outcome was unconfirmed no longer holds anything",
+				"Job", klog.KObj(f.job), "unconfirmed", durable.InterruptedApply)
+		}
 	}
 	if t := durable.LastAttempt(); t != nil && t.MayHaveApplied {
 		err := inputs.ClearMayHaveApplied(ctx, d.Client, k.Object())
@@ -871,6 +893,40 @@ func (bk *Bookkeeping) restored(ctx context.Context, d Deps, k Kind, durable *in
 			bk.MayHaveAppliedCleared = true
 		}
 	}
+	return nil
+}
+
+// crashedApply reports whether f, a finished apply Job, ended in a way
+// that leaves its outcome unconfirmed: it failed without a runner result
+// (killed: OOM, node loss, a lost pod) after its runner started, so it
+// may have changed resources and no result tells how far it got. A
+// blocked apply, or one whose plan changed, reports a result.
+func crashedApply(f *finished) bool {
+	return jobs.OpOf(f.job) == jobs.OpApply && !f.ok && !f.blocked && !f.planChanged && f.result == nil && mayHaveApplied(f)
+}
+
+// recordCrashed records, using ctx and d, f, k's newest apply, newly
+// finished, as an apply Job whose outcome is unconfirmed
+// (inputs.SetInterruptedApply) when it crashed (crashedApply), for every
+// kind, as a Job that disappeared is: while no state exists, it holds a
+// new first apply and a deletion (ApplyOutcomeUnknown), where either
+// would otherwise create a second set of resources or drop the finalizer
+// over the first. durable is the inputs records as read this pass; the
+// first record stays. It returns any error from recording.
+func (bk *Bookkeeping) recordCrashed(ctx context.Context, d Deps, k Kind, f *finished, durable *inputs.Durable) error {
+	if durable == nil || durable.InterruptedApply != "" || !crashedApply(f) {
+		return nil
+	}
+	err := inputs.SetInterruptedApply(ctx, d.Client, k.Object(), f.job.Name)
+	switch {
+	case errors.Is(err, inputs.ErrNotFound):
+		return nil
+	case err != nil:
+		return err
+	}
+	bk.InterruptedSet = f.job.Name
+	klog.FromContext(ctx).Info("An apply Job ended without a result after its runner started, and may have changed resources; "+
+		"its outcome is unconfirmed until an apply started after it succeeds", "Job", klog.KObj(f.job))
 	return nil
 }
 

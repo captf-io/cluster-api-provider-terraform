@@ -25,7 +25,7 @@ limitations under the License.
 //     then a lost one), SetMayHaveApplied and ClearMayHaveApplied mark the
 //     record's Job as one that may have changed resources,
 //     SetInterruptedApply and ClearInterruptedApply record and remove an
-//     apply Job that is gone before it finished, and Delete removes it with
+//     apply Job whose outcome is unconfirmed, and Delete removes it with
 //     the applied Secret. A TerraformMachinePool's Secret also records the
 //     cluster exports of its last successful apply and their hash
 //     (RecordClusterOutputs, or SeedClusterOutputs, once, for a pool that

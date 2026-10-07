@@ -122,7 +122,8 @@ type Durable struct {
 	// applied (PartialClusterOutputsAnnotation); nil when none.
 	// WriteAttempt keeps it.
 	Partial *Partial
-	// InterruptedApply is the apply Job that is gone before it finished
+	// InterruptedApply is the apply Job whose outcome is unconfirmed: it
+	// ended without a result, or is gone before it finished
 	// (InterruptedApplyAnnotation); "" when none. WriteAttempt keeps it.
 	InterruptedApply string
 }
@@ -438,19 +439,21 @@ func ClearMayHaveApplied(ctx context.Context, c client.Client, owner client.Obje
 	return patchAnnotation(ctx, c, owner, MayHaveAppliedAnnotation, nil)
 }
 
-// SetInterruptedApply records job, an apply Job of owner that is gone
-// before it finished, on owner's durable Secret
-// (InterruptedApplyAnnotation), with one merge patch through c using ctx.
-// Only ClearInterruptedApply removes it. It returns ErrNotFound when the
-// Secret does not exist, or any other patch error.
+// SetInterruptedApply records job, an apply Job of owner whose outcome is
+// unconfirmed (it ended without a result, or is gone before it finished),
+// on owner's durable Secret (InterruptedApplyAnnotation), with one merge
+// patch through c using ctx. Only ClearInterruptedApply removes it. It
+// returns ErrNotFound when the Secret does not exist, or any other patch
+// error.
 func SetInterruptedApply(ctx context.Context, c client.Client, owner client.Object, job string) error {
 	return patchAnnotation(ctx, c, owner, InterruptedApplyAnnotation, job)
 }
 
 // ClearInterruptedApply removes InterruptedApplyAnnotation from owner's
 // durable Secret, with one merge patch through c using ctx, once an apply
-// started after the interrupted one succeeded. It returns ErrNotFound when
-// the Secret does not exist, or any other patch error.
+// started after the unconfirmed one succeeded, a restore replaced the
+// state, or the operator confirmed it created nothing. It returns
+// ErrNotFound when the Secret does not exist, or any other patch error.
 func ClearInterruptedApply(ctx context.Context, c client.Client, owner client.Object) error {
 	return patchAnnotation(ctx, c, owner, InterruptedApplyAnnotation, nil)
 }
