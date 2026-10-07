@@ -185,15 +185,75 @@ func PullFailed(pod *corev1.Pod) bool {
 // does not count: no other module image would fix it. It returns the
 // reason and true, or "" and false.
 func SourcePullFailed(pod *corev1.Pod) (reason string, ok bool) {
+	f, ok := SourcePullFailure(pod)
+	return f.Reason, ok
+}
+
+// PullFailure is why a pod's module image did not pull.
+type PullFailure struct {
+	// Reason is the kubelet's waiting reason (ErrImagePull,
+	// ImagePullBackOff, InvalidImageName).
+	Reason string
+	// Message is the kubelet's waiting message.
+	Message string
+	// Missing is true when the failure says the image does not exist
+	// (ImageMissing): only then is it worth trying another image.
+	Missing bool
+}
+
+// SourcePullFailure returns why pod's source container, which runs the
+// module image, is waiting on its image, as SourcePullFailed decides,
+// with the kubelet's message and whether it says the image is missing.
+func SourcePullFailure(pod *corev1.Pod) (PullFailure, bool) {
 	for _, cs := range pod.Status.ContainerStatuses {
 		if cs.Name != SourceContainer {
 			continue
 		}
 		if w := cs.State.Waiting; w != nil && slices.Contains(pullFailureReasons, w.Reason) {
-			return w.Reason, true
+			return PullFailure{Reason: w.Reason, Message: w.Message, Missing: ImageMissing(w.Reason, w.Message)}, true
 		}
 	}
-	return "", false
+	return PullFailure{}, false
+}
+
+// PullStartedAt returns when pod's source container started pulling its
+// image, as near as the pod tells: when the pod was initialized (the
+// runner init container finished; only then does the kubelet pull the
+// module image), else when the pod was created; the zero time when it
+// says neither.
+func PullStartedAt(pod *corev1.Pod) time.Time {
+	for _, c := range pod.Status.Conditions {
+		if c.Type == corev1.PodInitialized && c.Status == corev1.ConditionTrue && !c.LastTransitionTime.IsZero() {
+			return c.LastTransitionTime.Time
+		}
+	}
+	return pod.CreationTimestamp.Time
+}
+
+// ImageMissing reports whether a pull failure with the kubelet's waiting
+// reason and message says the image does not exist: an invalid reference,
+// or a registry answer of not found ("not found", "manifest unknown",
+// "name unknown", 404). An authorization error, a rate limit, a timeout
+// or a network error is not: the image may well exist, and the kubelet
+// retries. A message that mentions both (Docker Hub's "pull access denied,
+// repository does not exist or may require authorization") is ambiguous,
+// so it is not either.
+func ImageMissing(reason, message string) bool {
+	if reason == "InvalidImageName" {
+		return true
+	}
+	m := strings.ToLower(message)
+	for _, s := range []string{"unauthorized", "denied", "forbidden", "401", "403", "429", "too many requests", "authorization"} {
+		if strings.Contains(m, s) {
+			return false
+		}
+	}
+	for _, s := range []string{"not found", "manifest unknown", "name unknown", "404"} {
+		if strings.Contains(m, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // SourceImage returns the image job's source container runs, as its pod

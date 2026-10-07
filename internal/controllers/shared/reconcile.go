@@ -757,7 +757,7 @@ func (r *reconciler) startOp(ctx context.Context, bk *Bookkeeping, dec Decision,
 		req.PinnedDigest, req.RecordImage = a.Digest, a.Image
 	}
 	if r.durable != nil {
-		req.Unpullable = r.durable.Unpullable
+		req.Unpullable = inputs.UnpullableRefs(r.durable.Unpullable, r.d.Clock.Now())
 	}
 
 	files, rec, ok, err := r.files(ctx, op, in, view.InputsHash)

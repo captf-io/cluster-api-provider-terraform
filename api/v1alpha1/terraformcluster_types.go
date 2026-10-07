@@ -61,6 +61,16 @@ const RestoreStateAnnotation = "captf.io/restore-state"
 // another Job is ignored.
 const ConfirmNoResourcesAnnotation = "captf.io/confirm-no-resources"
 
+// DestroyImageAnnotation names, on a TerraformCluster, TerraformMachine or
+// TerraformMachinePool, a module image a destroy may run when the
+// image that applied the state, and every other reference to that same
+// release, cannot be pulled. A destroy otherwise never falls back to
+// another release (spec.source.image changed since, say): an image built
+// from different module code may fail on the state, or forget resources
+// it no longer declares. Set it only to an image that can destroy what
+// the recorded one created.
+const DestroyImageAnnotation = "captf.io/destroy-image"
+
 // TerraformClusterSpec is the desired state of a TerraformCluster: the
 // cluster-role module image and how to run it.
 // +kubebuilder:validation:MinProperties=1

@@ -128,8 +128,9 @@ type Durable struct {
 	InterruptedApply string
 	// Unpullable lists the image references a non-apply Job could not
 	// pull since the last successful apply (UnpullableImagesAnnotation),
-	// oldest first; nil when none. WriteAttempt keeps it.
-	Unpullable []string
+	// with when each was recorded, oldest first; nil when none.
+	// UnpullableRefs gives those still passed over. WriteAttempt keeps it.
+	Unpullable []Unpullable
 }
 
 // LastAttempt returns d's attempt record; nil when d is nil or has none.

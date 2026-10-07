@@ -98,10 +98,11 @@ const (
 	InterruptedApplyAnnotation = "captf.io/unconfirmed-apply"
 	// UnpullableImagesAnnotation lists, on the durable Secret, the image
 	// references a destroy, refresh, drift or restore Job of the object
-	// could not pull (a JSON array, oldest first, at most MaxUnpullable):
-	// the next such Job runs the next image it may (the applied record's
-	// tag, then spec.source.image) instead. AddUnpullable appends to it;
-	// only a successful apply, which pins a new digest, removes it
+	// could not pull because the registry has no such image (a JSON array
+	// of {"ref", "at"} entries, oldest first, at most MaxUnpullable): for
+	// UnpullableTTL after an entry was recorded, the next such Job runs
+	// the next image it may instead (ChooseImage). AddUnpullable appends
+	// to it; a successful apply, which pins a new digest, removes it
 	// (ClearUnpullable). WriteAttempt keeps it.
 	UnpullableImagesAnnotation = "captf.io/unpullable-images"
 )

@@ -25,6 +25,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/distribution/reference"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -54,17 +55,64 @@ import (
 // record (jobSource), then spec, spec.source.image: each later one is a
 // fallback for when the earlier ones cannot be pulled (ChooseImage).
 // Empty and repeated references are left out.
-func ImageCandidates(op jobs.Op, source, pinned, recorded, spec string) []string {
+//
+// A destroy is the last run against the state, and its success deletes
+// it: run with module code other than the release that applied, it may
+// fail on the state, or succeed while forgetting resources that code no
+// longer declares. So once recorded is known, a destroy keeps only the
+// references to that same release (SameRelease), and then override, the
+// operator's DestroyImageAnnotation, as the last resort; other operations
+// ignore override.
+func ImageCandidates(op jobs.Op, source, pinned, recorded, spec, override string) []string {
 	if op == jobs.OpApply || op == jobs.OpPlan {
 		return []string{source}
 	}
 	var out []string
 	for _, ref := range []string{pinned, recorded, source, spec} {
-		if ref != "" && !slices.Contains(out, ref) {
-			out = append(out, ref)
+		if ref == "" || slices.Contains(out, ref) {
+			continue
 		}
+		if op == jobs.OpDestroy && ref != pinned && recorded != "" && !SameRelease(ref, recorded) {
+			continue
+		}
+		out = append(out, ref)
+	}
+	if op == jobs.OpDestroy && override != "" && !slices.Contains(out, override) {
+		out = append(out, override)
 	}
 	return out
+}
+
+// SameRelease reports whether image references a and b name the same
+// release of a module image: the same repository and the same tag (an
+// untagged, undigested reference is "latest"), whatever digest either
+// adds; two digest-only references must carry the same digest. A
+// reference that does not parse matches nothing.
+func SameRelease(a, b string) bool {
+	na, errA := reference.ParseNormalizedNamed(a)
+	nb, errB := reference.ParseNormalizedNamed(b)
+	if errA != nil || errB != nil || na.Name() != nb.Name() {
+		return false
+	}
+	ta, tb := releaseTag(na), releaseTag(nb)
+	if ta == "" && tb == "" {
+		da, okA := na.(reference.Digested)
+		db, okB := nb.(reference.Digested)
+		return okA && okB && da.Digest() == db.Digest()
+	}
+	return ta == tb
+}
+
+// releaseTag returns n's tag, "latest" when n has neither a tag nor a
+// digest, and "" for a digest-only reference.
+func releaseTag(n reference.Named) string {
+	if t, ok := n.(reference.Tagged); ok {
+		return t.Tag()
+	}
+	if _, ok := n.(reference.Digested); ok {
+		return ""
+	}
+	return "latest"
 }
 
 // ChooseImage picks, from candidates (ImageCandidates), the image
@@ -310,7 +358,7 @@ func startJob(ctx context.Context, d Deps, k Kind, req JobRequest) (job *batchv1
 	if err := pauseHandshake(ctx, d, obj, req.ClusterName); err != nil {
 		return nil, false, err
 	}
-	candidates := ImageCandidates(req.Op, req.Source.Image, req.PinnedDigest, req.RecordImage, k.Spec().Source.Image)
+	candidates := ImageCandidates(req.Op, req.Source.Image, req.PinnedDigest, req.RecordImage, k.Spec().Source.Image, obj.GetAnnotations()[infrav1.DestroyImageAnnotation])
 	ref, fallback := ChooseImage(req.Op, candidates, req.Unpullable)
 	if req.Op != jobs.OpApply && req.Op != jobs.OpPlan && req.PinnedDigest == "" {
 		d.Emit(obj, corev1.EventTypeWarning, EventDigestUnknown, "Run", "No image digest is pinned; %s runs %s", req.Op, ref)

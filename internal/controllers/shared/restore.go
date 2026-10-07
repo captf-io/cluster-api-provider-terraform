@@ -35,6 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
+	"github.com/captf-io/cluster-api-provider-terraform/internal/inputs"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/jobs"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/metrics"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/render"
@@ -289,7 +290,8 @@ func (r *reconciler) startRestore(ctx context.Context, bk *Bookkeeping, dec Deci
 		req.PinnedDigest, req.RecordImage = a.Digest, a.Image
 	}
 	if r.durable != nil {
-		req.Unpullable = r.durable.Unpullable
+		// An expired entry is tried again (inputs.UnpullableTTL).
+		req.Unpullable = inputs.UnpullableRefs(r.durable.Unpullable, r.d.Clock.Now())
 	}
 	wait, err := r.takeLeases(ctx, req, JobName(r.k, req))
 	if err != nil {

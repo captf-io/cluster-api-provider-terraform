@@ -52,6 +52,32 @@ func TestSourcePullFailed(t *testing.T) {
 	}
 }
 
+// TestImageMissing proves only an invalid reference or a registry's
+// not-found answer counts as a missing image, and an authorization error,
+// a rate limit, a network error or an ambiguous message does not.
+func TestImageMissing(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		reason, message string
+		want            bool
+	}{
+		{"InvalidImageName", `couldn't parse image name "Bad:Ref"`, true},
+		{"ErrImagePull", `failed to pull and unpack image "ghcr.io/o/m@sha256:ab": failed to resolve reference "ghcr.io/o/m@sha256:ab": ghcr.io/o/m@sha256:ab: not found`, true},
+		{"ErrImagePull", `rpc error: code = NotFound desc = failed to pull and unpack image: manifest unknown`, true},
+		{"ImagePullBackOff", `Back-off pulling image "r.example/m:v1": ErrImagePull: name unknown: repository name not known to registry`, true},
+		{"ErrImagePull", `unexpected status from HEAD request: 404 Not Found`, true},
+		{"ErrImagePull", `failed to authorize: failed to fetch oauth token: 401 Unauthorized`, false},
+		{"ErrImagePull", `pull access denied, repository does not exist or may require authorization: not found`, false},
+		{"ErrImagePull", `unexpected status code 429 Too Many Requests`, false},
+		{"ErrImagePull", `dial tcp: lookup r.example on 10.0.0.10:53: no such host`, false},
+		{"ImagePullBackOff", `Back-off pulling image "r.example/m:v1"`, false},
+	} {
+		if got := ImageMissing(tc.reason, tc.message); got != tc.want {
+			t.Errorf("ImageMissing(%s, %q) = %v, want %v", tc.reason, tc.message, got, tc.want)
+		}
+	}
+}
+
 // TestSourceImage proves SourceImage reads the source container's image
 // from the pod template, and "" without one.
 func TestSourceImage(t *testing.T) {

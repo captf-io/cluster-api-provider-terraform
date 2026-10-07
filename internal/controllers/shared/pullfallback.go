@@ -34,25 +34,35 @@ import (
 	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/inputs"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/jobs"
+	"github.com/captf-io/cluster-api-provider-terraform/internal/strutil"
 )
 
-// PullFailureGrace is how old a destroy, refresh, drift or restore Job
-// must be before pullStuck acts on its module image failing to pull: a
+// PullFailureGrace is how long a destroy, refresh, drift or restore
+// Job's pod must have been pulling (jobs.PullStartedAt; the Job must be as
+// old) before pullStuck acts on its module image failing to pull: a
 // registry hiccup clears within it, and the kubelet retries meanwhile.
 const PullFailureGrace = 2 * time.Minute
+
+// maxPullMessage bounds the kubelet's pull error quoted in a condition.
+const maxPullMessage = 256
 
 // pullRunbook is the runbook section on image pull failures.
 const pullRunbook = "https://captf.io/docs/operator-guide/runbooks/job-failures.html#image-pull-failures"
 
 // pullStuck handles job, the active Job, when it is a destroy, refresh,
 // drift or restore Job at least PullFailureGrace old whose module image
-// cannot be pulled (jobs.SourcePullFailed on one of its pods, listed
+// cannot be pulled (jobs.SourcePullFailure on one of its pods, listed
 // using ctx): a pinned digest the registry garbage collected would
 // otherwise hold it until activeDeadlineSeconds, again on every retry.
+// Only a registry's answer that the image is missing (jobs.ImageMissing)
+// tries another image: an authorization error, a rate limit or an outage
+// is reported (ImagePullFailed) and left to the kubelet's retries.
 //
 // With an image left to fall back to (ImageFallbacksAnnotation, then
-// spec.source.image as it is now), the Job's image is recorded on the
-// durable Secret as unpullable (inputs.AddUnpullable), status.activeJob
+// spec.source.image as it is now, or for a destroy the
+// DestroyImageAnnotation override), the Job's image is recorded on the
+// durable Secret as unpullable for inputs.UnpullableTTL
+// (inputs.AddUnpullable), status.activeJob
 // is released on the API server and the Job deleted, as DeleteStuckJob
 // does, and the Warning ImagePullFallback says which image runs next;
 // the next pass that may start a Job starts the operation on it
@@ -80,32 +90,49 @@ func (r *reconciler) pullStuck(ctx context.Context, job *batchv1.Job, paused boo
 	if err != nil {
 		return false, nil, fmt.Errorf("list pods of %s: %w", job.Name, err)
 	}
-	reason := ""
+	var failure jobs.PullFailure
+	found := false
 	for i := range pods {
 		// A pod of an earlier Job of this name (deleted here, its pods
 		// still going) is not this Job's.
 		if job.UID != "" && !metav1.IsControlledBy(&pods[i], job) {
 			continue
 		}
-		if why, ok := jobs.SourcePullFailed(&pods[i]); ok {
-			reason = why
-			break
+		if f, ok := jobs.SourcePullFailure(&pods[i]); ok {
+			// The grace runs from the pull itself, not from the Job: a pod
+			// that waited for a node pulls late.
+			started := jobs.PullStartedAt(&pods[i])
+			if started.IsZero() || r.d.Clock.Now().Sub(started) >= PullFailureGrace {
+				failure, found = f, true
+				break
+			}
 		}
 	}
-	if reason == "" {
+	if !found {
 		return false, nil, nil
 	}
 	image := jobs.SourceImage(job)
-	var unpullable []string
-	if r.durable != nil {
-		unpullable = r.durable.Unpullable
+	reason := failure.Reason
+	if failure.Message != "" {
+		reason += ": " + strutil.Truncate(failure.Message, maxPullMessage)
 	}
-	next := r.pullFallbacks(job, image, unpullable)
+	if !failure.Missing {
+		// An authorization error, a rate limit or an outage: the image may
+		// well exist, and another release is no fix for it.
+		return r.pullFailedJob(ctx, job, image, reason,
+			"the registry did not say the image is missing (an authorization, rate-limit or network error, which the kubelet keeps retrying), so no other image is tried", paused)
+	}
+	now := r.d.Clock.Now()
+	var entries []inputs.Unpullable
+	if r.durable != nil {
+		entries = r.durable.Unpullable
+	}
+	next := r.pullFallbacks(job, image, inputs.UnpullableRefs(entries, now))
 	logger := klog.LoggerWithValues(klog.FromContext(ctx), "Job", klog.KObj(job), "image", image, "reason", reason)
 	if len(next) == 0 {
 		return r.pullFailedJob(ctx, job, image, reason, "", paused)
 	}
-	recorded, added, err := inputs.AddUnpullable(ctx, r.d.Client, r.obj, unpullable, image)
+	recorded, added, err := inputs.AddUnpullable(ctx, r.d.Client, r.obj, entries, image, now)
 	switch {
 	case errors.Is(err, inputs.ErrNotFound):
 		return r.pullFailedJob(ctx, job, image, reason, "the durable inputs Secret that records unpullable images is missing, so no other image can be tried", paused)
@@ -193,16 +220,24 @@ func (r *reconciler) keepPausedPullFailure() *metav1.Condition {
 // pullFallbacks returns the images job, which runs image, falls back to
 // in order: those it recorded when it started (ImageFallbacksAnnotation),
 // then spec.source.image as it is now (an operator may have fixed it
-// since), less image itself and unpullable, the images already known not
-// to pull.
+// since; for a destroy, the DestroyImageAnnotation override instead),
+// less image itself and unpullable, the images already known not to
+// pull.
 func (r *reconciler) pullFallbacks(job *batchv1.Job, image string, unpullable []string) []string {
 	var recorded []string
 	if raw := job.Annotations[ImageFallbacksAnnotation]; raw != "" {
 		// Unparsable, it leaves only the spec image to fall back to.
 		_ = json.Unmarshal([]byte(raw), &recorded)
 	}
+	// A destroy never falls back to spec.source.image, which may be
+	// another release (ImageCandidates); only the operator's override may
+	// follow its recorded images.
+	late := r.k.Spec().Source.Image
+	if jobs.OpOf(job) == jobs.OpDestroy {
+		late = r.obj.GetAnnotations()[infrav1.DestroyImageAnnotation]
+	}
 	var out []string
-	for _, ref := range append(recorded, r.k.Spec().Source.Image) {
+	for _, ref := range append(recorded, late) {
 		if ref != "" && ref != image && !slices.Contains(unpullable, ref) && !slices.Contains(out, ref) {
 			out = append(out, ref)
 		}
@@ -236,7 +271,8 @@ func (r *reconciler) pullFailed(job *batchv1.Job, image, reason, why string, del
 	switch op {
 	case jobs.OpDestroy:
 		c.Type = infrav1.ApplyJobSucceededCondition
-		c.Message = msg + fix.String() + "; or set " + retainHint + "; see " + pullRunbook
+		c.Message = msg + fix.String() + "; or annotate the object " + infrav1.DestroyImageAnnotation + "=<image> to destroy with an image that can destroy what " +
+			image + " created; or set " + retainHint + "; see " + pullRunbook
 		return &c
 	case jobs.OpRestore:
 		c.Type = infrav1.RestoreJobSucceededCondition

@@ -21,52 +21,92 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // MaxUnpullable caps UnpullableImagesAnnotation: a Job picks among at most
-// three images (the pinned digest, the recorded tag and
+// four images (the pinned digest, the recorded tag, the source and
 // spec.source.image), so older entries no longer matter.
-const MaxUnpullable = 3
+const MaxUnpullable = 4
 
-// parseUnpullable returns the image references raw, an
-// UnpullableImagesAnnotation value, lists; nil when it is empty or does
-// not parse, which only makes the next Job try the pinned image again.
-func parseUnpullable(raw string) []string {
+// UnpullableTTL is how long an image a Job could not pull is passed over:
+// after it, the next Job tries that image again, as it may have been
+// pushed back, and records it again if it still does not pull.
+const UnpullableTTL = time.Hour
+
+// Unpullable is one image a non-apply Job could not pull
+// (UnpullableImagesAnnotation).
+type Unpullable struct {
+	// Ref is the image reference.
+	Ref string `json:"ref"`
+	// At is when it was recorded.
+	At time.Time `json:"at"`
+}
+
+// parseUnpullable returns the entries raw, an UnpullableImagesAnnotation
+// value, lists; nil when it is empty or does not parse, which only makes
+// the next Job try the pinned image again. A list of bare references, as
+// earlier releases wrote it, reads with zero times: already expired.
+func parseUnpullable(raw string) []Unpullable {
 	if raw == "" {
 		return nil
+	}
+	var parsed []Unpullable
+	if err := json.Unmarshal([]byte(raw), &parsed); err == nil {
+		return parsed
 	}
 	var refs []string
 	if err := json.Unmarshal([]byte(raw), &refs); err != nil {
 		return nil
 	}
-	return refs
+	entries := make([]Unpullable, 0, len(refs))
+	for _, r := range refs {
+		entries = append(entries, Unpullable{Ref: r})
+	}
+	return entries
+}
+
+// UnpullableRefs returns the references of entries recorded within
+// UnpullableTTL before now, oldest first: the images a Job passes over.
+func UnpullableRefs(entries []Unpullable, now time.Time) []string {
+	var out []string
+	for _, e := range entries {
+		if now.Sub(e.At) < UnpullableTTL {
+			out = append(out, e.Ref)
+		}
+	}
+	return out
 }
 
 // AddUnpullable records ref, an image a non-apply Job of owner could not
-// pull, on owner's durable Secret (UnpullableImagesAnnotation) with one
-// merge patch through c using ctx. current is the list as Read returned
-// it: ref is appended unless listed already, and only the newest
-// MaxUnpullable entries are kept. It returns the list now recorded and
-// whether ref was added, ErrNotFound when the Secret does not exist, or
-// any other patch error.
-func AddUnpullable(ctx context.Context, c client.Client, owner client.Object, current []string, ref string) ([]string, bool, error) {
-	if slices.Contains(current, ref) {
+// pull, at now, on owner's durable Secret (UnpullableImagesAnnotation)
+// with one merge patch through c using ctx. current is the list as Read
+// returned it: an entry for ref is replaced by the new one, entries
+// expired at now are dropped, and only the newest MaxUnpullable are kept.
+// It returns the list now recorded and whether ref was added (false when
+// it was listed and still current, which costs no call), ErrNotFound when
+// the Secret does not exist, or any other patch error.
+func AddUnpullable(ctx context.Context, c client.Client, owner client.Object, current []Unpullable, ref string, now time.Time) ([]Unpullable, bool, error) {
+	if slices.Contains(UnpullableRefs(current, now), ref) {
 		return current, false, nil
 	}
-	refs := append(slices.Clone(current), ref)
-	if len(refs) > MaxUnpullable {
-		refs = refs[len(refs)-MaxUnpullable:]
+	entries := slices.DeleteFunc(slices.Clone(current), func(e Unpullable) bool {
+		return e.Ref == ref || now.Sub(e.At) >= UnpullableTTL
+	})
+	entries = append(entries, Unpullable{Ref: ref, At: now.UTC().Truncate(time.Second)})
+	if len(entries) > MaxUnpullable {
+		entries = entries[len(entries)-MaxUnpullable:]
 	}
-	raw, err := json.Marshal(refs)
+	raw, err := json.Marshal(entries)
 	if err != nil {
 		return nil, false, fmt.Errorf("inputs: encode unpullable images: %w", err)
 	}
 	if err := patchAnnotation(ctx, c, owner, UnpullableImagesAnnotation, string(raw)); err != nil {
 		return nil, false, err
 	}
-	return refs, true, nil
+	return entries, true, nil
 }
 
 // ClearUnpullable removes UnpullableImagesAnnotation from owner's durable

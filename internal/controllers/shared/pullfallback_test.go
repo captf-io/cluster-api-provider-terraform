@@ -50,16 +50,22 @@ func TestImageCandidates(t *testing.T) {
 		name                           string
 		op                             jobs.Op
 		source, pinned, recorded, spec string
+		override                       string
 		want                           []string
 	}{
-		{"apply", jobs.OpApply, specRef, pinnedRef, appliedTag, specRef, []string{specRef}},
-		{"plan", jobs.OpPlan, specRef, pinnedRef, appliedTag, specRef, []string{specRef}},
-		{"destroy, applied record", jobs.OpDestroy, specRef, pinnedRef, appliedTag, specRef, []string{pinnedRef, appliedTag, specRef}},
-		{"immutable source", jobs.OpDrift, appliedTag, pinnedRef, appliedTag, specRef, []string{pinnedRef, appliedTag, specRef}},
-		{"attempt record", jobs.OpDestroy, appliedTag, "", "registry.example/mod:1.1", specRef, []string{"registry.example/mod:1.1", appliedTag, specRef}},
-		{"no record", jobs.OpRefresh, specRef, "", "", specRef, []string{specRef}},
+		{"apply", jobs.OpApply, specRef, pinnedRef, appliedTag, specRef, "", []string{specRef}},
+		{"plan", jobs.OpPlan, specRef, pinnedRef, appliedTag, specRef, "", []string{specRef}},
+		// A destroy keeps to the recorded release: the spec's newer tag is
+		// another release.
+		{"destroy, applied record", jobs.OpDestroy, specRef, pinnedRef, appliedTag, specRef, "", []string{pinnedRef, appliedTag}},
+		{"destroy, the operator's override last", jobs.OpDestroy, specRef, pinnedRef, appliedTag, specRef, specRef, []string{pinnedRef, appliedTag, specRef}},
+		{"destroy, same release by digest", jobs.OpDestroy, appliedTag + "@sha256:" + strings.Repeat("d", 64), pinnedRef, appliedTag, specRef, "", []string{pinnedRef, appliedTag, appliedTag + "@sha256:" + strings.Repeat("d", 64)}},
+		{"refresh ignores the override", jobs.OpRefresh, specRef, pinnedRef, appliedTag, specRef, "other:1", []string{pinnedRef, appliedTag, specRef}},
+		{"immutable source", jobs.OpDrift, appliedTag, pinnedRef, appliedTag, specRef, "", []string{pinnedRef, appliedTag, specRef}},
+		{"attempt record", jobs.OpDestroy, appliedTag, "", "registry.example/mod:1.1", specRef, "", []string{"registry.example/mod:1.1"}},
+		{"no record", jobs.OpRefresh, specRef, "", "", specRef, "", []string{specRef}},
 	} {
-		if got := ImageCandidates(tc.op, tc.source, tc.pinned, tc.recorded, tc.spec); !slices.Equal(got, tc.want) {
+		if got := ImageCandidates(tc.op, tc.source, tc.pinned, tc.recorded, tc.spec, tc.override); !slices.Equal(got, tc.want) {
 			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
 		}
 	}
@@ -102,7 +108,9 @@ func pullingPod(job *batchv1.Job, name, reason string) corev1.Pod {
 		p.OwnerReferences = []metav1.OwnerReference{{APIVersion: "batch/v1", Kind: "Job", Name: job.Name, UID: job.UID, Controller: new(true)}}
 	}
 	waiting := func(n, r string) corev1.ContainerStatus {
-		return corev1.ContainerStatus{Name: n, State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: r}}}
+		// What the kubelet says of an image the registry does not have.
+		msg := "Back-off pulling image \"x\": ErrImagePull: manifest unknown"
+		return corev1.ContainerStatus{Name: n, State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: r, Message: msg}}}
 	}
 	if name == jobs.SourceContainer {
 		p.Status.ContainerStatuses = []corev1.ContainerStatus{waiting(name, reason)}
@@ -149,17 +157,19 @@ func (e *env) unpullable(t *testing.T) []string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return d.Unpullable
+	return inputs.UnpullableRefs(d.Unpullable, t0)
 }
 
-// TestPullFallbackChain proves a destroy whose pinned digest cannot be
-// pulled falls back, PullFailureGrace after its Job was created, to the
-// applied record's tag and then to spec.source.image: each time the Job
-// is deleted, its image recorded unpullable and ImagePullFallback
-// emitted, and the next destroy runs the next image. On the last image
-// the Job is left to its deadline, and ApplyJobSucceeded reports
-// ImagePullFailed with the Retain hint. Nothing re-pins: the applied
-// record keeps its digest.
+// TestPullFallbackChain proves a destroy whose pinned digest the registry
+// no longer has falls back, PullFailureGrace after its pull started, to
+// the applied record's tag, and no further: spec.source.image is another
+// release, which a destroy never runs on its own. Each fallback deletes
+// the Job, records its image unpullable and emits ImagePullFallback. On
+// the last image of the release the Job is left to its deadline, and
+// ApplyJobSucceeded reports ImagePullFailed with the override and Retain
+// hints; once the operator names an image (DestroyImageAnnotation), the
+// destroy falls back to it. Nothing re-pins: the applied record keeps its
+// digest.
 func TestPullFallbackChain(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t, world(machine(deleting, notPaused))...)
@@ -174,45 +184,29 @@ func TestPullFallbackChain(t *testing.T) {
 		}
 	}
 
-	steps := []struct {
-		image     string
-		fallbacks string
-		next      string
-	}{
-		{pinnedRef, `["` + appliedTag + `","` + specRef + `"]`, appliedTag},
-		{appliedTag, `["` + specRef + `"]`, specRef},
-	}
-	var unpullable []string
-	for i, s := range steps {
-		pass()
-		j := e.activeJob(t, jobs.OpDestroy)
-		if img := jobs.SourceImage(&j); img != s.image || j.Annotations[ImageFallbacksAnnotation] != s.fallbacks {
-			t.Fatalf("step %d: destroy runs %s with fallbacks %s; want %s, %s", i, img, j.Annotations[ImageFallbacksAnnotation], s.image, s.fallbacks)
-		}
-		e.stickPull(j.Name, 3*time.Minute)
-		pass()
-		unpullable = append(unpullable, s.image)
-		if got := e.unpullable(t); !slices.Equal(got, unpullable) {
-			t.Errorf("step %d: unpullable = %v, want %v", i, got, unpullable)
-		}
-		if !slices.Contains(e.runner.deleted, j.Name) || len(e.runner.deleted) != i+1 {
-			t.Errorf("step %d: deleted %v, want %s", i, e.runner.deleted, j.Name)
-		}
-		if m := e.get(t); m.Status.ActiveJob.Name != "" {
-			t.Errorf("step %d: activeJob = %+v", i, m.Status.ActiveJob)
-		}
-		evs := e.rec.only(EventImagePullFallback)
-		if len(evs) != i+1 || !strings.Contains(evs[i].note, "Could not pull "+s.image+" (ImagePullBackOff)") ||
-			!strings.HasSuffix(evs[i].note, "retrying destroy with "+s.next) || evs[i].eventType != corev1.EventTypeWarning {
-			t.Errorf("step %d: ImagePullFallback = %+v", i, evs)
-		}
-	}
-
-	// The last image: a JobCreated note says it falls back, and its pull
-	// failure is reported, not acted on.
 	pass()
 	j := e.activeJob(t, jobs.OpDestroy)
-	if img := jobs.SourceImage(&j); img != specRef || j.Annotations[ImageFallbacksAnnotation] != "" {
+	if img := jobs.SourceImage(&j); img != pinnedRef || j.Annotations[ImageFallbacksAnnotation] != `["`+appliedTag+`"]` {
+		t.Fatalf("destroy runs %s with fallbacks %s; want %s, only the recorded tag", img, j.Annotations[ImageFallbacksAnnotation], pinnedRef)
+	}
+	e.stickPull(j.Name, 3*time.Minute)
+	pass()
+	if got := e.unpullable(t); !slices.Equal(got, []string{pinnedRef}) {
+		t.Errorf("unpullable = %v, want the digest", got)
+	}
+	evs := e.rec.only(EventImagePullFallback)
+	if len(e.runner.deleted) != 1 || len(evs) != 1 || !strings.Contains(evs[0].note, "Could not pull "+pinnedRef+" (ImagePullBackOff") ||
+		!strings.HasSuffix(evs[0].note, "retrying destroy with "+appliedTag) || evs[0].eventType != corev1.EventTypeWarning {
+		t.Errorf("deleted %v, ImagePullFallback = %+v", e.runner.deleted, evs)
+	}
+	if m := e.get(t); m.Status.ActiveJob.Name != "" {
+		t.Errorf("activeJob = %+v", m.Status.ActiveJob)
+	}
+
+	// The release's last image: its pull failure is reported, not acted on.
+	pass()
+	j = e.activeJob(t, jobs.OpDestroy)
+	if img := jobs.SourceImage(&j); img != appliedTag || j.Annotations[ImageFallbacksAnnotation] != "" {
 		t.Fatalf("last: destroy runs %s with fallbacks %q", img, j.Annotations[ImageFallbacksAnnotation])
 	}
 	created := e.rec.only(EventJobCreated)
@@ -221,18 +215,33 @@ func TestPullFallbackChain(t *testing.T) {
 	}
 	e.stickPull(j.Name, 3*time.Minute)
 	pass()
-	if len(e.runner.deleted) != 2 || e.rec.count(EventImagePullFallback) != 2 {
+	if len(e.runner.deleted) != 1 || e.rec.count(EventImagePullFallback) != 1 {
 		t.Errorf("the last image's Job was deleted: %v", e.runner.deleted)
 	}
 	m := e.get(t)
 	c := conditions.Get(m, infrav1.ApplyJobSucceededCondition)
 	if c == nil || c.Status != metav1.ConditionFalse || c.Reason != infrav1.ImagePullFailedReason ||
-		!strings.HasPrefix(c.Message, "Job "+j.Name+": cannot pull its module image "+specRef+" (ImagePullBackOff), and no other image is left to try") ||
-		!strings.Contains(c.Message, retainHint) {
+		!strings.HasPrefix(c.Message, "Job "+j.Name+": cannot pull its module image "+appliedTag+" (ImagePullBackOff") ||
+		!strings.Contains(c.Message, "and no other image is left to try") ||
+		!strings.Contains(c.Message, infrav1.DestroyImageAnnotation) || !strings.Contains(c.Message, retainHint) {
 		t.Errorf("ApplyJobSucceeded = %+v", c)
 	}
 	if m.Status.ActiveJob.Name != j.Name || !HasBlockMove(m) {
 		t.Errorf("activeJob = %+v, block-move %v", m.Status.ActiveJob, HasBlockMove(m))
+	}
+
+	// The operator names the image: the stuck Job falls back to it.
+	m.Annotations = map[string]string{infrav1.DestroyImageAnnotation: specRef}
+	if err := e.c.Update(t.Context(), m); err != nil {
+		t.Fatal(err)
+	}
+	pass()
+	if len(e.runner.deleted) != 2 || !slices.Equal(e.unpullable(t), []string{pinnedRef, appliedTag}) {
+		t.Errorf("deleted %v, unpullable %v; want the tag's Job deleted and recorded", e.runner.deleted, e.unpullable(t))
+	}
+	pass()
+	if j := e.activeJob(t, jobs.OpDestroy); jobs.SourceImage(&j) != specRef {
+		t.Errorf("destroy runs %s, want the override %s", jobs.SourceImage(&j), specRef)
 	}
 	d, err := inputs.Read(t.Context(), e.c, testNS, "m", testName)
 	if err != nil || d.Applied == nil || d.Applied.Digest != pinnedRef {
@@ -290,6 +299,89 @@ func TestPullStuckLeavesAlone(t *testing.T) {
 	}
 }
 
+// TestSameRelease proves two references name the same release only with
+// the same repository and tag, a digest aside, and two digest-only ones
+// only with the same digest.
+func TestSameRelease(t *testing.T) {
+	t.Parallel()
+	d1, d2 := "@sha256:"+strings.Repeat("a", 64), "@sha256:"+strings.Repeat("b", 64)
+	for _, tc := range []struct {
+		a, b string
+		want bool
+	}{
+		{"r.example/m:1.0", "r.example/m:1.0", true},
+		{"r.example/m:1.0" + d1, "r.example/m:1.0", true},
+		{"r.example/m:1.0", "r.example/m:1.1", false},
+		{"r.example/m:1.0", "r.example/other:1.0", false},
+		{"r.example/m", "r.example/m:latest", true},
+		{"r.example/m" + d1, "r.example/m" + d1, true},
+		{"r.example/m" + d1, "r.example/m" + d2, false},
+		{"r.example/m" + d1, "r.example/m:1.0", false},
+		{"Not A Ref", "r.example/m:1.0", false},
+	} {
+		if got := SameRelease(tc.a, tc.b); got != tc.want {
+			t.Errorf("SameRelease(%s, %s) = %v, want %v", tc.a, tc.b, got, tc.want)
+		}
+	}
+}
+
+// TestPullStuckTransientNotFallenBack proves a pull that fails for want
+// of authorization (or any reason the registry does not call the image
+// missing) records nothing unpullable and deletes nothing: the kubelet
+// keeps retrying, and DriftJobSucceeded says why no other image is tried.
+func TestPullStuckTransientNotFallenBack(t *testing.T) {
+	t.Parallel()
+	runSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: testNS, Name: inputs.RunName("drift")}}
+	e := newEnv(t, world(machine(withFinalizer, notPaused), runSecret)...)
+	if err := writeInputs(t.Context(), e.c, e.get(t), renderMachine(t), testMeta{Image: appliedTag, Identity: testIdentity, ImageDigest: pinnedRef}); err != nil {
+		t.Fatal(err)
+	}
+	j := job("drift", jobs.OpDrift, jobs.Running, t0)
+	j.CreationTimestamp = metav1.NewTime(t0.Add(-5 * time.Minute))
+	j.Spec.Template.Spec.Containers = []corev1.Container{{Name: jobs.SourceContainer, Image: pinnedRef}}
+	j.Annotations = map[string]string{ImageFallbacksAnnotation: `["` + appliedTag + `"]`}
+	e.runner.jobs = append(e.runner.jobs, j)
+	pod := pullingPod(&j, jobs.SourceContainer, "ErrImagePull")
+	pod.Status.ContainerStatuses[0].State.Waiting.Message = "failed to authorize: 401 Unauthorized"
+	e.runner.pods["drift"] = []corev1.Pod{pod}
+	if _, err := reconcileOnce(t, e, e.kindFor(t, readyOwner())); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.runner.deleted) != 0 || len(e.unpullable(t)) != 0 {
+		t.Errorf("deleted %v, unpullable %v; want neither", e.runner.deleted, e.unpullable(t))
+	}
+	c := conditions.Get(e.get(t), infrav1.DriftJobSucceededCondition)
+	if c == nil || c.Reason != infrav1.ImagePullFailedReason || !strings.Contains(c.Message, "did not say the image is missing") {
+		t.Errorf("DriftJobSucceeded = %+v", c)
+	}
+}
+
+// TestPullStuckGraceFromPull proves the grace runs from the pod's pull,
+// not the Job's creation: a pod initialized a minute ago, of a Job created
+// ten minutes ago, is left to retry.
+func TestPullStuckGraceFromPull(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, world(machine(deleting, notPaused))...)
+	if err := writeInputs(t.Context(), e.c, e.get(t), renderMachine(t), testMeta{Image: appliedTag, Identity: testIdentity, ImageDigest: pinnedRef}); err != nil {
+		t.Fatal(err)
+	}
+	e.state.st = &state.State{InputsHash: "h1:x"}
+	if _, err := reconcileOnce(t, e, e.kindFor(t, readyOwner())); err != nil {
+		t.Fatal(err)
+	}
+	j := e.activeJob(t, jobs.OpDestroy)
+	e.stickPull(j.Name, 10*time.Minute)
+	e.runner.pods[j.Name][0].Status.Conditions = []corev1.PodCondition{{
+		Type: corev1.PodInitialized, Status: corev1.ConditionTrue, LastTransitionTime: metav1.NewTime(t0.Add(-time.Minute)),
+	}}
+	if _, err := reconcileOnce(t, e, e.kindFor(t, readyOwner())); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.runner.deleted) != 0 || len(e.unpullable(t)) != 0 {
+		t.Errorf("deleted %v, unpullable %v inside the grace", e.runner.deleted, e.unpullable(t))
+	}
+}
+
 // TestPullStuckLastImageDrift proves a drift Job on its last image whose
 // pull fails sets DriftJobSucceeded False/ImagePullFailed, without the
 // Retain hint (nothing is being deleted), and is left to its deadline.
@@ -300,7 +392,7 @@ func TestPullStuckLastImageDrift(t *testing.T) {
 	if err := writeInputs(t.Context(), e.c, e.get(t), renderMachine(t), testMeta{Image: specRef, Identity: testIdentity, ImageDigest: pinnedRef}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := inputs.AddUnpullable(t.Context(), e.c, e.get(t), nil, pinnedRef); err != nil {
+	if _, _, err := inputs.AddUnpullable(t.Context(), e.c, e.get(t), nil, pinnedRef, t0); err != nil {
 		t.Fatal(err)
 	}
 	j := job("drift", jobs.OpDrift, jobs.Running, t0)
@@ -313,7 +405,7 @@ func TestPullStuckLastImageDrift(t *testing.T) {
 	}
 	c := conditions.Get(e.get(t), infrav1.DriftJobSucceededCondition)
 	if c == nil || c.Status != metav1.ConditionFalse || c.Reason != infrav1.ImagePullFailedReason ||
-		!strings.Contains(c.Message, specRef+" (ErrImagePull)") || strings.Contains(c.Message, "Retain") || len(e.runner.deleted) != 0 {
+		!strings.Contains(c.Message, specRef+" (ErrImagePull") || strings.Contains(c.Message, "Retain") || len(e.runner.deleted) != 0 {
 		t.Errorf("DriftJobSucceeded = %+v, deleted %v", c, e.runner.deleted)
 	}
 }
@@ -327,7 +419,7 @@ func TestPromotionClearsUnpullable(t *testing.T) {
 	if err := writeInputs(t.Context(), e.c, k.obj, renderMachine(t), testMeta{Image: specRef, Identity: testIdentity}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := inputs.AddUnpullable(t.Context(), e.c, k.obj, nil, pinnedRef); err != nil {
+	if _, _, err := inputs.AddUnpullable(t.Context(), e.c, k.obj, nil, pinnedRef, t0); err != nil {
 		t.Fatal(err)
 	}
 	e.runner.jobs = append(e.runner.jobs, job(seedJob, jobs.OpApply, jobs.Succeeded, t0.Add(-time.Minute)))
