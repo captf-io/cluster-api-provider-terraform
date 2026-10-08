@@ -26,6 +26,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -83,6 +84,13 @@ func TestPreambleExternallyManagedKeepsState(t *testing.T) {
 	e := retainEnv(t, deleting, func(m *infrav1.TerraformMachine) {
 		m.Annotations = map[string]string{clusterv1.ManagedByAnnotation: "someone"}
 	})
+	// Every Secret starts owned by the object, as repairOwners leaves them,
+	// so the garbage collector would take them with it.
+	for _, s := range e.objectSecretMetas(t) {
+		if !slices.ContainsFunc(s.meta.OwnerReferences, func(r metav1.OwnerReference) bool { return r.UID == "m1-uid" }) {
+			t.Fatalf("%s Secret %s is not owned by the object: %+v", s.what, s.meta.Name, s.meta.OwnerReferences)
+		}
+	}
 	e.d.Jobs = e.runner
 	e.runner.jobs = []batchv1.Job{job("a", jobs.OpApply, jobs.Running, t0)}
 	got, err := Preamble(t.Context(), e.d, e.kindFor(t, OwnerInfo{}))
