@@ -30,6 +30,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-api/util/conditions"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/inputs"
@@ -37,10 +38,10 @@ import (
 	"github.com/captf-io/cluster-api-provider-terraform/internal/strutil"
 )
 
-// PullFailureGrace is how long a destroy, refresh, drift or restore
-// Job's pod must have been pulling (jobs.PullStartedAt; the Job must be as
-// old) before pullStuck acts on its module image failing to pull: a
-// registry hiccup clears within it, and the kubelet retries meanwhile.
+// PullFailureGrace is how long a Job's pod must have been pulling
+// (jobs.PullStartedAt; the Job must be as old) before pullStuck acts on
+// its module image failing to pull: a registry hiccup clears within it,
+// and the kubelet retries meanwhile.
 const PullFailureGrace = 2 * time.Minute
 
 // maxPullMessage bounds the kubelet's pull error quoted in a condition.
@@ -49,14 +50,15 @@ const maxPullMessage = 256
 // pullRunbook is the runbook section on image pull failures.
 const pullRunbook = "https://captf.io/docs/operator-guide/runbooks/job-failures.html#image-pull-failures"
 
-// pullStuck handles job, the active Job, when it is a destroy, refresh,
-// drift or restore Job at least PullFailureGrace old whose module image
-// cannot be pulled (jobs.SourcePullFailure on one of its pods, listed
-// using ctx): a pinned digest the registry garbage collected would
-// otherwise hold it until activeDeadlineSeconds, again on every retry.
-// Only a registry's answer that the image is missing (jobs.ImageMissing)
-// tries another image: an authorization error, a rate limit or an outage
-// is reported (ImagePullFailed) and left to the kubelet's retries.
+// pullStuck handles job, the active Job, when it is at least
+// PullFailureGrace old and its module image cannot be pulled
+// (jobs.SourcePullFailure on one of its pods, listed using ctx): a pinned
+// digest the registry garbage collected would otherwise hold it until
+// activeDeadlineSeconds, again on every retry. Only a destroy, refresh,
+// drift or restore Job tries another image, and only on a registry's
+// answer that the image is missing (jobs.ImageMissing): an authorization
+// error, a rate limit or an outage is reported (ImagePullFailed) and left
+// to the kubelet's retries.
 //
 // With an image left to fall back to (ImageFallbacksAnnotation, then
 // spec.source.image as it is now, or for a destroy the
@@ -75,15 +77,22 @@ const pullRunbook = "https://captf.io/docs/operator-guide/runbooks/job-failures.
 // with it clusterctl move, until its deadline (keepPausedPullFailure
 // keeps that condition while the object stays paused).
 //
-// Apply and plan Jobs are never touched: they run spec.source.image, and
-// only the operator can fix it. It returns whether job was deleted, the
-// ApplyJobSucceeded condition to report (nil for none), and any error
-// listing pods, recording the image, releasing or deleting the Job.
+// An apply or plan Job never falls back: it runs spec.source.image, and
+// only the operator can fix that. Its failure is reported all the same,
+// in ApplyJobSucceeded, as a destroy's with no image left is; and a Job
+// left to its deadline carries the reason (PullFailedAnnotation), so its
+// outcome still says ImagePullFailed once the deadline took its pod. It
+// returns whether job was deleted, the ApplyJobSucceeded condition to
+// report (nil for none), and any error listing pods, recording the
+// image, annotating, releasing or deleting the Job.
 func (r *reconciler) pullStuck(ctx context.Context, job *batchv1.Job, paused bool) (bool, *metav1.Condition, error) {
 	op := jobs.OpOf(job)
-	// A Job with a ready pod pulled its image: its pods are not read.
-	if op == jobs.OpApply || op == jobs.OpPlan || r.d.Clock.Now().Sub(job.CreationTimestamp.Time) < PullFailureGrace ||
-		(job.Status.Ready != nil && *job.Status.Ready > 0) {
+	if job.Status.Ready != nil && *job.Status.Ready > 0 {
+		// A Job with a ready pod pulled its image after all: its pods are
+		// not read, and a deadline it reaches later is not the pull's.
+		return false, nil, r.markPullFailed(ctx, job, "")
+	}
+	if r.d.Clock.Now().Sub(job.CreationTimestamp.Time) < PullFailureGrace {
 		return false, nil, nil
 	}
 	pods, err := r.d.Jobs.Pods(ctx, job)
@@ -115,6 +124,10 @@ func (r *reconciler) pullStuck(ctx context.Context, job *batchv1.Job, paused boo
 	reason := failure.Reason
 	if failure.Message != "" {
 		reason += ": " + strutil.Truncate(failure.Message, maxPullMessage)
+	}
+	if op == jobs.OpApply || op == jobs.OpPlan {
+		return r.pullFailedJob(ctx, job, image, reason,
+			"an apply or plan runs only spec.source.image, so no other image is tried", paused)
 	}
 	if !failure.Missing {
 		// An authorization error, a rate limit or an outage: the image may
@@ -162,12 +175,15 @@ func (r *reconciler) pullStuck(ctx context.Context, job *batchv1.Job, paused boo
 // for none left): pullFailed sets or returns its condition. A Job of a
 // paused object is deleted (deletePullStuck), as it would hold
 // clusterctl move until its deadline; otherwise it is left to fail
-// there. It returns whether job was deleted, the ApplyJobSucceeded
-// condition to report (nil for none), and any error releasing or
-// deleting the Job.
+// there, carrying reason (markPullFailed). It returns whether job was
+// deleted, the ApplyJobSucceeded condition to report (nil for none), and
+// any error annotating, releasing or deleting the Job.
 func (r *reconciler) pullFailedJob(ctx context.Context, job *batchv1.Job, image, reason, why string, paused bool) (bool, *metav1.Condition, error) {
 	logger := klog.LoggerWithValues(klog.FromContext(ctx), "Job", klog.KObj(job), "image", image, "reason", reason)
 	if !paused {
+		if err := r.markPullFailed(ctx, job, reason); err != nil {
+			return false, nil, err
+		}
 		logger.Info("The Job's module image cannot be pulled, and no other image is tried; it fails at activeDeadlineSeconds")
 		return false, r.pullFailed(job, image, reason, why, false), nil
 	}
@@ -176,6 +192,43 @@ func (r *reconciler) pullFailedJob(ctx context.Context, job *batchv1.Job, image,
 	}
 	logger.Info("Deleted a paused object's Job whose module image cannot be pulled, and no other image is tried: it would hold clusterctl move until its deadline")
 	return true, r.pullFailed(job, image, reason, why, true), nil
+}
+
+// markPullFailed patches reason, why job's module image does not pull,
+// onto job as PullFailedAnnotation, using ctx, unless it carries it
+// already: the deadline deletes the pod that says so, and bookkeeping
+// reads the Job's outcome from it then (pullFailure). An empty reason
+// removes the mark from a Job whose image pulled after all. A Job already
+// gone needs no mark. It returns any other patch error.
+func (r *reconciler) markPullFailed(ctx context.Context, job *batchv1.Job, reason string) error {
+	if job.Annotations[PullFailedAnnotation] == reason {
+		return nil
+	}
+	before := job.DeepCopy()
+	if reason == "" {
+		delete(job.Annotations, PullFailedAnnotation)
+	} else {
+		metav1.SetMetaDataAnnotation(&job.ObjectMeta, PullFailedAnnotation, reason)
+	}
+	if err := client.IgnoreNotFound(r.d.Client.Patch(ctx, job, client.MergeFrom(before))); err != nil {
+		return fmt.Errorf("record the pull failure on %s: %w", job.Name, err)
+	}
+	return nil
+}
+
+// pullFailure returns why f's Job could not pull its images: the
+// kubelet's waiting reason while its pod is still there to say so, else
+// what pullStuck recorded on the Job (PullFailedAnnotation), which
+// outlives the pod activeDeadlineSeconds deletes. It returns the reason
+// ("" when only an init container's pull failed) and true, or "" and
+// false when neither says so.
+func pullFailure(f *finished) (string, bool) {
+	if f.pod != nil && jobs.PullFailed(f.pod) {
+		pf, _ := jobs.SourcePullFailure(f.pod)
+		return pf.Reason, true
+	}
+	reason, ok := f.job.Annotations[PullFailedAnnotation]
+	return reason, ok
 }
 
 // deletePullStuck releases status.activeJob on the API server, then
@@ -250,8 +303,8 @@ func (r *reconciler) pullFallbacks(job *batchv1.Job, image string, unpullable []
 // while paused (pausedPullNote): why says why no other image is tried
 // ("" for none left). It sets DriftJobSucceeded for a refresh or drift
 // Job and RestoreJobSucceeded for a restore, False/ImagePullFailed, and
-// returns ApplyJobSucceeded so for a destroy (nil otherwise), whose
-// message names the ways out, Retain among them.
+// returns ApplyJobSucceeded so for an apply, a plan or a destroy (nil
+// otherwise); a destroy's message names the ways out, Retain among them.
 func (r *reconciler) pullFailed(job *batchv1.Job, image, reason, why string, deleted bool) *metav1.Condition {
 	if why == "" {
 		why = "no other image is left to try"
@@ -269,6 +322,10 @@ func (r *reconciler) pullFailed(job *batchv1.Job, image, reason, why string, del
 	op := jobs.OpOf(job)
 	c := metav1.Condition{Status: metav1.ConditionFalse, Reason: infrav1.ImagePullFailedReason}
 	switch op {
+	case jobs.OpApply, jobs.OpPlan:
+		c.Type = infrav1.ApplyJobSucceededCondition
+		c.Message = msg + fix.String() + "; see " + pullRunbook
+		return &c
 	case jobs.OpDestroy:
 		c.Type = infrav1.ApplyJobSucceededCondition
 		c.Message = msg + fix.String() + "; or annotate the object " + infrav1.DestroyImageAnnotation + "=<image> to destroy with an image that can destroy what " +

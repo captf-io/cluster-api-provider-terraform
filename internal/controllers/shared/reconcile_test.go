@@ -86,6 +86,11 @@ func TestApplyDestroyCondition(t *testing.T) {
 	stepErr := &jobs.Result{Error: &runner.Error{Kind: "step", Step: &step}}
 	deadline := job("j", jobs.OpApply, jobs.Failed, t0)
 	deadline.Status.Conditions[0].Reason = batchv1.JobReasonDeadlineExceeded
+	// pullStuck marked the Job; the deadline took its pod.
+	marked := deadline.DeepCopy()
+	marked.Annotations = map[string]string{PullFailedAnnotation: "ImagePullBackOff: not found"}
+	markedPlan := marked.DeepCopy()
+	markedPlan.Labels[jobs.OpLabel] = string(jobs.OpPlan)
 	tests := []struct {
 		name   string
 		f      finished
@@ -96,6 +101,8 @@ func TestApplyDestroyCondition(t *testing.T) {
 		{"destroy succeeded", finished{job: ptr(job("j", jobs.OpDestroy, jobs.Succeeded, t0)), ok: true}, metav1.ConditionTrue, infrav1.DestroySucceededReason},
 		{"pull failure wins over the deadline", finished{job: &deadline, pod: podWith("", "ImagePullBackOff")}, metav1.ConditionFalse, infrav1.ImagePullFailedReason},
 		{"deadline", finished{job: &deadline}, metav1.ConditionFalse, infrav1.JobDeadlineExceededReason},
+		{"recorded pull failure outlives the pod", finished{job: marked}, metav1.ConditionFalse, infrav1.ImagePullFailedReason},
+		{"recorded pull failure of a plan", finished{job: markedPlan}, metav1.ConditionFalse, infrav1.ImagePullFailedReason},
 		{"image layout", finished{job: ptr(job("j", jobs.OpApply, jobs.Failed, t0)), result: layout}, metav1.ConditionFalse, infrav1.ImageInvalidReason},
 		{"apply step failed", finished{job: ptr(job("j", jobs.OpApply, jobs.Failed, t0)), result: stepErr}, metav1.ConditionFalse, infrav1.ApplyFailedReason},
 		{"destroy failed", finished{job: ptr(job("j", jobs.OpDestroy, jobs.Failed, t0))}, metav1.ConditionFalse, infrav1.DestroyFailedReason},
@@ -1078,6 +1085,23 @@ func TestSetDriftJobDeadlineExceeded(t *testing.T) {
 	setDriftJob(m2, []finished{{job: &failed}})
 	if c := conditions.Get(m2, infrav1.DriftJobSucceededCondition); c == nil || c.Reason != infrav1.DriftJobFailedReason {
 		t.Errorf("DriftJobSucceeded = %+v, want %s", c, infrav1.DriftJobFailedReason)
+	}
+
+	// A deadline pullStuck saw coming (PullFailedAnnotation) is the pull's,
+	// though the pod that said so is gone.
+	marked := deadline.DeepCopy()
+	marked.Annotations = map[string]string{PullFailedAnnotation: "ErrImagePull: 401 Unauthorized"}
+	m3 := machine()
+	setDriftJob(m3, []finished{{job: marked}})
+	if c := conditions.Get(m3, infrav1.DriftJobSucceededCondition); c == nil || c.Reason != infrav1.ImagePullFailedReason || !strings.Contains(c.Message, "401 Unauthorized") {
+		t.Errorf("DriftJobSucceeded = %+v, want %s quoting the reason", c, infrav1.ImagePullFailedReason)
+	}
+
+	// So is a restore's, in its RestoreFailed message.
+	restore := marked.DeepCopy()
+	restore.Labels[jobs.OpLabel] = string(jobs.OpRestore)
+	if c := restoreCondition(&finished{job: restore}); c.Reason != infrav1.RestoreFailedReason || !strings.Contains(c.Message, "module image did not pull (ErrImagePull: 401 Unauthorized)") {
+		t.Errorf("RestoreJobSucceeded = %+v, want the pull failure in its message", c)
 	}
 }
 

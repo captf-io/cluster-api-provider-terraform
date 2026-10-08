@@ -455,10 +455,13 @@ a TerraformMachine only after its running apply Job ends, and a Job
 stuck pulling ends only at its deadline. So the cleanup waits up to the
 deadline plus a minute for each group. The negative run's cleanup took
 9 min, leaving the namespace and identity gone (`TestNoop` 638 s in
-all). At the deadline CAPTF reported the Job as `JobDeadlineExceeded`,
-not `ImagePullFailed`. The likely cause is that the pod whose waiting
-reason would say so is already being removed with the Job. This is a
-product follow-up, not yet investigated.
+all). In that run, CAPTF reported the Job at its deadline as
+`JobDeadlineExceeded`, since the pod that showed the pull failure was
+deleted with the Job. Since then CAPTF reports an apply or
+plan Job stuck pulling as `ImagePullFailed` once it has pulled for 2
+minutes. It records the kubelet's reason on the Job
+(`captf.io/image-pull-failed`), so the outcome at the deadline is still
+`ImagePullFailed`.
 
 ### The green-light contract for later tests
 

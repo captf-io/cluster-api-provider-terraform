@@ -488,8 +488,8 @@ func (r *reconciler) run(ctx context.Context) (ctrl.Result, error) {
 		}
 		var applyCond *metav1.Condition
 		if !deleted {
-			// A non-apply Job whose module image cannot be pulled starts
-			// again on the next image it may run.
+			// A Job whose module image cannot be pulled starts again on
+			// the next image it may run, or reports ImagePullFailed.
 			if deleted, applyCond, err = r.pullStuck(ctx, bk.Active, false); err != nil {
 				return ctrl.Result{}, err
 			}

@@ -54,6 +54,11 @@ const (
 	// pods nor delete its Secret again. Its result lives on in the
 	// conditions and status.lastRun it set.
 	BookkeptAnnotation = "captf.io/bookkept"
+	// PullFailedAnnotation records, on a Job pullStuck left to its
+	// deadline, why its module image does not pull (the kubelet's reason
+	// and message): activeDeadlineSeconds deletes the pod with the Job's
+	// end, and the outcome would otherwise read as a plain deadline.
+	PullFailedAnnotation = "captf.io/image-pull-failed"
 	// InterruptedAnnotation marks a bookkept Job the runner reported as
 	// interrupted (SIGTERM: a drain, eviction, deletion or deadline), so it
 	// keeps counting toward no retry backoff once its pod is not read again.
@@ -706,10 +711,12 @@ func namesJob(msg, name string) bool {
 }
 
 // applyDestroyCondition maps f, a finished apply or destroy Job of obj. A
-// pull failure also ends on the deadline, so it is checked first.
+// pull failure also ends on the deadline, so it is checked first, from
+// the pod or, once the deadline took that, the Job (pullFailure).
 // It returns the ApplyJobSucceeded condition to set.
 func applyDestroyCondition(f finished, obj client.Object) metav1.Condition {
 	destroy := jobs.OpOf(f.job) == jobs.OpDestroy
+	pullReason, pullFailed := pullFailure(&f)
 	c := metav1.Condition{Type: infrav1.ApplyJobSucceededCondition, Message: "Job " + f.job.Name}
 	switch {
 	case f.blocked:
@@ -724,8 +731,11 @@ func applyDestroyCondition(f finished, obj client.Object) metav1.Condition {
 		c.Status, c.Reason = metav1.ConditionTrue, infrav1.DestroySucceededReason
 	case f.ok:
 		c.Status, c.Reason = metav1.ConditionTrue, infrav1.ApplySucceededReason
-	case f.pod != nil && jobs.PullFailed(f.pod):
+	case pullFailed:
 		c.Status, c.Reason = metav1.ConditionFalse, infrav1.ImagePullFailedReason
+		if pullReason != "" {
+			c.Message += ": its module image did not pull: " + pullReason
+		}
 	case jobs.DeadlineExceeded(f.job):
 		c.Status, c.Reason = metav1.ConditionFalse, infrav1.JobDeadlineExceededReason
 	case f.result != nil && f.result.Error != nil && f.result.Error.Kind == string(infrav1.RunErrorKindImageLayout):
@@ -795,16 +805,23 @@ func blockedMessage(f finished, obj client.Object) string {
 }
 
 // setDriftJob sets obj's DriftJobSucceeded from the newest finished drift
-// or refresh Job in done, and DriftNotChecked before any.
+// or refresh Job in done (ImagePullFailed before a deadline, as for an
+// apply), and DriftNotChecked before any.
 func setDriftJob(obj Object, done []finished) {
 	for _, f := range done {
 		if op := jobs.OpOf(f.job); op != jobs.OpDrift && op != jobs.OpRefresh {
 			continue
 		}
 		c := metav1.Condition{Type: infrav1.DriftJobSucceededCondition, Message: "Job " + f.job.Name}
+		pullReason, pullFailed := pullFailure(&f)
 		switch {
 		case f.ok:
 			c.Status, c.Reason = metav1.ConditionTrue, infrav1.DriftCheckedReason
+		case pullFailed:
+			c.Status, c.Reason = metav1.ConditionFalse, infrav1.ImagePullFailedReason
+			if pullReason != "" {
+				c.Message += ": its module image did not pull: " + pullReason
+			}
 		case jobs.DeadlineExceeded(f.job):
 			c.Status, c.Reason = metav1.ConditionFalse, infrav1.DriftJobDeadlineExceededReason
 		default:

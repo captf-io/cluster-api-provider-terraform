@@ -26,6 +26,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/cluster-api/util/conditions"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	infrav1 "github.com/captf-io/cluster-api-provider-terraform/api/v1alpha1"
 	"github.com/captf-io/cluster-api-provider-terraform/internal/inputs"
@@ -251,9 +252,8 @@ func TestPullFallbackChain(t *testing.T) {
 
 // TestPullStuckLeavesAlone proves pullStuck does nothing to a Job younger
 // than PullFailureGrace, to one whose init container (the runner image)
-// cannot be pulled, to one with a ready pod (whose pods it does not
-// read), and to an apply: no delete, no recorded image, no event and no
-// ImagePullFailed.
+// cannot be pulled, and to one with a ready pod (whose pods it does not
+// read): no delete, no recorded image, no event and no ImagePullFailed.
 func TestPullStuckLeavesAlone(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -265,7 +265,6 @@ func TestPullStuckLeavesAlone(t *testing.T) {
 	}{
 		{"younger than the grace", jobs.OpDestroy, PullFailureGrace - time.Second, jobs.SourceContainer, false},
 		{"init container", jobs.OpDestroy, 3 * time.Minute, jobs.RunnerContainer, false},
-		{"apply", jobs.OpApply, 3 * time.Minute, jobs.SourceContainer, false},
 		{"ready pod", jobs.OpDestroy, 3 * time.Minute, jobs.SourceContainer, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -353,6 +352,89 @@ func TestPullStuckTransientNotFallenBack(t *testing.T) {
 	c := conditions.Get(e.get(t), infrav1.DriftJobSucceededCondition)
 	if c == nil || c.Reason != infrav1.ImagePullFailedReason || !strings.Contains(c.Message, "did not say the image is missing") {
 		t.Errorf("DriftJobSucceeded = %+v", c)
+	}
+}
+
+// TestPullStuckApply proves an apply Job whose module image cannot be
+// pulled is reported at once (ApplyJobSucceeded ImagePullFailed) and left
+// to its deadline with the reason on the Job, never falling back to
+// another image; once the deadline has taken its pod, the outcome still
+// says ImagePullFailed, with the kubelet's reason, not JobDeadlineExceeded.
+func TestPullStuckApply(t *testing.T) {
+	t.Parallel()
+	runSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: testNS, Name: inputs.RunName("apply")}}
+	e := newEnv(t, world(machine(withFinalizer, notPaused), runSecret)...)
+	if err := writeInputs(t.Context(), e.c, e.get(t), renderMachine(t), testMeta{Image: appliedTag, Identity: testIdentity, ImageDigest: pinnedRef}); err != nil {
+		t.Fatal(err)
+	}
+	j := job("apply", jobs.OpApply, jobs.Running, t0)
+	j.CreationTimestamp = metav1.NewTime(t0.Add(-5 * time.Minute))
+	j.Spec.Template.Spec.Containers = []corev1.Container{{Name: jobs.SourceContainer, Image: pinnedRef}}
+	j.Annotations = map[string]string{ImageFallbacksAnnotation: `["` + appliedTag + `"]`}
+	// The Job is on the API server too, where the reason is recorded.
+	if err := e.c.Create(t.Context(), j.DeepCopy()); err != nil {
+		t.Fatal(err)
+	}
+	e.runner.jobs = append(e.runner.jobs, j)
+	e.runner.pods["apply"] = []corev1.Pod{pullingPod(&j, jobs.SourceContainer, "ErrImagePull")}
+	if _, err := reconcileOnce(t, e, e.kindFor(t, readyOwner())); err != nil {
+		t.Fatal(err)
+	}
+	m := e.get(t)
+	if len(e.runner.deleted) != 0 || m.Status.ActiveJob.Name != "apply" || e.rec.count(EventImagePullFallback) != 0 || len(e.unpullable(t)) != 0 {
+		t.Errorf("deleted %v, activeJob %+v, unpullable %v; want the Job left running", e.runner.deleted, m.Status.ActiveJob, e.unpullable(t))
+	}
+	c := conditions.Get(m, infrav1.ApplyJobSucceededCondition)
+	if c == nil || c.Status != metav1.ConditionFalse || c.Reason != infrav1.ImagePullFailedReason || !strings.Contains(c.Message, "runs only spec.source.image") {
+		t.Errorf("ApplyJobSucceeded while pulling = %+v", c)
+	}
+	var stored batchv1.Job
+	if err := e.c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "apply"}, &stored); err != nil {
+		t.Fatal(err)
+	}
+	reason := stored.Annotations[PullFailedAnnotation]
+	if !strings.HasPrefix(reason, "ErrImagePull") {
+		t.Fatalf("%s = %q, want the kubelet's reason", PullFailedAnnotation, reason)
+	}
+
+	// activeDeadlineSeconds ends the Job and deletes its pod.
+	done := deadlineJob("apply", jobs.OpApply, t0)
+	done.CreationTimestamp, done.Spec, done.Annotations = j.CreationTimestamp, j.Spec, stored.Annotations
+	e.runner.jobs = []batchv1.Job{done}
+	delete(e.runner.pods, "apply")
+	if _, err := reconcileOnce(t, e, e.kindFor(t, readyOwner())); err != nil {
+		t.Fatal(err)
+	}
+	c = conditions.Get(e.get(t), infrav1.ApplyJobSucceededCondition)
+	if c == nil || c.Reason != infrav1.ImagePullFailedReason || !strings.Contains(c.Message, reason) {
+		t.Errorf("ApplyJobSucceeded after the deadline = %+v, want ImagePullFailed quoting %q", c, reason)
+	}
+}
+
+// TestPullStuckReadyClearsMark proves a Job whose image pulled after
+// pullStuck marked it (a ready pod) loses PullFailedAnnotation, so a
+// deadline it reaches later reads as its own.
+func TestPullStuckReadyClearsMark(t *testing.T) {
+	t.Parallel()
+	runSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: testNS, Name: inputs.RunName("apply")}}
+	e := newEnv(t, world(machine(withFinalizer, notPaused), runSecret)...)
+	j := job("apply", jobs.OpApply, jobs.Running, t0)
+	j.CreationTimestamp = metav1.NewTime(t0.Add(-5 * time.Minute))
+	j.Annotations = map[string]string{PullFailedAnnotation: "ErrImagePull: manifest unknown"}
+	j.Status.Ready = new(int32(1))
+	if err := e.c.Create(t.Context(), j.DeepCopy()); err != nil {
+		t.Fatal(err)
+	}
+	e.runner.jobs = append(e.runner.jobs, j)
+	if _, err := reconcileOnce(t, e, e.kindFor(t, readyOwner())); err != nil {
+		t.Fatal(err)
+	}
+	var stored batchv1.Job
+	if err := e.c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "apply"}, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := stored.Annotations[PullFailedAnnotation]; ok {
+		t.Errorf("%s = %q, want it removed", PullFailedAnnotation, v)
 	}
 }
 
@@ -533,5 +615,21 @@ func TestPullStuckPaused(t *testing.T) {
 		}
 		pass(t, e)
 		check("next paused pass")
+	})
+	t.Run("an apply: deleted, never fallen back", func(t *testing.T) {
+		t.Parallel()
+		e := setup(t, machine(withFinalizer), "apply", jobs.OpApply, pinnedRef, `["`+appliedTag+`"]`)
+		pass(t, e)
+		m := e.get(t)
+		c := conditions.Get(m, infrav1.ApplyJobSucceededCondition)
+		if c == nil || c.Reason != infrav1.ImagePullFailedReason || !strings.Contains(c.Message, "runs only spec.source.image") || !strings.Contains(c.Message, pausedPullNote) {
+			t.Errorf("ApplyJobSucceeded = %+v", c)
+		}
+		if !slices.Equal(e.runner.deleted, []string{"apply"}) || len(e.runner.created) != 0 || m.Status.ActiveJob.Name != "" || HasBlockMove(m) {
+			t.Errorf("deleted %v, created %v, activeJob %+v, block-move %v", e.runner.deleted, e.runner.created, m.Status.ActiveJob, HasBlockMove(m))
+		}
+		if len(e.unpullable(t)) != 0 || e.rec.count(EventImagePullFallback) != 0 {
+			t.Errorf("unpullable %v, fallback events %d; an apply never falls back", e.unpullable(t), e.rec.count(EventImagePullFallback))
+		}
 	})
 }

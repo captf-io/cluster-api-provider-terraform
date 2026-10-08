@@ -88,7 +88,13 @@ func restoreCondition(f *finished) metav1.Condition {
 		return c
 	}
 	c.Status, c.Reason = metav1.ConditionFalse, infrav1.RestoreFailedReason
+	pullReason, pullFailed := pullFailure(f)
 	switch {
+	case pullFailed:
+		c.Message += ": its module image did not pull"
+		if pullReason != "" {
+			c.Message += " (" + pullReason + ")"
+		}
 	case jobs.DeadlineExceeded(f.job):
 		c.Message += ": exceeded activeDeadlineSeconds"
 	case f.result != nil && f.result.Error != nil && f.result.Error.Step != nil:
