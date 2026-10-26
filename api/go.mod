@@ -7,7 +7,7 @@ toolchain go1.26.8
 require (
 	k8s.io/api v0.36.5
 	k8s.io/apimachinery v0.36.5
-	sigs.k8s.io/cluster-api/api v1.14.2
+	sigs.k8s.io/cluster-api/api v1.14.3
 )
 
 require (
