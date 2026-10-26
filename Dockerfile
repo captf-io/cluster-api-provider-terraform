@@ -81,13 +81,13 @@ RUN --mount=type=cache,id=captf-gobuild,sharing=locked,target=/root/.cache/go-bu
 # bundle that `tfcapi-lint image` needs to pull from a registry. Pinned by
 # index digest (both images use the same one); to bump:
 #   skopeo inspect --format '{{.Digest}}' docker://gcr.io/distroless/static:nonroot
-FROM gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3 AS tfcapi-lint
+FROM gcr.io/distroless/static:nonroot@sha256:18f4cc26c9ffa7f20a359298be7deadac5c607c8e03a02b8119f1a5fc2f82c99 AS tfcapi-lint
 COPY --from=build-lint /out/tfcapi-lint /tfcapi-lint
 USER 65532:65532
 ENTRYPOINT ["/tfcapi-lint"]
 
 # The manager stays the last stage: a build without --target builds it.
-FROM gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3 AS manager
+FROM gcr.io/distroless/static:nonroot@sha256:18f4cc26c9ffa7f20a359298be7deadac5c607c8e03a02b8119f1a5fc2f82c99 AS manager
 COPY --from=build /out/manager /manager
 COPY --from=build /out/runner /runner
 USER 65532:65532
