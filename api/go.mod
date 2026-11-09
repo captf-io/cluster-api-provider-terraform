@@ -5,9 +5,9 @@ go 1.26.0
 toolchain go1.26.8
 
 require (
-	k8s.io/api v0.36.5
-	k8s.io/apimachinery v0.36.5
-	sigs.k8s.io/cluster-api/api v1.14.2
+	k8s.io/api v0.36.6
+	k8s.io/apimachinery v0.36.6
+	sigs.k8s.io/cluster-api/api v1.14.3
 )
 
 require (
@@ -22,7 +22,7 @@ require (
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
-	k8s.io/apiextensions-apiserver v0.36.5 // indirect
+	k8s.io/apiextensions-apiserver v0.36.6 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
 	k8s.io/kube-openapi v0.0.0-20260317180543-43fb72c5454a // indirect
 	k8s.io/utils v0.0.0-20260210185600-b8788abfbbc2 // indirect
